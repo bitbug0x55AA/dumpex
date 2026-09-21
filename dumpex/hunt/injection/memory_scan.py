@@ -6,7 +6,9 @@ from dumpex.core.memory import (
     get_modules, get_memory_regions, addr_to_module, prot_str,
     va_to_file_offset, va_range_captured_bytes,
 )
-from dumpex.core.pe_utils import parse_pe_header
+from dumpex.core.pe_utils import (
+    has_executable_protection, is_private_memory_type, parse_pe_header,
+)
 from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt._location import resolve_location
 from dumpex.hunt.injection.config import (
@@ -830,16 +832,13 @@ def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[tuple, tuple]":
     return validated, mz_only
 
 
-def _has_executable_protection(protect: str) -> bool:
-    """
-    True if `protect` (a prot_str()-rendered Protect name) grants execute
-    access. Checked via substring rather than an exact-match set because
-    Protect can carry a combined flag name (e.g. "PAGE_EXECUTE_READ|
-    PAGE_GUARD") from the underlying enum — every executable PAGE_*
-    constant contains "EXECUTE" and no non-executable one does, so this is
-    a safe, simpler test than enumerating every combination.
-    """
-    return "EXECUTE" in protect
+# Re-exported under this module's own pre-existing private name -- the
+# canonical definitions now live in dumpex.core.pe_utils, shared with
+# dumpex.commands.report's identical MEM_PRIVATE-or-executable-protection
+# test, so the two can never quietly diverge (see that module's own
+# docstring for why the check is exact-match for `type` and substring for
+# `protect`).
+_has_executable_protection = has_executable_protection
 
 
 def pe_hit_is_context_scoreable(hit) -> bool:
@@ -872,6 +871,6 @@ def pe_hit_is_context_scoreable(hit) -> bool:
     not by itself drive a verdict.
     """
     r = hit.region
-    if r.type == "MEM_PRIVATE":
+    if is_private_memory_type(r.type):
         return True
-    return _has_executable_protection(r.protect)
+    return has_executable_protection(r.protect)

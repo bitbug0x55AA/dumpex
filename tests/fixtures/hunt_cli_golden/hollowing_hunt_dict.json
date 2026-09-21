@@ -45,7 +45,8 @@
     "module_name": "C:\\Windows\\System32\\legit.exe",
     "mz_header_present": true,
     "name_mismatch": false,
-    "peb_image_path": "C:\\Windows\\System32\\legit.exe"
+    "peb_image_path": "C:\\Windows\\System32\\legit.exe",
+    "region_type": "MEM_PRIVATE"
   },
   "findings": [
     {

@@ -26,7 +26,7 @@
 
   VERDICT     NOT EVALUATED — PEB stream missing from this dump
   Confidence  none
-  Score       0/2  (requires MEM_PRIVATE at the image base correlated with a second structural anomaly; single signals are leads only)
+  Score       0/2  (requires non-MEM_IMAGE memory at the image base correlated with a second structural anomaly; single signals are leads only)
   Coverage    NOT EVALUATED
   Review      none
 

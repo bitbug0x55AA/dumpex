@@ -321,6 +321,72 @@ class LimitationCode(str, Enum):
     # multi-card run can reuse this one shared source name without the
     # per-card SourceObservation collisions combine_coverage_reports()
     # would otherwise reject.
+    REPORT_PE_HEADER_VALIDATION_INCOMPLETE = "REPORT_PE_HEADER_VALIDATION_INCOMPLETE"
+    # ^ --report: at least one triage card's structural PE parse over an
+    # MZ-prefixed candidate could not settle whether it is a genuine PE
+    # (ReportRegionInfo.pe_header_state == "short_read" --
+    # parse_pe_header()'s own `insufficient_data`: some structurally
+    # required offset, e.g. a large declared e_lfanew, fell past what was
+    # actually examined). This is independent of REGION_READ_TRUNCATED
+    # (the raw byte count): pe_header_state is derived purely from what
+    # parse_pe_header() could examine, with no dependency on whether the
+    # underlying read itself came up short -- a card can be fully read yet
+    # still leave a large declared offset unexamined (the region, or a
+    # self-imposed MAX_REGION_READ cap, was simply smaller than the
+    # offset), or the raw read can ALSO be short, in which case both codes
+    # fire together and neither's fixed text may claim a specific one of
+    # the two as the cause. has_injected_pe stays None for that card -- a
+    # real, unanswered question about whether it is an injected PE, not a
+    # settled negative -- so leaving coverage.status "complete" would let
+    # a consumer reading only the aggregate status miss it entirely.
+    # source="requested_region" (reused exactly the way REGION_READ_
+    # TRUNCATED reuses it for --report's own aggregate fact -- see that
+    # code's own comment) because this is still fundamentally about that
+    # same target-region read, just a downstream parse over it rather than
+    # the raw byte count. caller_buildable; affected_count carries how
+    # many cards this left undetermined.
+    EXTRACT_MODULE_CONTEXT_UNAVAILABLE = "EXTRACT_MODULE_CONTEXT_UNAVAILABLE"
+    # ^ --extract: an MZ header was detected in the extracted bytes, but
+    # ModuleListStream itself is absent, so whether this address is
+    # confirmed unregistered (the fact collect_extract's own injected-PE
+    # bar requires) could not even be checked -- the diagnostic degrades
+    # to the weaker EXTRACT_MZ_HEADER_DETECTED claim with no way to tell
+    # "confirmed benign" from "this dump simply cannot corroborate it
+    # either way". absent_capable: derived automatically from the
+    # "modules" SourceObservation the same way REPORT_MODULE_CONTEXT_
+    # UNAVAILABLE derives from --report's own "modules" source -- never
+    # fired when an MZ header was not even found (module/region context
+    # is irrelevant to extraction otherwise).
+    EXTRACT_MEMORY_INFO_UNAVAILABLE = "EXTRACT_MEMORY_INFO_UNAVAILABLE"
+    # ^ --extract: same trigger as EXTRACT_MODULE_CONTEXT_UNAVAILABLE, but
+    # for MemoryInfoListStream instead -- with no region evidence at all,
+    # neither MEM_PRIVATE nor executable protection could be confirmed for
+    # the extracted address, so the same degrade-to-weaker-claim gap
+    # exists on the memory-type axis. absent_capable, "memory_info" source.
+    # Deliberately NO sibling code for "MemoryInfoListStream present but no
+    # descriptor covers the extracted address": that condition stays a
+    # diagnostic-only fact (see collect_extract's own comment at the call
+    # site), matching dumpex.commands.report's long-standing
+    # REPORT_REGION_NOT_FOUND precedent for the identical "no committed
+    # region found" condition -- loud on the console/diagnostics, never
+    # itself a coverage.status movement. The two commands must answer
+    # "is this a coverage gap" the same way for the same dump condition.
+    EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE = "EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE"
+    # ^ --extract: the mirror of --report's own REPORT_PE_HEADER_VALIDATION_
+    # INCOMPLETE, for the identical gap -- ExtractRecord.pe_header_state ==
+    # "short_read" (parse_pe_header()'s own `insufficient_data`: a required
+    # header offset fell past what was actually examined). Independent of
+    # REGION_READ_TRUNCATED (the raw byte count): pe_header_state is
+    # derived purely from what parse_pe_header() could examine, with no
+    # dependency on whether the underlying read itself came up short, so
+    # this and REGION_READ_TRUNCATED can fire together on the same
+    # extraction without either's fixed text naming a specific cause.
+    # Without this code, an extraction whose header could not be
+    # structurally settled reported coverage.status "complete" -- the same
+    # gap --report already treats as partial, so the two commands must not
+    # answer "is this a coverage gap" differently for the identical
+    # unresolved fact. source="requested_region" (reused exactly the way
+    # REGION_READ_TRUNCATED is), caller_buildable.
     REPORT_MODULE_CONTEXT_UNAVAILABLE = "REPORT_MODULE_CONTEXT_UNAVAILABLE"
     # ^ --report: ModuleListStream absent, so a TRIAGE CARD's own
     # thread/region-to-module classification (module_context on both
@@ -2351,6 +2417,33 @@ def _render_report_module_context_unavailable(limitation: "CoverageLimitation") 
             f"(cannot confirm whether a thread/region is backed by a known module)")
 
 
+def _render_extract_module_context_unavailable(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    return (f"{name} not present; cannot confirm whether the extracted address is "
+            f"unregistered, so an MZ header there could not be confirmed as an injected PE")
+
+
+def _render_extract_memory_info_unavailable(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    return (f"{name} not present; cannot confirm the extracted address's memory type or "
+            f"protection, so an MZ header there could not be confirmed as an injected PE")
+
+
+def _render_report_pe_header_validation_incomplete(limitation: "CoverageLimitation") -> str:
+    # Deliberately silent on WHY the header offset fell outside what was
+    # examined: that can be a raw short read (REGION_READ_TRUNCATED fires
+    # alongside this in that case -- ReportRegionInfo.pe_header_state is
+    # derived purely from parse_pe_header()'s own insufficient_data, with
+    # no dependency on whether the underlying byte read was itself full),
+    # or a fully-delivered read that a self-imposed cap (MAX_REGION_READ)
+    # or the region's own size still left too small for a large declared
+    # offset. Naming one specific cause here would contradict the other
+    # limitation's own text whenever both fire for the same card.
+    return (f"{limitation.affected_count} triage card region(s): a structural PE parse over "
+            f"an MZ-prefixed candidate still could not confirm or rule out an injected PE (a "
+            f"required header offset fell past what was actually examined)")
+
+
 def _render_report_string_scan_incomplete(limitation: "CoverageLimitation") -> str:
     return (f"The memory-wide string search skipped {limitation.affected_count} "
             f"region(s) it could not read")
@@ -3350,6 +3443,14 @@ def _validate_pid_exception_tid_fallback_fields(limitation: "CoverageLimitation"
             f"a positive integer, got {limitation.thread_id!r}")
 
 
+def _validate_report_pe_header_validation_incomplete_fields(limitation: "CoverageLimitation") -> None:
+    if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
+            or limitation.affected_count <= 0):
+        raise ValueError(
+            "CoverageLimitation(code=REPORT_PE_HEADER_VALIDATION_INCOMPLETE) requires "
+            f"affected_count to be a positive integer, got {limitation.affected_count!r}")
+
+
 def _validate_report_string_scan_incomplete_fields(limitation: "CoverageLimitation") -> None:
     if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
             or limitation.affected_count <= 0):
@@ -3512,6 +3613,38 @@ _CODE_SPECS = {
     LimitationCode.REPORT_MODULE_CONTEXT_UNAVAILABLE: _CodeSpec(
         render=_render_report_module_context_unavailable, fixed_source="modules",
         absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.EXTRACT_MODULE_CONTEXT_UNAVAILABLE: _CodeSpec(
+        render=_render_extract_module_context_unavailable, fixed_source="modules",
+        absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.EXTRACT_MEMORY_INFO_UNAVAILABLE: _CodeSpec(
+        render=_render_extract_memory_info_unavailable, fixed_source="memory_info",
+        absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE: _CodeSpec(
+        render=_render_fixed_text(
+            "A structural PE parse over the extracted bytes' MZ-prefixed header still could "
+            "not confirm or rule out an injected PE (a required header offset fell past what "
+            "was actually examined)"),
+        fixed_source="requested_region", caller_buildable=True),
+        # allowed_fields defaults to empty -- one extraction, no
+        # affected_count to carry (unlike --report's own
+        # REPORT_PE_HEADER_VALIDATION_INCOMPLETE, which aggregates across
+        # possibly many triage cards). Mirrors REGION_READ_TRUNCATED's own
+        # fixed-sentence shape immediately above; the two can co-occur on
+        # the same extraction (a short raw read can ALSO leave a
+        # structural parse short), so neither's text may name a specific
+        # cause.
+    LimitationCode.REPORT_PE_HEADER_VALIDATION_INCOMPLETE: _CodeSpec(
+        render=_render_report_pe_header_validation_incomplete, fixed_source="requested_region",
+        caller_buildable=True,
+        validate_fields=_validate_report_pe_header_validation_incomplete_fields,
+        allowed_fields=frozenset({"affected_count"})),
+        # No memory_gap kind: unlike REPORT_STRING_SCAN_INCOMPLETE/_TRUNCATED
+        # (which skip or short-read actual bytes), this fires whenever a
+        # structural PE parse over an MZ-prefixed candidate could not
+        # settle the question -- independent of whether the underlying
+        # region read was itself full or short (see the enum's own
+        # comment). Same "classification gap, not a byte gap" shape as
+        # REPORT_MODULE_CONTEXT_UNAVAILABLE just above.
     LimitationCode.REPORT_STRING_SCAN_INCOMPLETE: _CodeSpec(
         render=_render_report_string_scan_incomplete, fixed_source="string_search",
         caller_buildable=True, validate_fields=_validate_report_string_scan_incomplete_fields,

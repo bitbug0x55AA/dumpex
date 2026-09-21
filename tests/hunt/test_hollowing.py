@@ -2,6 +2,7 @@
 from tests.fixtures.fakes import Region, Module, Peb, FakeStream, FakeMF, mem_reader
 
 import dumpex.hunt.hollowing as hollowing
+from dumpex.hunt.hollowing.report_record import project_hunter_record
 
 
 # ── no PEB stream at all -> NOT_EVALUATED ──────────────────────────────────
@@ -150,6 +151,61 @@ def test_mem_private_alone_is_lead_not_detected():
     assert "hollowing.structural_correlation" not in checks
     assert f["lead_count"] == 1
     assert f["review_priority"] == "medium"
+
+
+# ── MEM_MAPPED at the image base still fires anchor 1, but is never ──────
+# ── mislabeled as MEM_PRIVATE (a resource-only or otherwise legitimately ──
+# ── mapped file is a real anomaly here too -- see MemPrivateEvidence's ────
+# ── own docstring for the domain correction: the evidence's OBSERVED type ─
+# ── is what every consumer renders, never an assumed "MEM_PRIVATE") ───────
+
+def test_mem_mapped_at_image_base_still_correlates_to_detected(capsys):
+    image_base = 0x140000000
+    module = Module(image_base, 0x5000, r"C:\Windows\System32\legit.exe")
+    regions = [Region(image_base, image_base, 0x5000, "MEM_COMMIT",
+                       "PAGE_EXECUTE_READWRITE", "MEM_MAPPED")]
+
+    class MF(FakeMF):
+        peb = Peb(image_base, r"C:\Windows\System32\legit.exe")
+        modules = FakeStream([module], "modules")
+        memory_info = FakeStream(regions, "infos")
+    hollowing.read_region = mem_reader({image_base: b'\x00' * 64})   # wiped header
+    mf = MF()
+
+    f = hollowing._hunt_hollowing(mf, verbose=True)
+    assert f["score"] == 2
+    assert f["status"] == "DETECTED"
+    checks = {finding["check"]: finding for finding in f["findings"]}
+    assert "hollowing.mem_private_at_image_base" in checks
+    anchor = checks["hollowing.mem_private_at_image_base"]
+    assert "MEM_MAPPED" in anchor["inference"]
+    correlation = checks["hollowing.structural_correlation"]
+    assert "MEM_MAPPED at image base" in correlation["inference"]
+
+    # No finding -- inference OR rationale, the check-1 anchor and the
+    # scored correlation alike -- may assert MEM_PRIVATE for a base that is
+    # actually MEM_MAPPED. Finding.rationale is published verbatim in
+    # --json (dumpex.hunt._finding.Finding.to_dict()), so this is a wire
+    # assertion, not just a console one.
+    for finding in f["findings"]:
+        assert "MEM_PRIVATE" not in finding["inference"], finding["check"]
+        assert "MEM_PRIVATE" not in finding["rationale"], finding["check"]
+
+    # The default AND --verbose console bodies (already printed by
+    # _hunt_hollowing() above, including the VERDICT/Score lines) must
+    # agree with the structured facts -- no stray "MEM_PRIVATE" anywhere.
+    console_body = capsys.readouterr().out
+    assert "MEM_PRIVATE" not in console_body
+    assert "MEM_MAPPED" in console_body
+
+    # The structured hunter-record details must name the OBSERVED type,
+    # not just a boolean that overclaims MEM_PRIVATE (see
+    # HollowingDetails' own docstring on why mem_private_at_base is true
+    # for any non-MEM_IMAGE type).
+    report = hollowing._build_hollowing_report(mf)
+    record = project_hunter_record(report)
+    assert record.details.mem_private_at_base is True
+    assert record.details.region_type == "MEM_MAPPED"
 
 
 def test_zeroed_mz_header_alone_is_lead_not_detected():

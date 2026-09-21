@@ -36,20 +36,42 @@ def build_report(mem_private: tuple = (), wiped_headers: tuple = (), rwx: tuple 
     results = []
 
     # ── Check 1 (anchor): memory type at the image base ───────────────────
+    # Text is derived from the OBSERVED region type (mem_private[0].region.type),
+    # never hardcoded to "MEM_PRIVATE": a MEM_MAPPED image base is just as
+    # real an anomaly (something WAS mapped, just not by the normal PE
+    # loader) and must be named as what it actually is, not as the
+    # stronger MEM_PRIVATE claim. The MEM_PRIVATE branch's wording is
+    # byte-identical to the pre-migration text (frozen by
+    # tests/fixtures/hunt_cli_golden/); only a NON-MEM_PRIVATE type takes
+    # the second branch.
     if mem_private:
+        observed_type = mem_private[0].region.type
+        if "MEM_PRIVATE" in observed_type:
+            inference = ("The main module's image base is backed by MEM_PRIVATE memory, "
+                         "not a file-mapped MEM_IMAGE region.")
+            rationale = ("A genuine PE image loaded normally is always MEM_IMAGE at its "
+                         "base — MEM_PRIVATE there means nothing was actually mapped from "
+                         "the executable file this process is supposed to be running. "
+                         "Structural on its own, but a manually-mapped, otherwise benign "
+                         "loader (some DRM/anti-cheat/packer stubs) can also produce this "
+                         "without hollowing — correlated with a second anomaly below before "
+                         "it counts toward the score.")
+        else:
+            inference = (f"The main module's image base is backed by {observed_type} memory, "
+                         "not the MEM_IMAGE mapping a normally loaded PE image gets.")
+            rationale = ("A genuine PE image loaded normally is always MEM_IMAGE at its "
+                         f"base — {observed_type} there means something WAS mapped from a "
+                         "file, but not through the normal PE loader path. Structural on "
+                         "its own, but a manually-mapped, otherwise benign loader (some "
+                         "DRM/anti-cheat/packer stubs, or an ordinary resource/file view) "
+                         "can also produce this without hollowing — correlated with a "
+                         "second anomaly below before it counts toward the score.")
         results.append(CheckResult(
             check="hollowing.mem_private_at_image_base",
             evidence=mem_private,
-            inference="The main module's image base is backed by MEM_PRIVATE memory, "
-                       "not a file-mapped MEM_IMAGE region.",
+            inference=inference,
             confidence=CONFIDENCE_MEDIUM,
-            rationale="A genuine PE image loaded normally is always MEM_IMAGE at its "
-                       "base — MEM_PRIVATE there means nothing was actually mapped from "
-                       "the executable file this process is supposed to be running. "
-                       "Structural on its own, but a manually-mapped, otherwise benign "
-                       "loader (some DRM/anti-cheat/packer stubs) can also produce this "
-                       "without hollowing — correlated with a second anomaly below before "
-                       "it counts toward the score.",
+            rationale=rationale,
             limitations=["A manual-mapping loader that isn't hollowing can also produce "
                          "this signal alone."],
             tag=TAG_LEAD,
@@ -116,6 +138,12 @@ def build_report(mem_private: tuple = (), wiped_headers: tuple = (), rwx: tuple 
         correlation = correlations[0]
         score = 2 if correlation.full_correlation else 1
         corroborators = correlation.corroborators
+        # Named from the OBSERVED region type (never hardcoded to
+        # "MEM_PRIVATE") for the same reason check 1's inference/rationale
+        # is above: rationale is published verbatim in --json
+        # (Finding.rationale), so a MEM_MAPPED image base must never read
+        # as a MEM_PRIVATE claim there either.
+        observed_type = correlation.mem_private.region.type
         results.append(CheckResult(
             check="hollowing.structural_correlation",
             evidence=correlations,
@@ -124,7 +152,7 @@ def build_report(mem_private: tuple = (), wiped_headers: tuple = (), rwx: tuple 
             confidence=CONFIDENCE_HIGH if correlation.full_correlation else CONFIDENCE_MEDIUM,
             rationale="Any one of these signals alone has a plausible benign explanation "
                        "(manual mapping, a capture-time read race, a JIT/packer using RWX). "
-                       "MEM_PRIVATE at the image base correlated with a missing/wiped MZ "
+                       f"{observed_type} at the image base correlated with a missing/wiped MZ "
                        "header AND/OR RWX protection at that same address is materially "
                        "harder to explain away — the combination the module's own checks "
                        "were designed to catch.",

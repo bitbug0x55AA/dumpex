@@ -50,7 +50,10 @@ import dumpex.commands.report as report_mod
 import dumpex.core.memory as core_memory_mod
 from dumpex.output.envelope import SCHEMA_VERSION
 from dumpex.rules_pkg.loader import configure_rules_source
-from tests.fixtures.fakes import FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader
+from tests.fixtures.fakes import (
+    FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader, build_pe_header,
+    TEXT_SECTION_RX,
+)
 
 
 class _FixedDateTime(datetime.datetime):
@@ -282,7 +285,11 @@ def test_verdict_suspicious_rwx_private(monkeypatch, tmp_path, capsys):
 
 
 def test_verdict_high_confidence_malicious(monkeypatch, tmp_path, capsys):
-    ioc_data = (b"MZ" + b"\x90" * 62
+    # injected_pe now requires a STRUCTURALLY VALID PE header (not a bare
+    # 'MZ' prefix) -- see dumpex.commands.report._scan_content_range's own
+    # docstring: registration and memory type are independent facts, and a
+    # coincidental 'MZ' byte pair is not, by itself, a confirmed PE.
+    ioc_data = (build_pe_header([TEXT_SECTION_RX])
                 + b"cmd.exe /c powershell -enc ZZZZZZZZZZZZZZZZZZ" + b"\x00" * 20)
     exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x8000"],

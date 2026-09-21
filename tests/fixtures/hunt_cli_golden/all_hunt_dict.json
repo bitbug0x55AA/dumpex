@@ -165,7 +165,8 @@
       "module_name": null,
       "mz_header_present": null,
       "name_mismatch": null,
-      "peb_image_path": null
+      "peb_image_path": null,
+      "region_type": null
     },
     "findings": [],
     "hunter": "hollowing",

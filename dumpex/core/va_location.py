@@ -67,8 +67,8 @@ class VaLocation:
         return self.module_base is not None
 
 
-def resolve_va_location(va: int, *, modules=(), region_views=(),
-                        module_profile=None) -> VaLocation:
+def resolve_va_location(va: int, *, modules=(), modules_available: "bool | None" = None,
+                        region_views=(), module_profile=None) -> VaLocation:
     """Resolve ``va`` against ``modules`` (raw minidump module objects),
     ``region_views`` (an iterable of
     :class:`~dumpex.core.va_range.CapturedRegion`), and an optional
@@ -78,11 +78,23 @@ def resolve_va_location(va: int, *, modules=(), region_views=(),
     the module resolved for ``va``: a profile for a different image tells
     this address nothing, and pairing them would report a foreign section
     layout.
+
+    ``modules_available`` says whether ModuleListStream itself is present,
+    independent of how many modules it holds -- a caller that already knows
+    this (from the same ``bool(mf.modules)`` check every other consumer
+    makes) should always pass it. Falling back to ``bool(modules)`` when
+    omitted cannot tell "no ModuleListStream" from "ModuleListStream is
+    present but empty": both would truthiness-collapse to the same falsy
+    list, silently downgrading a confirmed negative (checked, no match) to
+    an unknown (never checked). The fallback exists only so a caller that
+    genuinely has nothing but the resolved list still gets a value.
     """
-    module = addr_to_module(va, modules) if modules else None
+    if modules_available is None:
+        modules_available = bool(modules)
+    module = addr_to_module(va, modules) if modules_available else None
     if module is not None:
         registration = REGISTRATION_REGISTERED
-    elif modules:
+    elif modules_available:
         registration = REGISTRATION_UNREGISTERED
     else:
         registration = REGISTRATION_UNAVAILABLE

@@ -5,7 +5,7 @@
 
   VERDICT     LIKELY HOLLOWING — MEM_PRIVATE at image base correlated with RWX protection
   Confidence  medium
-  Score       1/2  (requires MEM_PRIVATE at the image base correlated with a second structural anomaly; single signals are leads only)
+  Score       1/2  (requires non-MEM_IMAGE memory at the image base correlated with a second structural anomaly; single signals are leads only)
   Coverage    COMPLETE
   Review      high
 
@@ -25,7 +25,7 @@
       - Structural correlation is strong evidence but not a substitute for live-execution
         corroboration (no thread-context signal is available for this hunter).
 
-  MEM_PRIVATE memory at the image base  [MEDIUM]  LEAD  (hollowing.mem_private_at_image_base)
+  Non-MEM_IMAGE memory at the image base  [MEDIUM]  LEAD  (hollowing.mem_private_at_image_base)
     Inference   : The main module's image base is backed by MEM_PRIVATE memory, not a file-mapped
                   MEM_IMAGE region.
     Confidence  : medium — A genuine PE image loaded normally is always MEM_IMAGE at its base —

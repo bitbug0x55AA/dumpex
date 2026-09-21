@@ -204,6 +204,7 @@ def test_extract_record_to_dict_shape():
     assert rec.to_dict() == {
         "requested_address": "0x0000000000001000", "requested_size": 16,
         "auto_sized": False, "bytes_read": 16, "mz_header_detected": False,
+        "pe_header_state": None,
     }
 
 
@@ -949,10 +950,89 @@ def test_report_region_info_rejects_injected_pe_true_when_mz_not_detected():
         _valid_region_info(mz_header_detected=False, has_injected_pe=True)
 
 
-def test_report_region_info_rejects_injected_pe_false_when_unregistered():
-    with pytest.raises(ValueError, match="must be True"):
+def test_report_region_info_accepts_injected_pe_false_when_unregistered():
+    # An unregistered region does NOT force has_injected_pe to True: a
+    # structural rejection (pe_invalid) settles it False regardless of
+    # type/protect.
+    info = _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                              mz_header_detected=True, has_injected_pe=False,
+                              pe_header_state="pe_invalid")
+    assert info.has_injected_pe is False
+
+
+def test_report_region_info_rejects_injected_pe_true_without_private_or_executable():
+    # has_injected_pe=True for an unregistered, validated ("ok") region
+    # must be backed by an actual private-or-executable fact -- never by
+    # registration alone.
+    with pytest.raises(ValueError, match="must be True exactly when pe_header_state is 'ok'"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           mz_header_detected=True, has_injected_pe=True,
+                           pe_header_state="ok",
+                           type="MEM_MAPPED", protect="PAGE_READONLY")
+
+
+def test_report_region_info_rejects_a_dropped_finding():
+    # The bidirectional half of the same invariant: a validated ("ok"),
+    # MEM_PRIVATE region must not be recorded as has_injected_pe=False --
+    # that is a dropped finding, exactly as invalid as a fabricated one.
+    with pytest.raises(ValueError, match="must be True exactly when pe_header_state is 'ok'"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           mz_header_detected=True, has_injected_pe=False,
+                           pe_header_state="ok",
+                           type="MEM_PRIVATE", protect="PAGE_READONLY")
+
+
+def test_report_region_info_accepts_injected_pe_true_when_unregistered_and_private():
+    info = _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                              mz_header_detected=True, has_injected_pe=True,
+                              pe_header_state="ok",
+                              type="MEM_PRIVATE", protect="PAGE_READONLY")
+    assert info.has_injected_pe is True
+
+
+def test_report_region_info_accepts_injected_pe_true_when_unregistered_and_executable():
+    info = _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                              mz_header_detected=True, has_injected_pe=True,
+                              pe_header_state="ok",
+                              type="MEM_MAPPED", protect="PAGE_EXECUTE_READ")
+    assert info.has_injected_pe is True
+
+
+def test_report_region_info_requires_pe_header_state_when_unregistered():
+    with pytest.raises(ValueError, match="pe_header_state must be one of"):
         _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
                            mz_header_detected=True, has_injected_pe=False)
+
+
+def test_report_region_info_rejects_unknown_pe_header_state():
+    with pytest.raises(ValueError, match="pe_header_state must be one of"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           mz_header_detected=True, has_injected_pe=False,
+                           pe_header_state="not-a-real-state")
+
+
+def test_report_region_info_short_read_forces_injected_pe_none():
+    with pytest.raises(ValueError, match="must be None when pe_header_state is 'short_read'"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           mz_header_detected=True, has_injected_pe=False,
+                           pe_header_state="short_read")
+    info = _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                              mz_header_detected=True, has_injected_pe=None,
+                              pe_header_state="short_read")
+    assert info.has_injected_pe is None
+
+
+def test_report_region_info_rejects_pe_header_state_when_registered():
+    with pytest.raises(ValueError, match="pe_header_state must be None"):
+        _valid_region_info(module_context=MODULE_CONTEXT_RESOLVED,
+                           mz_header_detected=True, has_injected_pe=False,
+                           pe_header_state="ok")
+
+
+def test_report_region_info_rejects_pe_header_state_without_mz_header():
+    with pytest.raises(ValueError, match="pe_header_state must be None"):
+        _valid_region_info(mz_header_detected=False, has_injected_pe=False,
+                           pe_header_state="ok")
 
 
 def test_report_region_info_rejects_injected_pe_true_when_resolved():

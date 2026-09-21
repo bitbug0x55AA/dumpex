@@ -13,7 +13,9 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     _search_string_in_memory, StringSearchStats, verdict_for,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS)
 from dumpex.rules_pkg.loader import get_rules
-from dumpex.core.pe_utils import _duration_100ns_to_str
+from dumpex.core.pe_utils import (
+    _duration_100ns_to_str, has_executable_protection, is_private_memory_type, parse_pe_header,
+)
 from dumpex.core.safe_io import write_output_bytes
 from dumpex.output.records import (
     ReportThreadInfo, ReportRegionInfo, ReportIocString, TriageCardRecord, StringRecord, Diagnostic,
@@ -117,16 +119,31 @@ class ContentScanResult(NamedTuple):
     string_scan_error: "str | None"
     strings: tuple = ()
     ioc_offsets: frozenset = frozenset()
+    pe_header_state: "str | None" = None   # "ok"/"pe_invalid"/"short_read", or None when no
+                                            # structural PE parse was attempted -- the fact
+                                            # has_injected_pe's own derivation rests on, made
+                                            # independently inspectable (see ReportRegionInfo)
 
 
 def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: int,
-                         module_context: str) -> ContentScanResult:
+                         module_context: str, region_type: str,
+                         region_protect: str) -> ContentScanResult:
     """The read + string/IOC/MZ analysis itself -- see `ContentScanResult`'s
     own docstring for why this takes a bare `base_address`/`requested_size`
     rather than a resolved MemoryInfo region. `module_context` (one of
     MODULE_CONTEXT_RESOLVED/UNREGISTERED/UNAVAILABLE) is supplied by the
     caller from the region's module ownership before `has_injected_pe` can
-    be decided, so it is not re-derived here."""
+    be decided, so it is not re-derived here. `region_type`/`region_protect`
+    are the same region's own `prot_str()`-rendered Type/Protect -- module
+    registration and memory type are independent facts, and an unregistered
+    address is not, by itself, private memory: a resource-only PE mapped
+    via MapViewOfFile is legitimately absent from the module list while
+    still sitting in an ordinary MEM_MAPPED, non-executable page.
+
+    Both are REQUIRED, not optional: has_injected_pe's private-or-executable
+    gate (below) can only ever be satisfied when they are real facts, so a
+    caller that omitted them would get a silent, wrong False rather than an
+    error -- exactly the false negative this signature refuses to allow."""
     # Scoped to ONLY the read itself -- see this function's own docstring
     # for why the analysis below must NOT be inside this try/except.
     try:
@@ -182,21 +199,57 @@ def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: 
     }
 
     has_injected_pe = None
+    pe_header_state = None
     if mz_header_detected is False:
         has_injected_pe = False
     elif mz_header_detected is True:
-        if module_context == MODULE_CONTEXT_UNREGISTERED:
-            has_injected_pe = True
-        elif module_context == MODULE_CONTEXT_RESOLVED:
+        if module_context == MODULE_CONTEXT_RESOLVED:
             has_injected_pe = False
-        else:   # unavailable -- found something suspicious-shaped, can't confirm
+        elif module_context == MODULE_CONTEXT_UNAVAILABLE:
+            # Found something suspicious-shaped, but registration itself
+            # can't be confirmed either way -- can't confirm.
             has_injected_pe = None
+        else:   # MODULE_CONTEXT_UNREGISTERED -- confirmed no module owns this address
+            # Registration alone never settles this: a resource-only PE
+            # legitimately has no module-list entry. Strict structural
+            # validation (parse_pe_header, not a bare 2-byte magic check)
+            # plus the region's own memory type/protection are what
+            # separate a genuine private/executable injection from a
+            # benign mapped file that merely starts with 'MZ'. The
+            # structural-validity fact itself is also kept, independently
+            # of has_injected_pe, as pe_header_state -- see
+            # ReportRegionInfo's own docstring for why it exists as a
+            # field rather than staying implicit in this control flow.
+            pe = parse_pe_header(data)
+            if not pe['valid']:
+                # A capture-length gap leaves structural validity
+                # genuinely undetermined; a deterministic rejection (bad
+                # signature, implausible e_lfanew, ...) means this is at
+                # most an MZ-only coincidence, not a confirmed PE.
+                if pe['insufficient_data']:
+                    pe_header_state = "short_read"
+                    has_injected_pe = None
+                else:
+                    pe_header_state = "pe_invalid"
+                    has_injected_pe = False
+            else:
+                pe_header_state = "ok"
+                # The region's own LIVE protection, not the PE header's
+                # declared section characteristics -- what a page actually
+                # grants is what matters for "executable", and it is the
+                # one fact ReportRegionInfo's own schema can verify. Uses
+                # the SAME shared predicates
+                # dumpex.hunt.injection.memory_scan.pe_hit_is_context_scoreable
+                # does, so the two can never quietly diverge on the test.
+                has_injected_pe = (is_private_memory_type(region_type)
+                                   or has_executable_protection(region_protect))
 
     return ContentScanResult(
         mz_header_detected=mz_header_detected, has_injected_pe=has_injected_pe,
         ioc_strings=tuple(ioc_strings), notable_strings=tuple(notable_strings),
         string_scan=string_scan, string_scan_error=None,
-        strings=tuple(strings), ioc_offsets=frozenset(off for off, _enc, _s in ioc_hits))
+        strings=tuple(strings), ioc_offsets=frozenset(off for off, _enc, _s in ioc_hits),
+        pe_header_state=pe_header_state)
 
 
 def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len: int,
@@ -386,7 +439,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     if region is not None:
         read_size = min(region.RegionSize, MAX_REGION_READ)
         scan = _scan_content_range(mf, base_address=region.BaseAddress, requested_size=read_size,
-                                    min_len=min_len, module_context=region_module_context)
+                                    min_len=min_len, module_context=region_module_context,
+                                    region_type=mtype, region_protect=p)
         mz_header_detected = scan.mz_header_detected
         has_injected_pe = scan.has_injected_pe
         ioc_strings = list(scan.ioc_strings)
@@ -408,7 +462,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
             )
         if has_injected_pe:
             dims['injected_pe'] = (
-                f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
+                f"Valid PE header at 0x{region.BaseAddress:x} outside any loaded module "
+                f"(type={mtype})"
             )
 
         region_record = ReportRegionInfo(
@@ -416,7 +471,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
             protect=p, type=mtype, module_owner=(rmod.name if rmod else None),
             file_offset=fo_reg, is_rwx_private=is_rwx_private,
             module_context=region_module_context, mz_header_detected=mz_header_detected,
-            has_injected_pe=has_injected_pe, protection_suspicious=protection_suspicious)
+            has_injected_pe=has_injected_pe, protection_suspicious=protection_suspicious,
+            pe_header_state=scan.pe_header_state)
 
     # ── Verdict (MECE) ────────────────────────────────────────────────
     verdict = verdict_for(dims)
@@ -635,6 +691,15 @@ def _build_aggregate_coverage_report(records, search_stats: StringSearchStats):
     truncated_count = sum(1 for r in attempted
                            if (r.string_scan and r.string_scan["truncated"])
                            or r.extract_read_truncated)
+    # A DIFFERENT gap from truncated_count above: the region's own bytes
+    # were read in FULL (nothing short about the raw read), but a
+    # structural PE parse over an MZ-prefixed candidate still could not
+    # settle has_injected_pe -- a real, unanswered question that
+    # coverage.status must not silently drop just because the byte count
+    # itself came back whole. See ReportRegionInfo's own docstring for
+    # why "ok"/"pe_invalid" settle the question but "short_read" does not.
+    pe_undetermined_count = sum(1 for r in attempted
+                                if r.region.pe_header_state == "short_read")
 
     sources = {}
     completeness_checks = []
@@ -650,6 +715,10 @@ def _build_aggregate_coverage_report(records, search_stats: StringSearchStats):
         if truncated_count:
             completeness_checks.append(CoverageLimitation(
                 code=LimitationCode.REGION_READ_TRUNCATED, source="requested_region"))
+        if pe_undetermined_count:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.REPORT_PE_HEADER_VALIDATION_INCOMPLETE,
+                source="requested_region", affected_count=pe_undetermined_count))
 
     if search_stats.skipped or search_stats.truncated:
         sources["string_search"] = SourceObservation(
@@ -754,7 +823,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 execution_status=_execution_status_for([], diagnostics, search_stats),
                 summary={"mode": "string", "card_count": 0, "query_string": report_string,
                          "query_tid": report_tid, "query_addr": None, "total_hits": 0,
-                         "hits_private": 0, "hits_image": 0, "image_hit_modules": [],
+                         "hits_private": 0, "hits_mapped": 0, "hits_unregistered_image": 0,
+                         "hits_image_registration_unavailable": 0,
+                         "hits_region_type_unavailable": 0,
+                         "hits_image": 0, "image_hit_modules": [],
                          "skipped_unreadable_regions": search_stats.skipped,
                          "truncated_regions": search_stats.truncated,
                          "clamped_regions": search_stats.clamped,
@@ -813,9 +885,49 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         # on Linux/macOS.  Use Windows path semantics so backslash-separated
         # paths collapse to the same basename on every analysis host.
         image_hit_modules = sorted({ntpath.basename(m.name) for _, _, _, m in image_hits})
+        # hits_private is grouping/actionability shorthand, not a memory-type
+        # claim: it is every hit NOT attributed to a resolved image module
+        # (mirroring which hits get carded), and includes MEM_MAPPED,
+        # MEM_IMAGE, and unresolvable-type hits alongside genuine
+        # MEM_PRIVATE ones -- module absence never establishes private
+        # memory here either. The four counters below mirror
+        # anchor_pe_context.classification's own five-way "no module owns
+        # this" split (see _classify_anchor) exactly, so a summary-only
+        # consumer reads the same distinction each card already carries,
+        # and hits_private minus all four equals confirmed MEM_PRIVATE --
+        # never a remainder that silently folds an unresolved type or an
+        # unresolved registration state into "private".
+        hits_mapped = 0
+        hits_unregistered_image = 0
+        hits_image_registration_unavailable = 0
+        hits_region_type_unavailable = 0
+        for final, *_rest in private_hits:
+            mtype = prot_str(final.Type)
+            if "MEM_MAPPED" in mtype:
+                hits_mapped += 1
+            elif "MEM_IMAGE" in mtype:
+                # A module list confirmed no module covers this address is a
+                # different fact from a module list that was never even
+                # available to check -- the same distinction
+                # _classify_anchor draws between unregistered_image and
+                # image_registration_unavailable, and this counter must not
+                # claim the stronger one when only the weaker is known.
+                if modules_available:
+                    hits_unregistered_image += 1
+                else:
+                    hits_image_registration_unavailable += 1
+            elif not is_private_memory_type(mtype):
+                # The region's own type is None or an unrecognized/numeric
+                # value -- a genuine gap, never silently counted as
+                # confirmed private just because it isn't MEM_MAPPED or
+                # MEM_IMAGE.
+                hits_region_type_unavailable += 1
         summary = {
             "mode": "string", "query_string": report_string, "query_tid": report_tid,
             "query_addr": None, "total_hits": len(hits), "hits_private": len(private_hits),
+            "hits_mapped": hits_mapped, "hits_unregistered_image": hits_unregistered_image,
+            "hits_image_registration_unavailable": hits_image_registration_unavailable,
+            "hits_region_type_unavailable": hits_region_type_unavailable,
             "hits_image": len(image_hits), "image_hit_modules": image_hit_modules,
             "skipped_unreadable_regions": search_stats.skipped,
             "truncated_regions": search_stats.truncated,
@@ -933,7 +1045,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     summary = {
         "mode": "_".join(mode_parts), "card_count": 1, "query_string": None,
         "query_tid": report_tid, "query_addr": report_addr, "total_hits": None,
-        "hits_private": None, "hits_image": None, "image_hit_modules": [],
+        "hits_private": None, "hits_mapped": None, "hits_unregistered_image": None,
+        "hits_image_registration_unavailable": None, "hits_region_type_unavailable": None,
+        "hits_image": None, "image_hit_modules": [],
         "skipped_unreadable_regions": 0, "truncated_regions": 0, "clamped_regions": 0,
         "cards_skipped_for_budget": 0,
         "hits_skipped_for_budget": 0,
@@ -1701,7 +1815,7 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
             elif r.module_context == MODULE_CONTEXT_UNAVAILABLE:
                 owner_text = YELLOW('unknown — module classification unavailable')
             else:
-                owner_text = RED('none — unregistered private memory')
+                owner_text = RED('none — unregistered memory')
             print(f"  {'Module Owner':<22} {owner_text}")
 
             if r.is_rwx_private:
@@ -1712,13 +1826,49 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
             if r.mz_header_detected is None:
                 print(f"  {YELLOW('[~] Could not read region header — injected-PE check skipped')}")
             elif r.has_injected_pe:
-                print(f"  {RED('[!] MZ header — injected PE in unregistered private memory')}")
+                print(f"  {RED('[!] Valid PE header outside any loaded module')}")
             elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_RESOLVED:
                 print(f"  {DIM('[·] MZ header (known module — expected)')}")
             elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNAVAILABLE:
                 print("  " + YELLOW(
                     "[~] MZ header found, but module classification is unavailable "
                     "(ModuleListStream absent) — cannot confirm this is an injected PE"
+                ))
+            elif (r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNREGISTERED
+                  and r.has_injected_pe is None):
+                # Registration IS confirmed unregistered, but the read came
+                # up short of what strict structural PE validation needs (a
+                # genuine capture-length gap, not a rejection) -- the header
+                # check is undetermined, not failed. The short-read gap
+                # itself already prints as its own coverage line nearby;
+                # this states the DOWNSTREAM consequence for this specific
+                # check, so the verdict's absence is never silent.
+                print("  " + YELLOW(
+                    "[~] MZ header found in unregistered memory, but too little of it was "
+                    "captured to structurally validate — whether this is an injected PE is "
+                    "undetermined"
+                ))
+            elif (r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNREGISTERED
+                  and r.pe_header_state == "pe_invalid"):
+                # has_injected_pe is False here, not None: the FULL header
+                # was read but failed strict structural PE validation (not
+                # just a coincidental 'MZ' prefix) -- distinct from the
+                # "ok" branch below, which sits in a non-private,
+                # non-executable mapping instead.
+                print("  " + YELLOW(
+                    "[~] MZ header found in unregistered memory, but failed structural PE "
+                    "validation — not confirmed as an injected PE"
+                ))
+            elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNREGISTERED:
+                # pe_header_state == "ok" here: a genuinely valid PE header,
+                # confirmed unregistered, but neither MEM_PRIVATE nor
+                # executable (see Type/Protection above) -- a resource-only
+                # or otherwise benign mapped file, not evidence of
+                # injection on its own.
+                print("  " + YELLOW(
+                    "[~] Valid PE header in unregistered memory, but sits in a non-private, "
+                    "non-executable mapping — not confirmed as an injected PE "
+                    "(see Type/Protection above)"
                 ))
         print()
 

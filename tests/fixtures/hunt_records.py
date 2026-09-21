@@ -100,7 +100,7 @@ def hollowing_not_evaluated():
 def hollowing_detected():
     details = HollowingDetails(image_base="0x0000000000000004", mem_private_at_base=True,
         mz_header_present=False, is_rwx_at_base=True, peb_image_path="C:\\a.exe",
-        module_name="a.exe", name_mismatch=True)
+        module_name="a.exe", name_mismatch=True, region_type="MEM_PRIVATE")
     return HunterRecord(hunter="hollowing", status="DETECTED", score=1, max_score=1,
         verdict_level="possible", confidence="medium", lead_count=1, review_priority="medium",
         coverage=coverage(), findings=[a_finding("hollowing.name_mismatch")], details=details)

@@ -18,16 +18,18 @@ def _details(report: HollowingReport) -> HollowingDetails:
         return HollowingDetails(
             image_base=None, mem_private_at_base=None, mz_header_present=None,
             is_rwx_at_base=None, peb_image_path=None, module_name=None,
-            name_mismatch=None)
+            name_mismatch=None, region_type=None)
 
     # Checks 1 and 3 both need the image-base region: with no region
     # captured neither ran, so both are null rather than False.
     if context.region is not None:
         mem_private_at_base = bool(report.evidence.mem_private)
         is_rwx_at_base = bool(report.evidence.rwx)
+        region_type = context.region.type
     else:
         mem_private_at_base = None
         is_rwx_at_base = None
+        region_type = None
 
     # Check 4 ran only if the module list was available at all: without it
     # `addr_to_module()` returns None for every address, so "no mismatch"
@@ -49,6 +51,7 @@ def _details(report: HollowingReport) -> HollowingDetails:
         # null for "no recorded name", never an empty string.
         module_name=(context.module.name or None) if context.module is not None else None,
         name_mismatch=name_mismatch,
+        region_type=region_type,
     )
 
 

@@ -29,6 +29,32 @@ _MAX_SECTIONS = 96   # PE spec allows up to 96 sections; anything beyond
                       # that in a section-table walk is corrupt/adversarial
 
 
+# ── Shared MemoryInfo-fact predicates ─────────────────────────────────────
+# The ONE place "is this region MEM_PRIVATE" / "does this protection grant
+# execute" are decided, so dumpex.hunt.injection.memory_scan's
+# pe_hit_is_context_scoreable and dumpex.commands.report's
+# _scan_content_range -- both deciding "is an unregistered, structurally
+# valid PE actually suspicious" -- can never quietly diverge on the test.
+
+def is_private_memory_type(region_type: str) -> bool:
+    """True when `region_type` (a `prot_str()`-rendered MemoryInfo `Type`)
+    is exactly MEM_PRIVATE. An exact match, not a substring test: unlike
+    `Protect`, `Type` is never a combined/bitmask value, so a substring
+    check would only ever accept the same single answer while inviting a
+    typo'd or unexpectedly-prefixed value through unnoticed."""
+    return region_type == "MEM_PRIVATE"
+
+
+def has_executable_protection(protect: str) -> bool:
+    """True if `protect` (a `prot_str()`-rendered `Protect` name) grants
+    execute access. Checked via substring rather than an exact-match set
+    because `Protect` CAN carry a combined flag name (e.g.
+    "PAGE_EXECUTE_READ|PAGE_GUARD") -- every executable `PAGE_*` constant
+    contains "EXECUTE" and no non-executable one does, so this is a safe,
+    simpler test than enumerating every combination."""
+    return "EXECUTE" in protect
+
+
 def parse_pe_header(data: bytes) -> dict:
     """
     Structurally validate a PE image starting at `data[0]` (presumed MZ).

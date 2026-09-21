@@ -22,14 +22,14 @@ never replace an input dump.
 
 ## Current contract
 
-All twelve commands emit the same v2.19 envelope. The authoritative schema is
-[`dumpex-output-v2.19.schema.json`](../../dumpex/schemas/dumpex-output-v2.19.schema.json).
+All twelve commands emit the same v2.20 envelope. The authoritative schema is
+[`dumpex-output-v2.20.schema.json`](../../dumpex/schemas/dumpex-output-v2.20.schema.json).
 The schema uses JSON Schema Draft 2020-12 and closes record objects with
 `additionalProperties: false` where their field sets are fixed.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.19 (current) | [`dumpex-output-v2.19.schema.json`](../../dumpex/schemas/dumpex-output-v2.19.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.20 (current) | [`dumpex-output-v2.20.schema.json`](../../dumpex/schemas/dumpex-output-v2.20.schema.json) |
 
 Use the document's own `meta.schema_version` to select a validator. Do not
 validate archived output against whichever schema happens to be current today.
@@ -465,6 +465,32 @@ hits_private + hits_image                                     == total_hits
 card_count + hits_sharing_a_region + hits_skipped_for_budget  == hits_private
 ```
 
+`hits_private` is grouping/actionability shorthand, not a memory-type claim: it
+is every hit NOT attributed to a resolved image module, and includes MEM_MAPPED,
+MEM_IMAGE, and unresolvable-type hits alongside genuine MEM_PRIVATE ones —
+module absence never establishes private memory here either. Four counters (all
+v2.20) break the `hits_private` bucket down by the covering region's own
+observed type, mirroring `anchor_pe_context.classification`'s own five-way "no
+module owns this" split exactly, so a summary-only consumer can tell them apart
+without reading every card:
+
+| Counter | Mirrors `anchor_pe_context.classification` |
+|---|---|
+| `hits_mapped` | `mapped` — confirmed MEM_MAPPED |
+| `hits_unregistered_image` | `unregistered_image` — confirmed MEM_IMAGE, a module list confirmed no module covers it |
+| `hits_image_registration_unavailable` | `image_registration_unavailable` — confirmed MEM_IMAGE, but no module list was available to check at all |
+| `hits_region_type_unavailable` | `region_type_unavailable` — the region's own type is `null` or unrecognized |
+
+`hits_unregistered_image` and `hits_image_registration_unavailable` are
+deliberately distinct: the first is a CHECKED negative (a module list was
+consulted and does not cover the address), the second is "never checked" (no
+module list to consult at all) — asserting the former when only the latter is
+known would claim a stronger fact than the evidence supports. The remainder,
+`hits_private` minus all four counters, is genuine, confirmed MEM_PRIVATE —
+never a leftover bucket that silently absorbs an unresolved type or an
+unresolved registration state. None of the four counters change which hits get
+carded.
+
 ### Report enrichment (v2.17, extended in v2.18)
 
 A report also carries bounded context around its anchors, so an analyst can
@@ -658,8 +684,21 @@ list.
 `anchor_pe_context` places the card's anchor against the PE image that owns it.
 `classification` is `headers`, `code`, `data`, `import_iat`, `relocation`,
 `unmapped`, or `outside_image` inside the owning module; `module` when the
-module's profile was not available to place it finer; and `private` or
-`unresolved` when no module owns it. `declared_readable` / `declared_writable` /
+module's profile was not available to place it finer; and, when no module
+owns it, one of five values split by the captured region's own CONFIRMED
+type and, for MEM_IMAGE, the CONFIRMED registration state (added in v2.20 —
+module absence alone never implies private memory):
+`private` (confirmed MEM_PRIVATE), `mapped` (confirmed MEM_MAPPED, e.g. a
+resource-only file view), `unregistered_image` (confirmed MEM_IMAGE AND a
+module list confirmed no module covers this address — a manually mapped or
+stomped module), `image_registration_unavailable` (confirmed MEM_IMAGE, but
+no module list was available to check registration at all — a different
+gap from confirmed-unregistered: the region's type is known, whether a
+module owns it is not), or `region_type_unavailable` (the region's own type
+is null or an unrecognized/numeric value — a genuine gap, never asserted as
+`mapped`); or `unresolved` when no module AND no captured region place the
+anchor at all.
+`declared_readable` / `declared_writable` /
 `declared_executable` are the containing section's own characteristic bits, and
 `protection_matches_declared` compares them with `live_protection`, the region's
 actual protection. A mismatch is an observation an analyst follows up, not a

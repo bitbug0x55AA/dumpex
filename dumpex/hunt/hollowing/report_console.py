@@ -35,7 +35,11 @@ _NAME_MISMATCH          = "hollowing.peb_module_name_mismatch"
 
 _TITLES = {
     _STRUCTURAL_CORRELATION: "Correlated structural hollowing indicators",
-    _MEM_PRIVATE:            "MEM_PRIVATE memory at the image base",
+    # Generic section title (a static per-check label, not per-instance --
+    # the actual observed type is in the fact line and the verdict text
+    # below it): "non-MEM_IMAGE", not "MEM_PRIVATE", since this check now
+    # fires for MEM_MAPPED just as much as for MEM_PRIVATE.
+    _MEM_PRIVATE:            "Non-MEM_IMAGE memory at the image base",
     _MZ_HEADER_MISSING:      "Missing/wiped MZ header at the image base",
     _RWX:                    "RWX protection at the image base",
     _NAME_MISMATCH:          "PEB image name vs module list",
@@ -263,6 +267,14 @@ def _second_signal_text(report: HollowingReport) -> str:
     return "MZ header wiped" if correlation.wiped_header is not None else "RWX protection"
 
 
+def _mem_type_text(report: HollowingReport) -> str:
+    """The image base's OBSERVED memory type behind anchor 1, for the
+    verdict line -- read from the correlation's own evidence, never
+    hardcoded to "MEM_PRIVATE": a MEM_MAPPED image base must be named as
+    what it actually is (see `MemPrivateEvidence`'s own docstring)."""
+    return report.evidence.correlations[0].mem_private.region.type
+
+
 def _render_verdict_block(report: HollowingReport, coverage_status: str,
                            findings: list, coverage_report, width: int) -> list:
     """The verdict-first key/value block. Reproduces the pre-migration
@@ -280,10 +292,11 @@ def _render_verdict_block(report: HollowingReport, coverage_status: str,
     if status == NOT_EVALUATED:
         verdict_text = _status_text(status, "PEB stream missing from this dump")
     elif status == DETECTED:
+        mem_type = _mem_type_text(report)
         verdict_text = (
-            RED("HIGH CONFIDENCE HOLLOWING — MEM_PRIVATE, MZ wiped, AND RWX all correlate")
+            RED(f"HIGH CONFIDENCE HOLLOWING — {mem_type}, MZ wiped, AND RWX all correlate")
             if score >= 2 else
-            YELLOW("LIKELY HOLLOWING — MEM_PRIVATE at image base correlated with "
+            YELLOW(f"LIKELY HOLLOWING — {mem_type} at image base correlated with "
                    + _second_signal_text(report)))
     elif status == NOT_DETECTED_IN_SCANNED_SCOPE:
         verdict_text = GREEN("CLEAN — no correlated hollowing indicators"
@@ -294,8 +307,9 @@ def _render_verdict_block(report: HollowingReport, coverage_status: str,
         ("VERDICT",    verdict_text),
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}  "
-                       + DIM("(requires MEM_PRIVATE at the image base correlated with a "
-                             "second structural anomaly; single signals are leads only)")),
+                       + DIM("(requires non-MEM_IMAGE memory at the image base correlated "
+                             "with a second structural anomaly; single signals are leads "
+                             "only)")),
         ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     report.review_priority),
     ]

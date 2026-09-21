@@ -9,7 +9,25 @@ alone would not reach.
 """
 import pytest
 
-from tests.fixtures.fakes import FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader
+from tests.fixtures.fakes import (
+    FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader, build_pe_header,
+    TEXT_SECTION_RX,
+)
+
+# A minimal, structurally-valid PE32+ header (one executable .text section)
+# for tests that need parse_pe_header() to actually confirm a candidate --
+# a bare 'MZ' prefix (the pre-fix behavior this replaces) is no longer
+# enough to assert has_injected_pe=True; see
+# test_mz_bytes_alone_without_a_structurally_valid_pe_is_not_injected_pe.
+_VALID_PE_BYTES = build_pe_header([TEXT_SECTION_RX])
+
+# The same header, but with its one section declared read-only (no
+# IMAGE_SCN_MEM_EXECUTE) -- a resource-only PE has no executable section at
+# all.
+_RESOURCE_ONLY_PE_BYTES = build_pe_header([{
+    "name": b".rsrc", "vaddr": 0x1000, "vsize": 0x2000,
+    "rawptr": 0x400, "rawsize": 0x2000, "chars": 0x40000000,  # READ only
+}])
 
 import dumpex.commands.report as report_mod
 import dumpex.core.memory as core_memory_mod
@@ -103,7 +121,7 @@ def test_rwx_private_and_injected_pe_dimensions_combine_to_likely_malicious(monk
     mf = _mk_mf(monkeypatch, modules=[],
                 regions=[Region(0x7000, 0x7000, 0x1000, "MEM_COMMIT",
                                  "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
-                read_map={0x7000: b"MZ" + b"\x90" * 62})
+                read_map={0x7000: _VALID_PE_BYTES})
     result = collect_report(mf, report_addr="0x7000")
     card = result.records[0]
     assert set(card.findings) == {"rwx_private", "injected_pe"}
@@ -112,7 +130,7 @@ def test_rwx_private_and_injected_pe_dimensions_combine_to_likely_malicious(monk
 
 
 def test_all_three_region_and_string_dims_combine_to_high_confidence(monkeypatch):
-    ioc_data = b"MZ" + b"\x90" * 62 + b"cmd.exe /c powershell -enc ZZZZZZZZZZZZZZZZZZ" + b"\x00" * 20
+    ioc_data = _VALID_PE_BYTES + b"cmd.exe /c powershell -enc ZZZZZZZZZZZZZZZZZZ" + b"\x00" * 20
     mf = _mk_mf(monkeypatch, modules=[],
                 regions=[Region(0x8000, 0x8000, 0x1000, "MEM_COMMIT",
                                  "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
@@ -175,7 +193,141 @@ def test_string_mode_one_private_hit_produces_one_card(monkeypatch):
     assert card.string_hit["offset"] == 7
     assert card.string_hit["encoding"] == "ASCII"
     assert result.summary["hits_private"] == 1
+    assert result.summary["hits_mapped"] == 0
+    assert result.summary["hits_unregistered_image"] == 0
+    assert result.summary["hits_image_registration_unavailable"] == 0
+    assert result.summary["hits_region_type_unavailable"] == 0
     assert result.summary["hits_image"] == 0
+
+
+def test_string_mode_summary_breaks_hits_private_down_by_actual_region_type(monkeypatch):
+    # hits_private is grouping/actionability shorthand ("no resolved image
+    # module owns this hit"), not a memory-type claim -- it lumps together
+    # genuine MEM_PRIVATE hits, MEM_MAPPED hits, and MEM_IMAGE hits no
+    # module covers. A consumer reading only the summary (not each card)
+    # must still be able to tell those apart, and every hit that gets
+    # grouped in must still get its own card regardless of its actual type.
+    needle = "MULTITYPEHIT2024"
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0xb000, 0x1000, r"C:\Windows\System32\kernel32.dll")],
+                regions=[
+                    Region(0xb000, 0xb000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE"),
+                    Region(0xc000, 0xc000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+                    Region(0xd000, 0xd000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED"),
+                    Region(0xe000, 0xe000, 0x1000, "MEM_COMMIT",
+                           "PAGE_EXECUTE_READWRITE", "MEM_IMAGE"),
+                ],
+                read_map={addr: f"header {needle} trailer".encode() + b"\x00" * 20
+                          for addr in (0xb000, 0xc000, 0xd000, 0xe000)})
+    result = collect_report(mf, report_string=needle)
+
+    assert result.summary["total_hits"] == 4
+    assert result.summary["hits_image"] == 1
+    assert result.summary["hits_private"] == 3
+    assert result.summary["hits_mapped"] == 1
+    assert result.summary["hits_unregistered_image"] == 1
+    assert result.summary["hits_image_registration_unavailable"] == 0
+    assert result.summary["hits_region_type_unavailable"] == 0
+    # hits_private minus all four breakdown fields is the genuine
+    # MEM_PRIVATE remainder -- exactly 1 here (the 0xc000 hit).
+    assert (result.summary["hits_private"] - result.summary["hits_mapped"]
+            - result.summary["hits_unregistered_image"]
+            - result.summary["hits_image_registration_unavailable"]
+            - result.summary["hits_region_type_unavailable"]) == 1
+
+    # Every non-image hit still gets its own card -- the breakdown is
+    # purely additional classification, never a filter.
+    assert result.summary["card_count"] == 3
+    region_types = sorted(card.region.type for card in result.records)
+    assert region_types == ["MEM_IMAGE", "MEM_MAPPED", "MEM_PRIVATE"]
+    mapped_card = next(c for c in result.records if c.region.type == "MEM_MAPPED")
+    assert mapped_card.anchor_pe_context.classification == "mapped"
+    unregistered_image_card = next(c for c in result.records if c.region.type == "MEM_IMAGE")
+    assert unregistered_image_card.anchor_pe_context.classification == "unregistered_image"
+
+
+def test_string_mode_unresolved_region_type_is_not_counted_as_confirmed_private(monkeypatch):
+    # A committed region whose own Type could not be parsed (the minidump
+    # dependency leaves it None on an unrecognized value) must not be
+    # silently folded into "confirmed MEM_PRIVATE" just because it is
+    # neither MEM_MAPPED nor MEM_IMAGE -- hits_region_type_unavailable
+    # names the gap explicitly, so hits_private minus every breakdown
+    # field stays an honest count of ACTUALLY-confirmed MEM_PRIVATE hits.
+    needle = "UNKNOWNTYPEHIT2024"
+    addr = 0xf000
+    region = Region(addr, addr, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+    region.Type = None   # simulates an unparseable/unrecognized Type value
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[region],
+                read_map={addr: f"header {needle} trailer".encode() + b"\x00" * 20})
+    result = collect_report(mf, report_string=needle)
+
+    assert result.summary["total_hits"] == 1
+    assert result.summary["hits_private"] == 1
+    assert result.summary["hits_mapped"] == 0
+    assert result.summary["hits_unregistered_image"] == 0
+    assert result.summary["hits_region_type_unavailable"] == 1
+    # Nothing here is confirmed MEM_PRIVATE -- the remainder must be 0.
+    assert (result.summary["hits_private"] - result.summary["hits_mapped"]
+            - result.summary["hits_unregistered_image"]
+            - result.summary["hits_image_registration_unavailable"]
+            - result.summary["hits_region_type_unavailable"]) == 0
+    # The card itself is still produced -- the fix corrects the summary
+    # count, not the card retention.
+    assert result.summary["card_count"] == 1
+    assert result.records[0].region.type == "None"
+    assert result.records[0].anchor_pe_context.classification == "region_type_unavailable"
+
+
+def test_string_mode_image_hit_registration_state_matches_across_summary_and_card(monkeypatch):
+    # The four module-list states a MEM_IMAGE string hit can land in --
+    # entirely absent, present-but-empty, present-but-non-covering, and
+    # present-with-a-covering-module -- must agree between the per-card
+    # anchor_pe_context.classification/registration and the summary-only
+    # hits_unregistered_image/hits_image_registration_unavailable
+    # counters. A summary consumer reading hits_unregistered_image alone
+    # must never see the stronger "confirmed unregistered" claim for a run
+    # that never actually checked (module list absent).
+    needle = "IMGREGSTATE2024"
+    addr = 0xf100
+
+    def _run(modules):
+        mf = _mk_mf(monkeypatch, modules=modules,
+                    regions=[Region(addr, addr, 0x1000, "MEM_COMMIT",
+                                    "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")],
+                    read_map={addr: f"header {needle} trailer".encode() + b"\x00" * 20})
+        return collect_report(mf, report_string=needle)
+
+    # ModuleListStream entirely absent -- registration never checked.
+    result = _run(modules=None)
+    assert result.summary["hits_unregistered_image"] == 0
+    assert result.summary["hits_image_registration_unavailable"] == 1
+    card = result.records[0]
+    assert card.anchor_pe_context.classification == "image_registration_unavailable"
+    assert card.anchor_pe_context.registration == "unavailable"
+
+    # ModuleListStream present but empty -- a CHECKED negative.
+    result = _run(modules=[])
+    assert result.summary["hits_unregistered_image"] == 1
+    assert result.summary["hits_image_registration_unavailable"] == 0
+    card = result.records[0]
+    assert card.anchor_pe_context.classification == "unregistered_image"
+    assert card.anchor_pe_context.registration == "unregistered"
+
+    # ModuleListStream present, non-empty, but does not cover this address.
+    result = _run(modules=[Module(0x9000, 0x1000, r"C:\Windows\System32\ntdll.dll")])
+    assert result.summary["hits_unregistered_image"] == 1
+    assert result.summary["hits_image_registration_unavailable"] == 0
+    card = result.records[0]
+    assert card.anchor_pe_context.classification == "unregistered_image"
+    assert card.anchor_pe_context.registration == "unregistered"
+
+    # ModuleListStream present and covers this exact address -- a real
+    # image hit, not a "no module owns this" case at all.
+    result = _run(modules=[Module(addr, 0x1000, r"C:\Windows\System32\kernel32.dll")])
+    assert result.summary["hits_image"] == 1
+    assert result.summary["hits_private"] == 0
+    assert result.records == []
 
 
 def test_string_mode_mixed_image_and_private_hits_only_triages_private(monkeypatch):
@@ -327,12 +479,205 @@ def test_mz_header_in_unavailable_module_context_is_not_a_false_positive(monkeyp
 def test_mz_header_in_confirmed_unregistered_region_is_injected_pe(monkeypatch):
     mf = _mk_mf(monkeypatch, modules=[],   # modules PRESENT (empty) -> confirmed unregistered
                 regions=[Region(0x7100, 0x7100, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
-                read_map={0x7100: b"MZ" + b"\x90" * 62})
+                read_map={0x7100: _VALID_PE_BYTES})
     result = collect_report(mf, report_addr="0x7100")
     card = result.records[0]
     assert card.region.module_context == MODULE_CONTEXT_UNREGISTERED
     assert card.region.has_injected_pe is True
+    assert card.region.pe_header_state == "ok"
     assert card.findings == ["injected_pe"]
+
+
+# ── domain correction: registration alone never implies private memory ───
+
+def test_scan_content_range_requires_region_type_and_protect(monkeypatch):
+    # A caller that omits the region's own type/protection facts must be
+    # refused outright -- not silently produce a wrong has_injected_pe=False,
+    # which is exactly the false-negative shape an omitted keyword would
+    # otherwise create.
+    mf = _mk_mf(monkeypatch, read_map={0x1000: _VALID_PE_BYTES})
+    with pytest.raises(TypeError):
+        report_mod._scan_content_range(
+            mf, base_address=0x1000, requested_size=0x1000, min_len=4,
+            module_context=MODULE_CONTEXT_UNREGISTERED)
+
+
+def test_mz_bytes_alone_without_a_structurally_valid_pe_is_not_injected_pe(monkeypatch):
+    # A bare 'MZ' prefix with no real PE structure behind it (e_lfanew
+    # doesn't even point at a "PE\0\0" signature) is at most a coincidence,
+    # not a confirmed PE -- confirmed-unregistered registration alone must
+    # not promote it to a finding.
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7150, 0x7150, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x7150: b"MZ" + b"\x90" * 62})
+    result = collect_report(mf, report_addr="0x7150")
+    card = result.records[0]
+    assert card.region.module_context == MODULE_CONTEXT_UNREGISTERED
+    assert card.region.mz_header_detected is True
+    assert card.region.has_injected_pe is False
+    assert card.region.pe_header_state == "pe_invalid"
+    assert card.findings == []
+
+
+def test_mz_that_fails_validation_in_unregistered_memory_is_not_silent_on_console(monkeypatch, capsys):
+    # has_injected_pe=False here is NOT the same as "nothing to report": an
+    # MZ prefix that fails strict validation, in confirmed-unregistered
+    # memory, must still surface on the console rather than vanishing
+    # while the JSON record still carries mz_header_detected=true.
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7155, 0x7155, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x7155: b"MZ" + b"\x90" * 62})
+    result = collect_report(mf, report_addr="0x7155")
+    assert result.records[0].region.pe_header_state == "pe_invalid"
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                          result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "failed structural PE validation" in out
+    assert "not confirmed as an injected PE" in out
+    # Distinct from the "valid but benign mapping" sentence -- see
+    # test_valid_resource_only_pe_console_names_the_mapping_not_validation.
+    assert "non-private, non-executable mapping" not in out
+
+
+def test_valid_resource_only_pe_console_names_the_mapping_not_validation(monkeypatch, capsys):
+    # pe_header_state == "ok" here -- the header genuinely validated, so
+    # the console must say it sits in a benign mapping, never that
+    # validation itself failed (the opposite sentence, pinned by
+    # test_mz_that_fails_validation_in_unregistered_memory_is_not_silent_on_console).
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7156, 0x7156, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED")],
+                read_map={0x7156: _RESOURCE_ONLY_PE_BYTES})
+    result = collect_report(mf, report_addr="0x7156")
+    assert result.records[0].region.pe_header_state == "ok"
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                          result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "non-private, non-executable mapping" in out
+    assert "failed structural PE validation" not in out
+
+
+def test_valid_resource_only_pe_in_unregistered_mapped_memory_is_not_injected_pe(monkeypatch):
+    # A structurally valid PE with no executable section, mapped (not
+    # MEM_PRIVATE) and owned by no module -- a resource-only file mapping
+    # (e.g. via MapViewOfFile) legitimately has no module-list entry. This
+    # must not be reported as injected/private memory: module absence and
+    # memory type are independent facts.
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7160, 0x7160, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED")],
+                read_map={0x7160: _RESOURCE_ONLY_PE_BYTES})
+    result = collect_report(mf, report_addr="0x7160")
+    card = result.records[0]
+    assert card.region.type == "MEM_MAPPED"
+    assert card.region.module_context == MODULE_CONTEXT_UNREGISTERED
+    assert card.region.mz_header_detected is True
+    assert card.region.has_injected_pe is False
+    assert card.region.pe_header_state == "ok"
+    assert card.findings == []
+
+
+def test_valid_executable_pe_in_unregistered_mapped_memory_is_still_injected_pe(monkeypatch):
+    # Same MEM_MAPPED, unregistered mapping, but this time the LIVE
+    # protection actually grants execute access -- executable memory with
+    # no owning module is just as suspicious as MEM_PRIVATE, regardless of
+    # the underlying page type (mirrors
+    # dumpex.hunt.injection.memory_scan.pe_hit_is_context_scoreable's
+    # identical MEM_PRIVATE-or-executable-protection test).
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7170, 0x7170, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_MAPPED")],
+                read_map={0x7170: _VALID_PE_BYTES})
+    result = collect_report(mf, report_addr="0x7170")
+    card = result.records[0]
+    assert card.region.type == "MEM_MAPPED"
+    assert card.region.has_injected_pe is True
+    assert card.region.pe_header_state == "ok"
+    assert card.findings == ["injected_pe"]
+
+
+def test_pe_header_short_capture_leaves_injected_pe_undetermined(monkeypatch):
+    # 'MZ' plus a genuine DOS header, but the read came up short of the
+    # PE signature/section table -- a capture-length gap, not a structural
+    # rejection, so the finding must stay undetermined rather than false.
+    # The raw read is ALSO short here (48 of 64 requested bytes -- the
+    # region is 64 bytes but read_map only backs 48), so this is the co-
+    # firing case: REGION_READ_TRUNCATED (the raw byte count) and
+    # REPORT_PE_HEADER_VALIDATION_INCOMPLETE (the downstream structural
+    # parse) are independent facts that must both surface, and neither's
+    # fixed text may claim the read was "in full" when it plainly was not.
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7180, 0x7180, 64, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x7180: _VALID_PE_BYTES[:48]})
+    result = collect_report(mf, report_addr="0x7180")
+    card = result.records[0]
+    assert card.region.mz_header_detected is True
+    assert card.region.has_injected_pe is None
+    assert card.region.pe_header_state == "short_read"
+    assert card.findings == []
+    assert card.string_scan["truncated"] is True
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    codes = {lim.code.value for lim in result.coverage.limitations}
+    assert {"REGION_READ_TRUNCATED", "REPORT_PE_HEADER_VALIDATION_INCOMPLETE"} <= codes
+    reasons_text = " ".join(result.coverage.reasons)
+    assert "only partially read" in reasons_text
+    assert "read in full" not in reasons_text
+    assert "region's own extent" not in reasons_text
+
+
+def test_pe_header_validation_incomplete_with_a_full_region_read_lowers_coverage(monkeypatch):
+    # The region is read to completion -- bytes_read == requested_bytes,
+    # so string_scan["truncated"] stays False and REGION_READ_TRUNCATED
+    # never fires -- but the header's own declared e_lfanew (0x1000) needs
+    # 24 more bytes than the region's own 4096-byte extent holds, so
+    # parse_pe_header() still cannot settle whether this is an injected
+    # PE. A consumer reading only coverage.status/verdict must not see
+    # "complete"/"CLEAN" here: the PE check itself never resolved.
+    import struct
+    data = bytearray(4096)
+    data[0:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x1000)
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7190, 0x7190, 4096, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x7190: bytes(data)})
+    result = collect_report(mf, report_addr="0x7190")
+    card = result.records[0]
+    assert card.string_scan["truncated"] is False
+    assert card.region.mz_header_detected is True
+    assert card.region.has_injected_pe is None
+    assert card.region.pe_header_state == "short_read"
+    assert card.findings == []
+    assert card.verdict == VERDICT_CLEAN   # never inferred malicious from an unknown
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    assert any("structural PE parse" in r for r in result.coverage.reasons)
+    # The raw read came back FULL here (unlike the short-DOS-header case
+    # above) -- REGION_READ_TRUNCATED must NOT also fire, and the
+    # structural-parse gap's own text must not name a specific cause that
+    # would contradict the other code whenever both eventually do co-occur.
+    codes = {lim.code.value for lim in result.coverage.limitations}
+    assert "REPORT_PE_HEADER_VALIDATION_INCOMPLETE" in codes
+    assert "REGION_READ_TRUNCATED" not in codes
+    reasons_text = " ".join(result.coverage.reasons)
+    assert "region's own extent" not in reasons_text
+    assert "read in full" not in reasons_text
+
+
+def test_pe_header_short_capture_console_says_undetermined_not_failed_validation(
+        monkeypatch, capsys):
+    # has_injected_pe is None here (a genuine capture-length gap), not
+    # False (a structural rejection) -- the console line must say so
+    # distinctly rather than misstating that validation ran and failed.
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7185, 0x7185, 64, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x7185: _VALID_PE_BYTES[:48]})
+    result = collect_report(mf, report_addr="0x7185")
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                          result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "undetermined" in out
+    assert "failed structural PE validation" not in out
+    assert "not confirmed as an injected PE" not in out
 
 
 def test_mz_header_in_resolved_module_is_not_injected_pe(monkeypatch):
@@ -343,6 +688,7 @@ def test_mz_header_in_resolved_module_is_not_injected_pe(monkeypatch):
     card = result.records[0]
     assert card.region.module_context == MODULE_CONTEXT_RESOLVED
     assert card.region.has_injected_pe is False
+    assert card.region.pe_header_state is None
     assert card.findings == []
 
 
@@ -369,7 +715,11 @@ def test_header_read_failure_yields_null_mz_header_detected(monkeypatch):
 @pytest.mark.parametrize("returned,expected_mz,expected_injected", [
     (b"", None, None),         # 0 bytes -- can't tell either way
     (b"M", None, None),        # 1 byte -- b"M"[:2] != b"MZ", but that's "unknown", not "confirmed absent"
-    (b"MZ", True, True),       # exactly 2 bytes, MZ -- confirmed, and modules=[] -> confirmed unregistered
+    # Exactly 2 bytes, MZ -- the magic is confirmed, and modules=[] ->
+    # confirmed unregistered, but two bytes are nowhere near enough to
+    # structurally validate a PE header: a genuine capture-length gap,
+    # left undetermined rather than promoted to a finding.
+    (b"MZ", True, None),
     (b"XY", False, False),     # exactly 2 bytes, genuinely not MZ -- confirmed absent
 ])
 def test_mz_header_detected_boundary_on_short_reads(monkeypatch, returned, expected_mz, expected_injected):
@@ -709,7 +1059,7 @@ def test_mz_header_detected_when_a_small_separate_peek_would_have_failed(monkeyp
     def _reader(mf_, addr, size):
         if size <= 64:
             raise RuntimeError("small peek read fails")
-        return (b"MZ" + b"\x90" * 62).ljust(size, b"\x00")
+        return _VALID_PE_BYTES.ljust(size, b"\x00")
     mf = _mk_mf(monkeypatch, modules=[],
                 regions=[Region(0x5000, 0x5000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
     monkeypatch.setattr(report_mod, "read_region", _reader)

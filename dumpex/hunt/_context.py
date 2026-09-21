@@ -27,8 +27,29 @@ class MemoryContext(Enum):
     UNKNOWN      = "unknown"        # neither context source can classify this address at all
 
 
-# Only these represent a confidently-private address — callers deciding
-# whether to treat a hit as a confirmed detection should gate on this set.
+# Only these represent a confidently-private-OR-unbacked address for the
+# GENERIC "private_or_unbacked" rule scope (dumpex.hunt.yara_hunt.context.
+# classify_scoped_hit) -- callers deciding whether to treat such a hit as a
+# confirmed detection gate on this set.
+#
+# dumpex.hunt.yara_hunt.context.classify_pe_in_private_memory_hit -- the
+# ONE rule whose own name makes the narrower promise "private memory" --
+# deliberately does NOT use this set: it requires MemoryContext.PRIVATE
+# exactly (issue #216's domain correction: module absence alone never
+# establishes private memory). UNREGISTERED fires only when NO region
+# covers the address at all (see classify_memory_context's own docstring)
+# -- there is no MEM_PRIVATE fact to confirm, only the absence of a module
+# match, and "no evidence to the contrary" is not "confirmed private".
+#
+# classify_scoped_hit's broader rules (Shellcode_Bootstrap_x64,
+# Win32_API_Hashing, Suspicious_VirtualAlloc_Sequence, and others carrying
+# `dumpex_scope = "private_or_unbacked"`) are a DIFFERENT, wider claim --
+# "not backed by a known module", not "confirmed MEM_PRIVATE" -- and
+# UNREGISTERED (a module list confirms no module owns this address) is
+# squarely inside that wider claim even with no region to corroborate it.
+# Narrowing this set globally would incorrectly tighten those rules too;
+# each rule scope's own required confidence is decided at its own call
+# site, not by one shared constant.
 CONFIRMED_PRIVATE = frozenset({MemoryContext.PRIVATE, MemoryContext.UNREGISTERED})
 
 

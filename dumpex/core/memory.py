@@ -1416,7 +1416,8 @@ def _hexdump_context(data: bytes, offset: int, region_base: int,
 INDICATOR_DIMS = {
     "unbacked_thread": "Unbacked thread execution (start addr outside all known modules)",
     "rwx_private":     "Anomalous memory protection (RWX + MEM_PRIVATE)",
-    "injected_pe":     "Injected PE (MZ header in unregistered private memory)",
+    "injected_pe":     "Injected PE (valid PE header outside any loaded module, "
+                       "in private or executable memory)",
     "ioc_strings":     "IOC string pattern(s) matched in region",
 }
 

@@ -43,7 +43,7 @@ from dumpex.core.pe_correlation import ModuleListImage, correlate_main_image
 from dumpex.core.pe_profile import (
     PE_HEADER_READ_MAX, ComponentState, PeStage, SourceKind, collect_pe_image_profile,
 )
-from dumpex.core.pe_utils import parse_iat
+from dumpex.core.pe_utils import is_private_memory_type, parse_iat
 from dumpex.core.process_info import (
     build_process_identity_snapshot, parse_environment_entries, walk_environment_block,
 )
@@ -1235,6 +1235,10 @@ class PeProfileCache:
         return self._modules
 
     @property
+    def modules_available(self) -> bool:
+        return bool(self._mf.modules)
+
+    @property
     def region_views(self):
         return self._regions.views
 
@@ -1475,10 +1479,60 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
 def _classify_anchor(loc, profile) -> "tuple[str, bool]":
     """``(classification, needed_a_missing_profile)`` for one resolved
     anchor location. The bool is True only when the anchor is inside a
-    loaded module whose PE profile was not available to place it finer."""
+    loaded module whose PE profile was not available to place it finer.
+
+    No module owning the anchor is never, by itself, "private": a captured
+    region's own ``region_type`` (already resolved onto ``loc`` by
+    ``resolve_va_location``) is what actually says that, and every
+    classification below is asserted only from a CONFIRMED type --
+    ``region_type`` being ``None`` (the parser object carried no such
+    field) or an unrecognized/numeric value (an unnamed enum member,
+    rendered via ``str()``) is a genuine gap, not license to assert a
+    benign-sounding "mapped" for a type that was never actually observed:
+
+      - confirmed MEM_PRIVATE               -> "private"
+      - confirmed MEM_MAPPED                 -> "mapped"
+      - confirmed MEM_IMAGE, CONFIRMED unregistered (loc.registration ==
+        "unregistered": a module list was available and genuinely does not
+        cover this address -- a manually mapped or stomped module, the
+        most suspicious of the four) -> "unregistered_image"
+      - confirmed MEM_IMAGE, but registration evidence is itself
+        unavailable (no module list to check at all -- loc.registration ==
+        "unavailable") -> "image_registration_unavailable": this is a
+        DIFFERENT gap from not knowing the region's type. Asserting
+        "unregistered_image" here would claim a module list was consulted
+        and came back negative when none was ever consulted at all --
+        "no module owns this" (not in loc.in_module) is not the same
+        claim as "confirmed no module owns this" (registration ==
+        unregistered), and only the region TYPE is confirmed, not the
+        registration.
+      - anything else (unknown/unnamed/absent type) -> "region_type_unavailable"
+    """
     if not loc.in_module:
         if loc.in_region:
-            return "private", False
+            rtype = loc.region_type
+            # is_private_memory_type is the SAME predicate report.py's
+            # has_injected_pe gate and its enforcing ReportRegionInfo
+            # invariant use for the identical MEM_PRIVATE question, so the
+            # two can never quietly diverge. MEM_MAPPED/MEM_IMAGE have no
+            # shared predicate of their own (pe_utils only needed the
+            # MEM_PRIVATE one so far) so they stay exact-match here --
+            # Type, unlike Protect, is never a combined/bitmask value.
+            # MEM_PRIVATE and MEM_MAPPED memory is never module-backed
+            # regardless of whether a module list could even be
+            # consulted, so registration plays no part in those two
+            # classifications -- only MEM_IMAGE, which COULD legitimately
+            # be a loaded module, needs to distinguish "confirmed no
+            # module owns this" from "never checked".
+            if is_private_memory_type(rtype):
+                return "private", False
+            if rtype == "MEM_MAPPED":
+                return "mapped", False
+            if rtype == "MEM_IMAGE":
+                if loc.registration == "unregistered":
+                    return "unregistered_image", False
+                return "image_registration_unavailable", False
+            return "region_type_unavailable", False
         return "unresolved", False
     rva = loc.module_rva
     if profile is None or rva is None:
@@ -1507,7 +1561,11 @@ def collect_anchor_pe_context(pe_cache: PeProfileCache, *, anchor_address,
                               region_evidence) -> "ReportAnchorPeContext | None":
     """This card's anchor placed against the PE image that owns it:
     headers, code, data, import/IAT, relocation, unmapped, or -- when no
-    module owns it -- private or unresolved. A section's declared R/W/X
+    module owns it -- private, mapped, unregistered_image,
+    image_registration_unavailable, region_type_unavailable, or
+    unresolved (see `_classify_anchor` for why each of those requires a
+    CONFIRMED region type -- and, for MEM_IMAGE, a CONFIRMED registration
+    state -- rather than module absence alone). A section's declared R/W/X
     versus the live region protection is surfaced as an observation, never
     a verdict."""
     if anchor_address is None:
@@ -1517,6 +1575,7 @@ def collect_anchor_pe_context(pe_cache: PeProfileCache, *, anchor_address,
     region_views = region_evidence.views if region_evidence is not None else ()
     _module, module_base, profile = pe_cache.module_at(anchor_address)
     loc = resolve_va_location(anchor_address, modules=pe_cache.modules,
+                              modules_available=pe_cache.modules_available,
                               region_views=region_views, module_profile=profile)
     classification, needed_profile = _classify_anchor(loc, profile)
 
@@ -1687,6 +1746,7 @@ def _resolve_target(pe_cache: PeProfileCache, va: "int | None", region_evidence)
     _module, base, profile = pe_cache.module_at(va)
     region_views = region_evidence.views if region_evidence is not None else ()
     loc = resolve_va_location(va, modules=pe_cache.modules,
+                              modules_available=pe_cache.modules_available,
                               region_views=region_views, module_profile=profile)
     capped = (loc.in_module and loc.section_index is None
               and pe_cache.profile_absent_reason(base) == "cap_reached")

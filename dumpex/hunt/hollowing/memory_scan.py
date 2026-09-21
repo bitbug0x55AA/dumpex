@@ -97,10 +97,17 @@ def collect_signals(context: ImageBaseContext, suspicious_protections,
     Reads no dump and decides nothing about the verdict. The four
     conditions are the pre-migration ones, unchanged:
 
-      1. ANCHOR -- the region covering the image base is not MEM_IMAGE.
-         Skipped entirely (no evidence, no negative claim) when no region
-         was captured: `domain.CoverageSnapshot` records that as a gap
-         instead.
+      1. ANCHOR -- the region covering the image base is not MEM_IMAGE. A
+         genuine PE image loaded normally is always MEM_IMAGE at its base,
+         so ANY other type here -- MEM_PRIVATE (nothing mapped from a file
+         at all) or MEM_MAPPED (something WAS mapped, just not by the
+         normal PE loader) -- is the anomaly this anchor exists to catch.
+         The evidence carries the OBSERVED type (`RegionRef.type`), never
+         an assumed one: `aggregate.py` renders it verbatim rather than
+         hardcoding "MEM_PRIVATE", so a MEM_MAPPED image base is never
+         misreported as MEM_PRIVATE. Skipped entirely (no evidence, no
+         negative claim) when no region was captured: `domain.
+         CoverageSnapshot` records that as a gap instead.
       2. ANCHOR -- bytes came back from the header read and are not an MZ
          header. A short/failed read produces NOTHING here (see
          `HeaderRead.read_failed`).

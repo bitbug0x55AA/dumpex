@@ -306,7 +306,21 @@ class ImageBaseContext:
 class MemPrivateEvidence:
     """ANCHOR 1: the image base is backed by memory whose type is not
     MEM_IMAGE -- nothing was mapped from the executable file this process
-    is supposed to be running.
+    is supposed to be running, via the normal PE loader path.
+
+    Despite its name, this evidence does NOT assert MEM_PRIVATE
+    specifically: `region.type` carries whatever the MemoryInfo stream
+    actually recorded (MEM_PRIVATE, MEM_MAPPED, or any other value
+    `prot_str()` renders), and every consumer of this evidence renders
+    THAT observed type rather than hardcoding "MEM_PRIVATE" -- see
+    `aggregate.build_report`'s check-1 text and
+    `StructuralCorrelationEvidence.corroborators`, both of which read
+    `region.type` instead of assuming it. A MEM_MAPPED image base (a
+    resource-only or otherwise legitimately mapped file, or a manually
+    mapped image bypassing the normal loader) is exactly as real an
+    anomaly as MEM_PRIVATE and must not be silently dropped -- it is
+    simply a different (and independently reportable) fact from
+    MEM_PRIVATE's "nothing was mapped from a file at all".
 
     Holds the `RegionRef` rather than the raw `MinidumpMemoryInfo` the
     pre-migration Report kept alive for the renderer's benefit."""
@@ -405,8 +419,13 @@ class StructuralCorrelationEvidence:
         """The correlating signals' own labels, in the fixed order the
         pre-migration fact/inference text used. Derived from which
         references are actually set, so the rendered list can never claim
-        a signal this evidence does not hold."""
-        labels = ["MEM_PRIVATE at image base"]
+        a signal this evidence does not hold.
+
+        The first label names the OBSERVED region type (`region.type`) --
+        never a hardcoded "MEM_PRIVATE" -- so a MEM_MAPPED image base is
+        labelled as MEM_MAPPED, not misreported as the stronger MEM_PRIVATE
+        claim (see `MemPrivateEvidence`'s own docstring)."""
+        labels = [f"{self.mem_private.region.type} at image base"]
         if self.wiped_header is not None:
             labels.append("MZ header missing/wiped")
         if self.rwx is not None:
