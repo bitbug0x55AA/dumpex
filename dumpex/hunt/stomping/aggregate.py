@@ -7,7 +7,7 @@ feed coverage without being treated as negative evidence.
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (
     CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH,
-    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION,
+    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, disputed_conflict_limitation,
 )
 from dumpex.hunt.stomping.domain import (
     CoverageSnapshot, StompingEvidence, StompingReport,
@@ -138,7 +138,13 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
                        "worth a closer manual look — without --ref-dir there is no "
                        "verified byte-level diff behind it, so this stays a lead, "
                        "not a confirmed stomping detection.",
-            limitations=["Protection state + live RIP still cannot rule out a "
+            # The disputed/undeterminable caveat goes FIRST when present --
+            # see dumpex.hunt.injection.aggregate's identical ordering note
+            # (the console's own compact "Caveat" line shows only
+            # limitations[0]).
+            limitations=disputed_conflict_limitation(
+                [l.thread.ip_context_conflict for l in rip_correlated_leads]) +
+                        ["Protection state + live RIP still cannot rule out a "
                          "debugger/EDR hook or other benign reprotect-then-execute "
                          "sequence — only a verified content diff "
                          "(stomping.verified_content_change, requires --ref-dir) can."],
@@ -163,7 +169,20 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
                        "Verified byte-level difference against an identity-matched, "
                        "relocation-normalized reference, but no observed thread is currently "
                        "executing inside the changed range(s)."),
-            limitations=["IAT/delay-import ranges and hotpatch trampolines are NOT "
+            # Disputed/undeterminable caveat goes FIRST when present -- see
+            # dumpex.hunt.injection.aggregate's identical ordering note.
+            # Built from each qualifying section's UNCOMBINED rip_conflicts,
+            # one entry per hitting thread -- vc.rip_context_conflict is
+            # already collapsed to one value per section (see
+            # dumpex.hunt._finding.combine_conflicts) and would undercount
+            # both the thread total and the states involved whenever more
+            # than one thread hit the same section. A single RIP cannot be
+            # inside two sections' VA ranges at once, so flattening across
+            # every qualifying section here cannot double-count one thread.
+            limitations=disputed_conflict_limitation(
+                [c for vc in verified_changes if vc.rip_in_changed_range
+                 for c in vc.rip_conflicts]) + [
+                        "IAT/delay-import ranges and hotpatch trampolines are NOT "
                          "specifically excluded before diffing — restricting the diff to "
                          "executable, non-writable sections already excludes the import "
                          "tables themselves for typical PE layouts, but a legitimate hotpatch "

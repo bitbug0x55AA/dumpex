@@ -67,6 +67,7 @@
           "size": 20480
         },
         "ranges_truncated": false,
+        "rip_context_conflict": false,
         "rip_in_changed_range": false,
         "section": {
           "characteristics": 1610612736,

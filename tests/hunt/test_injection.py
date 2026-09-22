@@ -81,6 +81,74 @@ def test_full_correlation_still_detects():
     assert f["confidence"] == "high"
 
 
+# ── AC3: a disputed or undeterminable current IP must not read as a
+#    confirmed "currently executing" claim in --hunt injection either --
+#    --threads/--report already qualify the identical fact for the same
+#    TID via ip_context_conflict.
+
+def test_full_correlation_with_disputed_context_is_qualified_in_console(capsys):
+    alloc_base = 0x7ff700000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [
+        Region(alloc_base, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE"),
+        Region(alloc_base + 0x2000, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+    ]
+    mods = [Module(0x7ffe00000000, 0x10000, r"C:\Windows\System32\ntdll.dll")]
+    # This TID's own ThreadInfoListStream record flags its context as
+    # invalid, yet the base ThreadListStream's own CONTEXT parsed a value
+    # anyway -- the exact same genuine disagreement --threads/--report
+    # already surface for this fact.
+    thread_infos = [ThreadInfo(0x1, alloc_base + 0x2000,
+                                dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")]
+    thread_list = [Thread(0x1, Ctx(alloc_base + 0x2000))]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        threads        = FakeStream(thread_list, "threads")
+    injection.read_region = mem_reader({alloc_base + 0x2000: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 3   # scoring is unchanged by this addition
+    out = capsys.readouterr().out
+    assert "ThreadInfoListStream record flags as invalid" in out
+    assert "not fully confirmed" in out
+
+
+def test_full_correlation_with_undeterminable_context_is_qualified_in_console(capsys):
+    # Base-only TID: no ThreadInfoListStream record at all for this TID,
+    # so the join can never be performed -- undeterminable, not confirmed
+    # clean, must still be visible in the same console projection that
+    # reports the "currently execute inside" claim.
+    alloc_base = 0x7ff700000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [
+        Region(alloc_base, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE"),
+        Region(alloc_base + 0x2000, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+    ]
+    mods = [Module(0x7ffe00000000, 0x10000, r"C:\Windows\System32\ntdll.dll")]
+    thread_list = [Thread(0x1, Ctx(alloc_base + 0x2000))]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")   # present but no entry for TID 1
+        threads        = FakeStream(thread_list, "threads")
+    injection.read_region = mem_reader({alloc_base + 0x2000: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 3
+    out = capsys.readouterr().out
+    assert "no ThreadInfoListStream record at all" in out
+
+
 # ── MZ prefix read succeeds but the deeper PE-validation read fails ───────
 # must not be silently treated as a completed check: the MZ observation is
 # still reported (parse_pe_header falls back to the 2-byte prefix), but

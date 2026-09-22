@@ -356,11 +356,11 @@ def test_tid_resolved_to_module_shows_module_range(monkeypatch, tmp_path, capsys
 
 def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_path, capsys):
     # Exercises two console-only branches with no other coverage: Section
-    # 3's "other threads executing in this region" listing (a second
-    # unregistered thread sharing the anchor's region), and the
-    # network-pattern IOC hit's ±128-byte hexdump context (an IP address
-    # embedded in the IOC string, matching NET_PATTERNS on top of
-    # IOC_PATTERNS).
+    # 3's "other threads whose recorded start OR captured current IP
+    # falls in this region" listing (a second unregistered thread
+    # sharing the anchor's region), and the network-pattern IOC hit's
+    # ±128-byte hexdump context (an IP address embedded in the IOC
+    # string, matching NET_PATTERNS on top of IOC_PATTERNS).
     # Padded to the full 0x1000 region size -- see
     # test_verdict_suspicious_rwx_private's own note on why.
     ioc_data = (b"cmd.exe /c curl 10.0.0.5:8080/beacon" + b"\x00" * 200).ljust(0x1000, b"\x00")
@@ -370,10 +370,11 @@ def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_p
         regions=[Region(0x4000, 0x4000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
         read_map={0x4000: ioc_data})
     body = _split_console_body(capsys.readouterr().out)
-    assert "THREADS EXECUTING IN THIS REGION" in body
+    assert "OTHER THREADS WITH A START OR CURRENT IP IN THIS REGION" in body
     assert "TID=0x6" in body
     assert "← report TID" in body
     assert "Network pattern" in body
+    assert "CurrentIP=" in body   # independent of StartAddr, even when unavailable
     assert exit_code == 0
     rec = doc["result"]["data"]["records"][0]
     assert len(rec["other_threads_in_region"]) == 2   # includes the anchor itself

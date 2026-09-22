@@ -421,12 +421,22 @@ def _require_ordered_subsequence(hit_keys: list, source_keys: list,
 
 def _require_rip_hits_match_thread_contexts(rip_hits: tuple, thread_contexts: tuple) -> None:
     """Every `RipHitEvidence` in `rip_hits` must be an order-preserving
-    subsequence match, by (thread_id, ip, ip_reg), of `InjectionEvidence.
-    thread_contexts` -- `correlate()` builds `rip_hits` by iterating
-    `thread_contexts` and copying those three fields verbatim onto
-    whichever entries pass its geometric filter."""
-    hit_keys = [(hit.thread_id, hit.ip, hit.ip_reg) for hit in rip_hits]
-    source_keys = [(tc.thread_id, tc.ip, tc.ip_reg) for tc in thread_contexts]
+    subsequence match, by (thread_id, ip, ip_reg, start_address,
+    ip_context_conflict), of `InjectionEvidence.thread_contexts` --
+    `correlate()` builds `rip_hits` by iterating `thread_contexts` and
+    copying all five fields verbatim onto whichever entries pass its
+    geometric filter. `start_address`/`ip_context_conflict` are in the key
+    (not just thread_id/ip/ip_reg) so a hit whose dispute status or
+    recorded start silently disagrees with its own source ThreadContext
+    -- e.g. a future correlate()-like path that forgets to copy
+    ip_context_conflict, reverting a rip hit to its None default while
+    the matching thread_contexts entry says otherwise -- is caught here,
+    not just left to a schema that only ever sees the already-projected
+    HuntThreadRef."""
+    hit_keys = [(hit.thread_id, hit.ip, hit.ip_reg, hit.start_address, hit.ip_context_conflict)
+                for hit in rip_hits]
+    source_keys = [(tc.thread_id, tc.ip, tc.ip_reg, tc.start_address, tc.ip_context_conflict)
+                   for tc in thread_contexts]
     _require_ordered_subsequence(hit_keys, source_keys,
                                   "InjectionEvidence.correlation.rip_hits",
                                   "InjectionEvidence.thread_contexts")

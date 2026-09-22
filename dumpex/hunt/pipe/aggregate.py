@@ -7,7 +7,7 @@ evidence through projection.
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (
     CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH,
-    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION,
+    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, disputed_conflict_limitation,
 )
 from dumpex.hunt.pipe.config import PIPE_CONTEXT_DISTANCE
 from dumpex.hunt.pipe.domain import CoverageSnapshot, PipeEvidence, PipeReport
@@ -213,7 +213,19 @@ def build_report(handle_pipes: tuple = (), string_leads: tuple = (),
                        "Combines an OS-confirmed open handle with ONE independent memory "
                        "signal (C2 artifacts or live execution, not both) within "
                        f"{PIPE_CONTEXT_DISTANCE} bytes of that pipe's name string."),
-            limitations=["Name correlation between a handle's ObjectName and a string scan "
+            # Disputed/undeterminable caveat goes FIRST when present -- see
+            # dumpex.hunt.injection.aggregate's identical ordering note
+            # (the console's own compact "Caveat" line shows only
+            # limitations[0]). Deduplicated by thread_id before counting:
+            # `corroborated_handles` is one entry per HANDLE, and the same
+            # thread can corroborate more than one handle, so collecting
+            # `rip_hit.ip_context_conflict` per handle would count that one
+            # thread once per handle it happens to corroborate -- the
+            # caveat counts threads, not handles.
+            limitations=disputed_conflict_limitation(list(
+                {e.rip_hit.thread_id: e.rip_hit.ip_context_conflict
+                 for e in evidence.corroborated_handles if e.rip_hit is not None}.values())) + [
+                        "Name correlation between a handle's ObjectName and a string scan "
                          "hit uses exact match on the canonicalized pipe name (prefix "
                          "stripped, casefolded) — still not a cryptographic guarantee both "
                          "refer to the identical kernel object if the process has multiple "

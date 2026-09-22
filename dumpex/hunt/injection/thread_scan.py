@@ -1,6 +1,8 @@
 """Unbacked-thread (StartAddress) scan. Only collects facts."""
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import get_modules, get_thread_contexts, get_thread_infos, addr_to_module
+from dumpex.core.memory import (
+    get_modules, get_thread_infos, addr_to_module, enriched_thread_contexts,
+)
 from dumpex.hunt._location import resolve_location
 from dumpex.hunt.injection.models import ThreadContext, UnbackedThreadEvidence
 
@@ -49,12 +51,21 @@ def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True)
 
 
 def resolve_thread_contexts(mf: MinidumpFile) -> tuple:
-    """`dumpex.core.memory.get_thread_contexts(mf)`'s raw
-    `{"ThreadId", "ip", "ip_reg", "is_wow64"}` dicts, resolved once here
-    into typed, immutable `ThreadContext` evidence (dumpex.hunt.injection.
-    models) -- the scan/enrichment step that lets correlation.py and the
-    domain model (dumpex.hunt.injection.domain) work exclusively with typed
-    evidence and never see a raw per-thread CONTEXT dict."""
-    return tuple(ThreadContext(thread_id=c["ThreadId"], ip=c["ip"], ip_reg=c["ip_reg"],
-                                is_wow64=c["is_wow64"])
-                 for c in get_thread_contexts(mf))
+    """`dumpex.core.memory.enriched_thread_contexts(mf)`'s dicts, resolved
+    once here into typed, immutable `ThreadContext` evidence (dumpex.hunt.
+    injection.models) -- the scan/enrichment step that lets correlation.py
+    and the domain model (dumpex.hunt.injection.domain) work exclusively
+    with typed evidence and never see a raw per-thread CONTEXT dict.
+
+    `enriched_thread_contexts` already joins in each TID's own
+    ThreadInfoListStream record (the same join dumpex.commands.threads/
+    report, and every other hunter reading a thread's current RIP/EIP,
+    now share) -- `start_address` and `ip_context_conflict` are a SECOND,
+    independent source resolved at that shared collection boundary, not
+    re-derived downstream. A TID with no ThreadInfoListStream record at
+    all gets `start_address=None` and `ip_context_conflict=None`
+    (undeterminable), never a fabricated confirmed value."""
+    return tuple(ThreadContext(
+        thread_id=c["ThreadId"], ip=c["ip"], ip_reg=c["ip_reg"], is_wow64=c["is_wow64"],
+        start_address=c["start_address"], ip_context_conflict=c["ip_context_conflict"])
+        for c in enriched_thread_contexts(mf))

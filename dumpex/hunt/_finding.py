@@ -91,6 +91,57 @@ def severity_for(tag: str, confidence: str) -> str:
     return _SEVERITY_BY_TAG_CONFIDENCE.get((tag, confidence), SEVERITY_INFO)
 
 
+def disputed_conflict_limitation(conflicts: list) -> list:
+    """One CheckResult.limitations sentence naming how many of a set of
+    tri-state `ip_context_conflict` values (see dumpex.core.memory.
+    ip_context_conflict_for) are a confirmed dispute (True) or
+    undeterminable (None) -- shared by every hunter that turns a thread's
+    captured current RIP/EIP into a "currently executing" claim
+    (injection, stomping, pipe), so the wording and combine-priority
+    cannot drift between them. Returns [] when every value is a confirmed
+    False (nothing to caveat), so it concatenates unconditionally into an
+    existing limitations list.
+
+    True wins over None wins over an all-False empty result -- whether a
+    captured value names a real execution location at all is a prior
+    question to how many threads there are, the same priority
+    dumpex.core.memory.ip_context_conflict_for and _current_ip_scope_gap
+    (dumpex.commands.report) already give a conflict over usability."""
+    disputed = sum(1 for c in conflicts if c is True)
+    unknown  = sum(1 for c in conflicts if c is None)
+    if not disputed and not unknown:
+        return []
+    parts = []
+    if disputed:
+        parts.append(f"{disputed} thread(s) whose captured CONTEXT this dump's own "
+                     f"ThreadInfoListStream record flags as invalid")
+    if unknown:
+        parts.append(f"{unknown} thread(s) with no ThreadInfoListStream record at all to "
+                     f"check their CONTEXT against")
+    return [f"This claim is not fully confirmed for {' and '.join(parts)} -- their captured "
+            f"RIP/EIP is not treated as a confirmed execution location, regardless of region "
+            f"containment (matching --threads/--report's identical qualification for the "
+            f"same fact)."]
+
+
+def combine_conflicts(conflicts: list) -> "bool | None":
+    """Reduces a set of tri-state `ip_context_conflict` values (see
+    dumpex.core.memory.ip_context_conflict_for) to the ONE tri-state fact
+    that set as a whole supports: True if any is a confirmed dispute, else
+    None if any is undeterminable, else False -- same priority
+    `disputed_conflict_limitation` above applies when it turns a set of
+    values into caveat text instead of a single value. Used where several
+    contributing threads' conflict status must collapse to one value on a
+    single piece of evidence (e.g. stomping's `VerifiedChangeEvidence.
+    rip_context_conflict`, combining every thread whose RIP landed inside
+    the same changed range)."""
+    if any(c is True for c in conflicts):
+        return True
+    if any(c is None for c in conflicts):
+        return None
+    return False
+
+
 def _require_str_list(value, field_name: str) -> None:
     # Accepts list OR tuple (never bare str/bytes -- neither isinstance
     # check below matches those) -- Finding.__post_init__ normalizes

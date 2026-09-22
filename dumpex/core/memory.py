@@ -34,6 +34,7 @@ from minidump.structures.peb import PEB
 
 from dumpex.ui.colors import RED, DIM, YELLOW, GREEN
 from dumpex.output.coverage import SourceObservation, SourceState
+from dumpex.core.pe_utils import _dumpflags_str
 
 SYSTEM_RANGE = 0x7FF000000000
 
@@ -1048,6 +1049,38 @@ def get_thread_infos(mf: MinidumpFile) -> list:
     return []
 
 
+class RawThreadInfo:
+    """
+    Stand-in for a MINIDUMP_THREAD_INFO record, for a TID that exists in
+    the base ThreadListStream but has no entry in the optional
+    ThreadInfoListStream (that whole stream may be absent, or just this
+    one TID may be missing from an otherwise-present stream).
+    StartAddress/CreateTime/ExitTime/KernelTime/UserTime/ExitStatus/
+    DumpFlags don't exist on the raw MINIDUMP_THREAD structure, so they
+    stay None here rather than being guessed at -- this TID's CONTEXT
+    (see get_thread_contexts) is unaffected and independently available.
+
+    Shared by dumpex.commands.threads (--threads) and dumpex.commands.
+    report (--report): both need the identical "this TID is real, but
+    ThreadInfoListStream never covered it" placeholder, and a TID present
+    only in the base stream must be reported the same way -- start
+    address unknown, current IP independently available -- by either
+    command.
+    """
+    __slots__ = ("ThreadId", "StartAddress", "CreateTime", "ExitTime",
+                 "KernelTime", "UserTime", "ExitStatus", "DumpFlags")
+
+    def __init__(self, tid):
+        self.ThreadId     = tid
+        self.StartAddress = None
+        self.CreateTime    = None
+        self.ExitTime      = None
+        self.KernelTime    = None
+        self.UserTime      = None
+        self.ExitStatus    = None
+        self.DumpFlags     = None
+
+
 def get_memory_regions(mf: MinidumpFile) -> list:
     if mf.memory_info and mf.memory_info.infos:
         return mf.memory_info.infos
@@ -1088,6 +1121,61 @@ def get_thread_contexts(mf: MinidumpFile) -> list:
             out.append({"ThreadId": th.ThreadId, "ip": ctx.Rip, "ip_reg": "RIP", "is_wow64": False})
         elif hasattr(ctx, 'Eip'):
             out.append({"ThreadId": th.ThreadId, "ip": ctx.Eip, "ip_reg": "EIP", "is_wow64": True})
+    return out
+
+
+def ip_context_conflict_for(ip: "int | None", dump_flags, *,
+                             has_thread_info_record: bool) -> "bool | None":
+    """Tri-state join of a thread's captured CONTEXT (`ip`, from the base
+    ThreadListStream/get_thread_contexts) against its own
+    ThreadInfoListStream record's DumpFlags -- the single derivation
+    dumpex.commands.threads (--threads) and dumpex.commands.report
+    (--report) both consume, so a TID's dispute status cannot read
+    differently between the two commands.
+
+    False when `ip` is None: there is no captured value to dispute,
+    regardless of whether ThreadInfoListStream covers this TID at all.
+
+    Otherwise None when `has_thread_info_record` is False -- a TID with
+    no ThreadInfoListStream entry at all (see RawThreadInfo) has nothing
+    to join `ip` against, so the dispute is undeterminable, never a
+    confirmed False the way a genuinely clean DumpFlags is. Callers pass
+    whether the record they resolved this TID's ThreadInfoListStream
+    entry to is a real one (not a RawThreadInfo placeholder).
+
+    Only when a real record exists is the join actually performed:
+    True when DumpFlags == MINIDUMP_THREAD_INFO_INVALID_CONTEXT (the
+    `[NO_CTX]` tag --threads renders), False otherwise -- the reach of
+    this check is the reach of upstream `minidump`'s own DumpFlags parse
+    (a plain single-member Enum lookup): a genuinely combined flag value
+    is not representable by it and is not caught here either."""
+    if ip is None:
+        return False
+    if not has_thread_info_record:
+        return None
+    return _dumpflags_str(dump_flags) == "[NO_CTX]"
+
+
+def enriched_thread_contexts(mf: MinidumpFile) -> list:
+    """`get_thread_contexts(mf)`'s dicts, each augmented with this same
+    TID's own ThreadInfoListStream-sourced `"start_address"` and tri-state
+    `"ip_context_conflict"` (see `ip_context_conflict_for`) -- the single
+    join `dumpex.commands.threads`, `dumpex.commands.report`, and every
+    `--hunt` hunter that reads a thread's current RIP/EIP (injection,
+    stomping, pipe) now share, so the SAME TID's dispute status cannot
+    read differently across commands or across hunters. Existing dict
+    consumers (`tc["ip"]`, `tc["ip_reg"]`, `tc["ThreadId"]`) are
+    unaffected -- this only adds keys, never removes or renames any."""
+    infos_by_tid = {ti.ThreadId: ti for ti in get_thread_infos(mf)}
+    out = []
+    for c in get_thread_contexts(mf):
+        ti = infos_by_tid.get(c["ThreadId"])
+        out.append({
+            **c,
+            "start_address": ti.StartAddress if ti is not None else None,
+            "ip_context_conflict": ip_context_conflict_for(
+                c["ip"], getattr(ti, "DumpFlags", None), has_thread_info_record=ti is not None),
+        })
     return out
 
 

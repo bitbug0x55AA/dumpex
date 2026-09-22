@@ -13,7 +13,7 @@ import time
 from minidump.minidumpfile import MinidumpFile
 from dumpex.rules_pkg.loader import get_rules, get_rules_source_info
 from dumpex.core.memory import (get_modules, get_memory_regions,
-    get_thread_infos, get_thread_contexts, get_handles, handle_stream_evidence,
+    get_thread_infos, enriched_thread_contexts, get_handles, handle_stream_evidence,
     read_region)
 from dumpex.hunt._coverage import CoverageTracker
 from dumpex.hunt._budget import ScanBudget
@@ -38,7 +38,7 @@ def _build_pipe_report(mf: MinidumpFile):
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
     infos   = get_thread_infos(mf)
-    thread_contexts = get_thread_contexts(mf)
+    thread_contexts = enriched_thread_contexts(mf)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
 
     # The handle stream's THREE states, from the one shared discriminator

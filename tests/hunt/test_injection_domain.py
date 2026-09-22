@@ -791,6 +791,34 @@ def test_rip_hits_must_be_drawn_from_thread_contexts():
         InjectionEvidence(rwx=(rwx,), correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
 
 
+def test_rip_hit_ip_context_conflict_must_match_its_source_thread_context():
+    # Same (thread_id, ip, ip_reg) as a real thread_contexts entry, but a
+    # DIFFERENT ip_context_conflict -- e.g. a future correlate()-like path
+    # that forgot to copy the field, silently reverting the hit to its
+    # None default while the source ThreadContext says the dispute was
+    # actually confirmed. This is exactly the drift the invariant exists
+    # to catch, not just a hypothetical.
+    rwx = _rwx(_ALLOC)
+    tc = ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", is_wow64=False,
+                        ip_context_conflict=True)
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region,
+                          ip_context_conflict=None)   # disagrees with tc's True
+    with pytest.raises(ValueError, match="not one of InjectionEvidence.thread_contexts"):
+        InjectionEvidence(rwx=(rwx,), thread_contexts=(tc,),
+                           correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
+
+
+def test_rip_hit_start_address_must_match_its_source_thread_context():
+    rwx = _rwx(_ALLOC)
+    tc = ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", is_wow64=False,
+                        start_address=_ALLOC + 0x9000)
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region,
+                          start_address=None)   # disagrees with tc's recorded start
+    with pytest.raises(ValueError, match="not one of InjectionEvidence.thread_contexts"):
+        InjectionEvidence(rwx=(rwx,), thread_contexts=(tc,),
+                           correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
+
+
 def test_start_hits_must_be_drawn_from_start_threads():
     rwx = _rwx(_ALLOC)
     hit = StartHitEvidence(thread_id=0x1, start_address=_ALLOC + 0x30, region=rwx.region)

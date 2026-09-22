@@ -9,12 +9,71 @@ from dumpex.core.memory import (
     va_range_captured_bytes, clamped_reader, read_region_clamped, read_region_spanning,
     has_stream_directory, handle_stream_evidence,
     HandleStreamContractError, declared_descriptor_count, truncated_descriptor_count,
+    ip_context_conflict_for, enriched_thread_contexts,
 )
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from tests.fixtures.fakes import (
     FakeMF, FakeStream, Handle, Region, Segment, mem_reader,
-    mf_with_handle_stream, parsed_handle_stream,
+    mf_with_handle_stream, parsed_handle_stream, ThreadInfo, Thread, Ctx,
 )
+
+
+# ── ip_context_conflict_for: tri-state join of CONTEXT against DumpFlags ──
+
+def test_ip_context_conflict_for_is_false_when_ip_is_none_regardless_of_record():
+    # Nothing captured, nothing to dispute -- true whether or not
+    # ThreadInfoListStream covers this TID.
+    assert ip_context_conflict_for(None, None, has_thread_info_record=True) is False
+    assert ip_context_conflict_for(None, "MINIDUMP_THREAD_INFO_INVALID_CONTEXT",
+                                    has_thread_info_record=False) is False
+
+
+def test_ip_context_conflict_for_is_none_when_no_thread_info_record_exists():
+    # ip was captured, but there is no ThreadInfoListStream record for
+    # this TID to join it against -- undeterminable, not a confirmed
+    # False the way a genuinely clean DumpFlags is.
+    assert ip_context_conflict_for(0x1000, None, has_thread_info_record=False) is None
+    assert ip_context_conflict_for(0, None, has_thread_info_record=False) is None
+
+
+def test_ip_context_conflict_for_is_true_only_for_a_real_record_flagging_invalid_context():
+    assert ip_context_conflict_for(
+        0x1000, "MINIDUMP_THREAD_INFO_INVALID_CONTEXT", has_thread_info_record=True) is True
+    assert ip_context_conflict_for(0, "MINIDUMP_THREAD_INFO_INVALID_CONTEXT",
+                                    has_thread_info_record=True) is True
+
+
+def test_ip_context_conflict_for_is_false_for_a_real_clean_record():
+    assert ip_context_conflict_for(0x1000, None, has_thread_info_record=True) is False
+
+
+# ── enriched_thread_contexts: the single join --threads/--report/every
+#    hunter reading a thread's current RIP/EIP now shares ────────────────
+
+def test_enriched_thread_contexts_confirmed_clean():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x2000)], "infos")
+    out = enriched_thread_contexts(mf)
+    assert out == [{"ThreadId": 1, "ip": 0x1000, "ip_reg": "RIP", "is_wow64": False,
+                     "start_address": 0x2000, "ip_context_conflict": False}]
+
+
+def test_enriched_thread_contexts_confirmed_conflict():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")
+    mf.thread_info = FakeStream(
+        [ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")], "infos")
+    out = enriched_thread_contexts(mf)
+    assert out[0]["ip_context_conflict"] is True
+
+
+def test_enriched_thread_contexts_undeterminable_when_no_thread_info_record():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")   # no thread_info at all
+    out = enriched_thread_contexts(mf)
+    assert out[0]["start_address"] is None
+    assert out[0]["ip_context_conflict"] is None
 
 
 def test_module_name_only_extracts_windows_backslash_path_basename():

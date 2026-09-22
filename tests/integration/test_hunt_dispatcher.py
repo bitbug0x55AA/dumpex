@@ -155,8 +155,9 @@ def _pipe_scenario(monkeypatch, tmp_path):
     thread_infos = [ThreadInfo(0x999, region_base + 0x10)]
     pipe_va = region_base + pipe_off
     monkeypatch.setattr(pipemod, "read_region", mem_reader({region_base: data}))
-    monkeypatch.setattr(pipemod, "get_thread_contexts", lambda mf: [
-        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False}])
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": region_base + 0x10, "ip_context_conflict": False}])
 
     def mf_factory():
         class MF(FakeMF):

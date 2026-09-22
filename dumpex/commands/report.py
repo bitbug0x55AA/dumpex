@@ -7,10 +7,10 @@ from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import (get_modules, get_memory_regions,
-    get_thread_infos, get_thread_contexts, addr_to_module, va_to_file_offset, prot_str,
+    get_thread_infos, enriched_thread_contexts, addr_to_module, va_to_file_offset, prot_str,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
-    _search_string_in_memory, StringSearchStats, verdict_for,
+    _search_string_in_memory, StringSearchStats, verdict_for, RawThreadInfo,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS)
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import (
@@ -20,8 +20,9 @@ from dumpex.core.safe_io import write_output_bytes
 from dumpex.output.records import (
     ReportThreadInfo, ReportRegionInfo, ReportIocString, TriageCardRecord, StringRecord, Diagnostic,
     SEVERITY_WARNING, hex_address,
-    TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
+    TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT, TRIAGE_ANCHOR_TID_CURRENT_IP,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
+    REGION_MEMBERSHIP_START, REGION_MEMBERSHIP_CURRENT, REGION_MEMBERSHIP_START_AND_CURRENT,
 )
 from dumpex.output.coverage import (
     LimitationCode, build_coverage_report, combine_coverage_reports,
@@ -90,6 +91,229 @@ def _module_context_for(mod, modules_available: bool) -> str:
     if mod:
         return MODULE_CONTEXT_RESOLVED
     return MODULE_CONTEXT_UNREGISTERED if modules_available else MODULE_CONTEXT_UNAVAILABLE
+
+
+# The current-IP scope-gap classification -- the single predicate both
+# _collect_triage_card's own REPORT_CURRENT_IP_NOT_EXAMINED diagnostic
+# and _render_assessment's console Scope: line derive their wording
+# from, so the two can never disagree about the same card. Takes plain,
+# already-resolved ints/None (never hex strings or raw minidump structs),
+# so both call sites -- one working from collect-time raw addresses, the
+# other from an already-built record's hex-string fields -- normalize to
+# the same shape before calling it.
+_IP_SCOPE_OK                  = None       # current IP was examined -- no gap
+_IP_SCOPE_CONFLICTED          = "conflicted"          # ip was captured (parsed, any value
+                                                        # including 0) but this TID's own
+                                                        # ThreadInfoListStream record flags its
+                                                        # context as invalid -- not confirmed,
+                                                        # regardless of region containment
+_IP_SCOPE_CONFLICT_UNKNOWN    = "conflict_unknown"    # ip was captured, but this TID has no
+                                                        # ThreadInfoListStream record at all to
+                                                        # check it against -- the dispute is
+                                                        # undeterminable, never a confirmed
+                                                        # "not disputed"
+_IP_SCOPE_NO_IP_HAS_START     = "no_ip_has_start"      # no CONTEXT was captured/parsed for this
+                                                        # TID at all, and the region actually
+                                                        # examined covers start_addr
+_IP_SCOPE_NO_IP_START_ELSEWHERE = "no_ip_start_elsewhere"   # no CONTEXT captured, start_addr known
+                                                              # but the region actually examined
+                                                              # (e.g. an independently given
+                                                              # --report-addr) does NOT cover it
+_IP_SCOPE_NO_IP_NO_REGION     = "no_ip_no_region"      # no CONTEXT captured, start_addr known,
+                                                        # but no region was resolved at all
+_IP_SCOPE_NO_IP_NO_START      = "no_ip_no_start"       # no CONTEXT captured, start_addr also
+                                                        # unknown
+_IP_SCOPE_ZERO_HAS_START      = "zero_has_start"       # a CONTEXT WAS captured and holds 0 (not
+                                                        # a usable execution address), and the
+                                                        # region actually examined covers start_addr
+_IP_SCOPE_ZERO_START_ELSEWHERE = "zero_start_elsewhere"     # captured ip is 0, start_addr known
+                                                              # but the region actually examined
+                                                              # does NOT cover it
+_IP_SCOPE_ZERO_NO_REGION      = "zero_no_region"       # captured ip is 0, start_addr known, but
+                                                        # no region was resolved at all
+_IP_SCOPE_ZERO_NO_START       = "zero_no_start"        # captured ip is 0, start_addr also unknown
+_IP_SCOPE_OUTSIDE_REGION      = "outside_region"       # ip usable, but not in the examined region
+_IP_SCOPE_NO_REGION           = "no_region"            # ip usable, but no region was resolved at all
+
+
+def _current_ip_scope_gap(*, start_addr: "int | None", ip: "int | None",
+                           region_base: "int | None", region_size: "int | None",
+                           ip_conflicted: "bool | None" = False) -> "str | None":
+    """Classify whether an anchor thread's captured current IP was
+    examined by this card. `ip` unusable means None (no CONTEXT was
+    captured/parsed for this TID at all -- see
+    dumpex.core.memory.get_thread_contexts) or 0 (a CONTEXT WAS captured
+    and genuinely holds 0 -- real captured data, but not a usable
+    execution address anywhere else in this module either: the
+    instruction-anchor candidates and Section 3's own current-IP
+    membership both require addr > 0). These are different states with
+    different wording -- "no CONTEXT captured/parsed" must never be
+    asserted about a TID whose CONTEXT was captured and simply holds 0.
+
+    `ip_conflicted` is the tri-state dumpex.core.memory.
+    ip_context_conflict_for result (see ReportThreadInfo.ip_context_conflict's
+    identical rule), checked FIRST for any captured value including 0,
+    and wins regardless of region containment: whether the value names a
+    real execution location at all is a prior question to whether that
+    location happens to fall inside the region this card examined, so a
+    conflicted (or undeterminable) ip inside the region is still
+    reported, not silently treated as a clean examination. True is a
+    confirmed dispute; None means this TID has no ThreadInfoListStream
+    record to check `ip` against at all, so the dispute could not even be
+    evaluated -- reported as its own distinct gap, never folded into
+    either the confirmed-conflict or the confirmed-clean path.
+
+    When `ip` is unusable but `start_addr` is known, whether "this card's
+    analysis covers the recorded start address" is true depends on
+    whether the region actually resolved (which may have come from an
+    independently supplied --report-addr, not from start_addr at all)
+    actually covers it -- never assumed just because a start address
+    exists."""
+    ip_captured = isinstance(ip, int)
+    if ip_captured and ip_conflicted is True:
+        return _IP_SCOPE_CONFLICTED
+    if ip_captured and ip_conflicted is None:
+        return _IP_SCOPE_CONFLICT_UNKNOWN
+    ip_usable = ip_captured and ip > 0
+    if not ip_usable:
+        if start_addr is None:
+            return _IP_SCOPE_ZERO_NO_START if ip_captured else _IP_SCOPE_NO_IP_NO_START
+        if region_base is None:
+            return _IP_SCOPE_ZERO_NO_REGION if ip_captured else _IP_SCOPE_NO_IP_NO_REGION
+        start_in_region = region_base <= start_addr < region_base + region_size
+        if start_in_region:
+            return _IP_SCOPE_ZERO_HAS_START if ip_captured else _IP_SCOPE_NO_IP_HAS_START
+        return _IP_SCOPE_ZERO_START_ELSEWHERE if ip_captured else _IP_SCOPE_NO_IP_START_ELSEWHERE
+    if region_base is None:
+        return _IP_SCOPE_NO_REGION
+    if region_base <= ip < region_base + region_size:
+        return _IP_SCOPE_OK
+    return _IP_SCOPE_OUTSIDE_REGION
+
+
+def _current_ip_scope_diagnostic_text(classification: "str | None", *, tid: int,
+                                       ip: "int | None",
+                                       start_addr: "int | None" = None,
+                                       region_base: "int | None" = None) -> "str | None":
+    """The REPORT_CURRENT_IP_NOT_EXAMINED diagnostic sentence for a scope
+    classification, or None when there is no gap to report."""
+    if classification == _IP_SCOPE_CONFLICTED:
+        return (f"TID 0x{tid:x}'s captured current IP 0x{ip:x} conflicts with its own "
+                f"ThreadInfoListStream record, which flags this thread's context as invalid "
+                f"— this value is not confirmed as a real execution location, regardless of "
+                f"whether it falls inside the region this card examined.")
+    if classification == _IP_SCOPE_CONFLICT_UNKNOWN:
+        return (f"TID 0x{tid:x}'s captured current IP 0x{ip:x} cannot be checked for a "
+                f"conflict with ThreadInfoListStream: this TID has no ThreadInfoListStream "
+                f"record at all — whether this value is disputed is undeterminable, not "
+                f"confirmed clean, regardless of whether it falls inside the region this card "
+                f"examined.")
+    if classification == _IP_SCOPE_NO_IP_HAS_START:
+        return (f"TID 0x{tid:x}'s current IP could not be determined (no CONTEXT "
+                f"captured/parsed for this thread) — this card's analysis covers only its "
+                f"recorded start address; whether it is currently executing somewhere else is "
+                f"unknown.")
+    if classification == _IP_SCOPE_NO_IP_START_ELSEWHERE:
+        return (f"TID 0x{tid:x}'s current IP could not be determined (no CONTEXT "
+                f"captured/parsed for this thread), and this card's analysis covers the region "
+                f"at 0x{region_base:x} only — a different, unexamined location from the "
+                f"thread's own recorded start address 0x{start_addr:x}.")
+    if classification == _IP_SCOPE_NO_IP_NO_REGION:
+        return (f"TID 0x{tid:x}'s current IP could not be determined (no CONTEXT "
+                f"captured/parsed for this thread), and this card resolved no region to "
+                f"analyze — its recorded start address 0x{start_addr:x} was not examined "
+                f"either.")
+    if classification == _IP_SCOPE_NO_IP_NO_START:
+        return (f"TID 0x{tid:x} has neither a recorded start address nor a captured current IP "
+                f"(no CONTEXT captured/parsed for this thread) — this card examined no "
+                f"location for this thread at all.")
+    if classification == _IP_SCOPE_ZERO_HAS_START:
+        return (f"TID 0x{tid:x}'s captured current IP is 0x0 — not treated as a confirmed "
+                f"execution address — so this card's analysis covers only its recorded start "
+                f"address; whether it is currently executing somewhere else is unknown.")
+    if classification == _IP_SCOPE_ZERO_START_ELSEWHERE:
+        return (f"TID 0x{tid:x}'s captured current IP is 0x0 — not treated as a confirmed "
+                f"execution address — and this card's analysis covers the region at "
+                f"0x{region_base:x} only — a different, unexamined location from the thread's "
+                f"own recorded start address 0x{start_addr:x}.")
+    if classification == _IP_SCOPE_ZERO_NO_REGION:
+        return (f"TID 0x{tid:x}'s captured current IP is 0x0 — not treated as a confirmed "
+                f"execution address — and this card resolved no region to analyze — its "
+                f"recorded start address 0x{start_addr:x} was not examined either.")
+    if classification == _IP_SCOPE_ZERO_NO_START:
+        return (f"TID 0x{tid:x} has no recorded start address, and its captured current IP is "
+                f"0x0 — not treated as a confirmed execution address — this card examined no "
+                f"location for this thread at all.")
+    if classification == _IP_SCOPE_OUTSIDE_REGION:
+        return (f"TID 0x{tid:x}'s captured current IP 0x{ip:x} is outside the region this "
+                f"card examined — this card's analysis does not cover the thread's current "
+                f"execution location.")
+    if classification == _IP_SCOPE_NO_REGION:
+        return (f"TID 0x{tid:x}'s captured current IP 0x{ip:x} was not examined — this card "
+                f"resolved no region to analyze.")
+    return None
+
+
+def _current_ip_scope_console_text(classification: "str | None", *, tid: int,
+                                    ip_hex: "str | None",
+                                    start_hex: "str | None" = None,
+                                    region_base_hex: "str | None" = None) -> "str | None":
+    """The console ASSESSMENT Scope: sentence for a scope classification,
+    or None when there is no gap to report. Same classification values
+    as _current_ip_scope_diagnostic_text, different phrasing for the
+    console's own "this assessment covers..." voice."""
+    if classification == _IP_SCOPE_CONFLICTED:
+        return (f"TID 0x{tid:x}'s captured current IP {ip_hex} conflicts with its own "
+                f"ThreadInfoListStream record (context flagged invalid) — not confirmed as a "
+                f"real execution location, regardless of whether it falls inside the "
+                f"examined region")
+    if classification == _IP_SCOPE_CONFLICT_UNKNOWN:
+        return (f"TID 0x{tid:x}'s captured current IP {ip_hex} cannot be checked against "
+                f"ThreadInfoListStream — this TID has no ThreadInfoListStream record at all, "
+                f"so whether this value is disputed is undeterminable, not confirmed clean, "
+                f"regardless of whether it falls inside the examined region")
+    if classification == _IP_SCOPE_NO_IP_HAS_START:
+        return (f"this assessment covers TID 0x{tid:x}'s recorded start address only — its "
+                f"current IP could not be determined (no CONTEXT captured/parsed for this "
+                f"thread), so whether it is currently executing somewhere else is unknown")
+    if classification == _IP_SCOPE_NO_IP_START_ELSEWHERE:
+        return (f"this assessment covers the region at {region_base_hex} only — TID "
+                f"0x{tid:x}'s own recorded start address {start_hex} is a different, "
+                f"unexamined location, and its current IP could not be determined (no CONTEXT "
+                f"captured/parsed for this thread)")
+    if classification == _IP_SCOPE_NO_IP_NO_REGION:
+        return (f"TID 0x{tid:x}'s current IP could not be determined (no CONTEXT "
+                f"captured/parsed for this thread) and this card resolved no region to "
+                f"analyze — its recorded start address {start_hex} was not examined either")
+    if classification == _IP_SCOPE_NO_IP_NO_START:
+        return (f"TID 0x{tid:x} has neither a recorded start address nor a captured current IP "
+                f"(no CONTEXT captured/parsed for this thread) — this assessment examined no "
+                f"location for this thread at all")
+    if classification == _IP_SCOPE_ZERO_HAS_START:
+        return (f"this assessment covers TID 0x{tid:x}'s recorded start address only — its "
+                f"captured current IP is 0x0, not treated as a confirmed execution address, so "
+                f"whether it is currently executing somewhere else is unknown")
+    if classification == _IP_SCOPE_ZERO_START_ELSEWHERE:
+        return (f"this assessment covers the region at {region_base_hex} only — TID "
+                f"0x{tid:x}'s own recorded start address {start_hex} is a different, "
+                f"unexamined location, and its captured current IP is 0x0, not treated as a "
+                f"confirmed execution address")
+    if classification == _IP_SCOPE_ZERO_NO_REGION:
+        return (f"TID 0x{tid:x}'s captured current IP is 0x0, not treated as a confirmed "
+                f"execution address, and this card resolved no region to analyze — its "
+                f"recorded start address {start_hex} was not examined either")
+    if classification == _IP_SCOPE_ZERO_NO_START:
+        return (f"TID 0x{tid:x} has no recorded start address, and its captured current IP is "
+                f"0x0, not treated as a confirmed execution address — this assessment examined "
+                f"no location for this thread at all")
+    if classification == _IP_SCOPE_OUTSIDE_REGION:
+        return (f"this assessment covers the region this card actually examined only — "
+                f"TID 0x{tid:x}'s captured current IP {ip_hex} is in a different, unexamined "
+                f"location")
+    if classification == _IP_SCOPE_NO_REGION:
+        return (f"TID 0x{tid:x}'s captured current IP {ip_hex} was not examined — this card "
+                f"resolved no region to analyze")
+    return None
 
 
 class ContentScanResult(NamedTuple):
@@ -291,6 +515,7 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     diagnostics = []
     artifact = None
     artifact_id = None
+    used_current_ip_anchor = False
 
     thread_record = None
     other_threads = []
@@ -307,6 +532,15 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     if string_hit_tuple is not None:
         off, enc = string_hit_tuple
         string_hit_dict = {"offset": off, "address": hex_address(addr_int + off), "encoding": enc}
+
+    # Per-thread live RIP/EIP, from each thread's own captured CONTEXT --
+    # computed once here and reused everywhere this card needs a thread's
+    # CURRENT ip (Sections 1/3 below, and the instruction-anchor candidate
+    # list further down), so a TID missing from this map means the same
+    # "no CONTEXT captured/parsed" fact everywhere it's consulted. Never
+    # used to backfill a thread's own StartAddress, and never backfilled
+    # BY StartAddress.
+    contexts_by_tid = {c["ThreadId"]: c for c in enriched_thread_contexts(mf)}
 
     # ── 1. Thread analysis ────────────────────────────────────────────
     # tid_unbacked_detail is held back rather than written straight into
@@ -325,25 +559,65 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
             diagnostics.append(Diagnostic(SEVERITY_WARNING,
                 f"TID 0x{tid_int:x} not found in dump.", code="REPORT_TID_NOT_FOUND"))
         else:
-            sa  = thread_info.StartAddress or 0
+            # StartAddress stays None when it was genuinely never
+            # recorded (no ThreadInfoListStream entry for this TID) --
+            # never coerced to 0. A fabricated 0x0 would both mislabel an
+            # unknown start as address 0 and, once run through
+            # addr_to_module, manufacture a CONFIRMED "not in any module"
+            # finding out of missing evidence -- see ReportThreadInfo's
+            # own docstring and --threads' identical rule.
+            sa = thread_info.StartAddress
             tid_start_addr = sa
-            mod = addr_to_module(sa, modules)
-            module_context = _module_context_for(mod, modules_available)
-            backing_module = mod.name if mod else None
-            backing_module_base = hex_address(mod.baseaddress) if mod else None
-            backing_module_end  = hex_address(mod.endaddress) if mod else None
-            if not mod and modules_available:
-                tid_unbacked_detail = (
-                    f"TID 0x{thread_info.ThreadId:x} start addr 0x{sa:x} "
-                    f"has no module backing"
-                )
+            mod = module_context = None
+            backing_module = backing_module_base = backing_module_end = None
+            if sa is not None:
+                mod = addr_to_module(sa, modules)
+                module_context = _module_context_for(mod, modules_available)
+                backing_module = mod.name if mod else None
+                backing_module_base = hex_address(mod.baseaddress) if mod else None
+                backing_module_end  = hex_address(mod.endaddress) if mod else None
+                if not mod and modules_available:
+                    tid_unbacked_detail = (
+                        f"TID 0x{thread_info.ThreadId:x} start addr 0x{sa:x} "
+                        f"has no module backing"
+                    )
+            anchor_ctx = contexts_by_tid.get(thread_info.ThreadId)
+            anchor_ip = anchor_ctx["ip"] if anchor_ctx is not None else None
+            # Tri-state: undeterminable (None), not a confirmed False,
+            # when thread_info is a RawThreadInfo placeholder -- this TID
+            # has no real ThreadInfoListStream record to join anchor_ip
+            # against at all. See ip_context_conflict_for's own docstring
+            # and ReportThreadInfo.ip_context_conflict's identical rule.
+            # False, never None, when this TID has no captured CONTEXT at
+            # all (anchor_ctx is None): there is no anchor_ip to dispute.
+            anchor_ip_conflict = (anchor_ctx["ip_context_conflict"]
+                                   if anchor_ctx is not None else False)
             thread_record = ReportThreadInfo(
                 tid=thread_info.ThreadId, start_address=hex_address(sa),
+                ip=hex_address(anchor_ip) if anchor_ip is not None else None,
+                ip_reg=anchor_ctx["ip_reg"] if anchor_ctx is not None else None,
                 backing_module=backing_module, module_context=module_context,
                 kernel_time_100ns=thread_info.KernelTime, user_time_100ns=thread_info.UserTime,
-                backing_module_base=backing_module_base, backing_module_end=backing_module_end)
+                backing_module_base=backing_module_base, backing_module_end=backing_module_end,
+                region_membership=None,   # not applicable -- this is the anchor, not a Section 3 member
+                ip_context_conflict=anchor_ip_conflict)
             if target_addr is None:
                 target_addr = sa
+                if target_addr is None and anchor_ctx is not None:
+                    # No recorded start address at all (this TID exists
+                    # only in the base ThreadListStream) -- fall back to
+                    # its own captured current IP so this card still
+                    # examines SOMETHING for this thread, rather than
+                    # resolving no anchor at all and yet still reporting
+                    # a verdict computed over zero evidence (see this
+                    # module's own "a normal start does not establish a
+                    # clean thread" note -- the inverse gap: an ABSENT
+                    # start must not establish one either). Same addr > 0
+                    # usability rule the instruction-anchor candidates
+                    # and Section 3's own current-IP membership use.
+                    if isinstance(anchor_ip, int) and anchor_ip > 0:
+                        target_addr = anchor_ip
+                        used_current_ip_anchor = True
 
     # ── 2. Memory region ─────────────────────────────────────────────
     if target_addr is not None:
@@ -410,26 +684,87 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                 f"0x{target_addr:x} (different, unrelated location) — excluded from the "
                 f"combined verdict.", code="REPORT_THREAD_NOT_CORRELATED_WITH_REGION"))
 
-    # ── 3. Other threads in same region ──────────────────────────────
+    # ── Current-IP scope note ───────────────────────────────────────────
+    # This card examines ONE region (Section 2's resolved `region`, or
+    # none at all) -- a normal, module-backed recorded start must not
+    # read as "this thread is clean" when its own captured current IP
+    # sits somewhere this card never looked, or could not be determined
+    # at all. Purely a visibility addition: it never derives a new dims/
+    # findings entry and never moves verdict or coverage.status -- see
+    # this module's own "no new algorithm" note. Classification shared
+    # with _render_assessment's own console Scope: line via
+    # _current_ip_scope_gap, so the two can never disagree.
+    if tid_int is not None and thread_record is not None:
+        anchor_ctx_ip = contexts_by_tid.get(tid_int)
+        anchor_ip = anchor_ctx_ip["ip"] if anchor_ctx_ip is not None else None
+        region_base_val = region.BaseAddress if region is not None else None
+        scope_classification = _current_ip_scope_gap(
+            start_addr=tid_start_addr, ip=anchor_ip,
+            region_base=region_base_val,
+            region_size=(region.RegionSize if region is not None else None),
+            ip_conflicted=anchor_ip_conflict)
+        scope_text = _current_ip_scope_diagnostic_text(
+            scope_classification, tid=tid_int, ip=anchor_ip,
+            start_addr=tid_start_addr, region_base=region_base_val)
+        if scope_text is not None:
+            diagnostics.append(Diagnostic(SEVERITY_WARNING, scope_text,
+                                            code="REPORT_CURRENT_IP_NOT_EXAMINED"))
+
+    # ── 3. Other threads whose recorded start OR captured current IP
+    #      falls in this region ─────────────────────────────────────────
+    # Two independent membership facts checked against the SAME region
+    # bounds -- the identical primitive Section 3 has always used for
+    # StartAddress, now also applied to current IP: no new algorithm, the
+    # same lookup reused for a second, already-computed address. Only a
+    # thread's OWN start address falling in this region and failing
+    # module resolution ever feeds unbacked_thread/dims (unchanged from
+    # before this fix); a thread admitted only by its current IP is
+    # surfaced for visibility and never contributes a finding on its
+    # own, so this stays a labeling/evidence addition, not a new
+    # detection dimension.
     if region is not None:
-        for ti in infos:
-            sa2 = ti.StartAddress or 0
-            if not (region.BaseAddress <= sa2 < region.BaseAddress + region.RegionSize):
+        for other_tid, ti in tid_map.items():
+            sa2 = ti.StartAddress   # None (unrecorded) never coerced to 0 --
+                                     # an unknown start cannot be claimed to
+                                     # fall inside this or any other region
+            other_ctx = contexts_by_tid.get(other_tid)
+            ip2 = other_ctx["ip"] if other_ctx is not None else None
+            other_ip_conflict = (other_ctx["ip_context_conflict"]
+                                  if other_ctx is not None else False)
+            start_in_region = (sa2 is not None and
+                                region.BaseAddress <= sa2 < region.BaseAddress + region.RegionSize)
+            # addr > 0 mirrors the instruction-anchor candidate filter
+            # above: a genuinely-zero CONTEXT is real captured data (see
+            # get_thread_contexts) but is not treated as a usable
+            # execution address anywhere else in this module either.
+            current_in_region = (isinstance(ip2, int) and ip2 > 0 and
+                                  region.BaseAddress <= ip2 < region.BaseAddress + region.RegionSize)
+            if not (start_in_region or current_in_region):
                 continue
-            mod = addr_to_module(sa2, modules)
-            module_context = _module_context_for(mod, modules_available)
+            region_membership = (
+                REGION_MEMBERSHIP_START_AND_CURRENT if start_in_region and current_in_region
+                else REGION_MEMBERSHIP_START if start_in_region
+                else REGION_MEMBERSHIP_CURRENT)
+            mod = addr_to_module(sa2, modules) if sa2 is not None else None
+            module_context = _module_context_for(mod, modules_available) if sa2 is not None else None
             other_threads.append(ReportThreadInfo(
-                tid=ti.ThreadId, start_address=hex_address(sa2),
+                tid=other_tid, start_address=hex_address(sa2),
+                ip=hex_address(ip2) if other_ctx is not None else None,
+                ip_reg=other_ctx["ip_reg"] if other_ctx is not None else None,
                 backing_module=(mod.name if mod else None), module_context=module_context,
-                kernel_time_100ns=ti.KernelTime, user_time_100ns=ti.UserTime))
+                kernel_time_100ns=ti.KernelTime, user_time_100ns=ti.UserTime,
+                region_membership=region_membership,
+                ip_context_conflict=other_ip_conflict))
             # Same guard as Section 1's own tid_unbacked_detail: a thread
             # confirmed NOT backed by any module (modules_available AND no
             # match) is a real signal; ModuleListStream simply being
             # absent is not -- must not silently produce the same
-            # unbacked_thread finding either way.
-            if not mod and modules_available and 'unbacked_thread' not in dims:
+            # unbacked_thread finding either way. Gated on start_in_region
+            # specifically: a thread admitted only by its current IP was
+            # never classified by start-address module backing at all.
+            if start_in_region and not mod and modules_available and 'unbacked_thread' not in dims:
                 dims['unbacked_thread'] = (
-                    f"TID 0x{ti.ThreadId:x} in region 0x{region.BaseAddress:x} "
+                    f"TID 0x{other_tid:x} in region 0x{region.BaseAddress:x} "
                     f"has no module backing"
                 )
 
@@ -552,12 +887,11 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         # only a correlated fault outranks it.
         thread_ip = thread_ip_reg = wow64_hint = None
         if tid_int is not None:
-            for ctx in get_thread_contexts(mf):
-                if ctx.get("ThreadId") == tid_int:
-                    thread_ip = ctx.get("ip")
-                    thread_ip_reg = ctx.get("ip_reg")
-                    wow64_hint = ctx.get("is_wow64")
-                    break
+            anchor_thread_ctx = contexts_by_tid.get(tid_int)
+            if anchor_thread_ctx is not None:
+                thread_ip = anchor_thread_ctx.get("ip")
+                thread_ip_reg = anchor_thread_ctx.get("ip_reg")
+                wow64_hint = anchor_thread_ctx.get("is_wow64")
         exception_rip = None
         if exception_context is not None and exception_context.entries:
             first = exception_context.entries[0]
@@ -614,10 +948,16 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                 region_evidence=region_evidence,
                 instruction_slot_vas=instruction_slot_vas)
 
+    # The fallback only ever fires in pure TID mode (no independently
+    # given --report-addr, no recorded StartAddress) -- distinguish it on
+    # the wire from an ordinary start-address anchor so a consumer never
+    # has to infer the substitution from start_address being null.
+    effective_anchor_source = (TRIAGE_ANCHOR_TID_CURRENT_IP if used_current_ip_anchor
+                                else anchor_source)
     record = TriageCardRecord(
         anchor_tid=tid_int,
         anchor_address=hex_address(target_addr) if target_addr is not None else None,
-        anchor_source=anchor_source, thread=thread_record, region=region_record,
+        anchor_source=effective_anchor_source, thread=thread_record, region=region_record,
         string_hit=string_hit_dict, other_threads_in_region=other_threads,
         notable_strings=notable_strings, ioc_strings=ioc_strings,
         string_scan=string_scan, string_scan_error=string_scan_error,
@@ -635,6 +975,17 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
         "modules":     observe_source("modules", present=modules_available, items=modules),
         "memory_info": observe_source("memory_info", present=bool(mf.memory_info), items=regions),
+        # Attribution only -- current IP's own source. Deliberately NOT in
+        # evaluation_sources/completeness_checks: unlike thread_info (an
+        # optional stream whose absence is itself a DFIR-relevant gap),
+        # the base ThreadListStream is present in nearly every minidump,
+        # and folding its absence into coverage.status/exit code here
+        # would move both for every existing card whose fixtures simply
+        # never set mf.threads, not just cards that actually consult a
+        # current IP. A consumer that wants this attributed still finds
+        # it in coverage.sources.threads.
+        "threads": observe_source("threads", present=bool(mf.threads),
+                                   items=list(mf.threads.threads) if mf.threads else []),
     }
     coverage = build_coverage_report(
         sources,
@@ -652,6 +1003,9 @@ def _fallback_coverage(mf, modules_available, modules, infos, regions):
         "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
         "modules":     observe_source("modules", present=modules_available, items=modules),
         "memory_info": observe_source("memory_info", present=bool(mf.memory_info), items=regions),
+        # Same attribution-only rule as _collect_triage_card's own sources.
+        "threads": observe_source("threads", present=bool(mf.threads),
+                                   items=list(mf.threads.threads) if mf.threads else []),
     }
     return build_coverage_report(
         sources, evaluation_sources=("thread_info", "modules", "memory_info"),
@@ -800,6 +1154,16 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     regions = get_memory_regions(mf)
     infos   = get_thread_infos(mf)
     tid_map = {ti.ThreadId: ti for ti in infos}
+    # A TID present only in the base ThreadListStream (no ThreadInfoListStream
+    # entry) still exists in the dump: its own CONTEXT (current IP) is
+    # captured on that base stream and is fully available, independent of
+    # ThreadInfoListStream -- so it must not report "TID not found in dump"
+    # the way a TID absent from BOTH streams does. StartAddress/CreateTime/
+    # KernelTime/UserTime genuinely were never captured for it, same as
+    # collect_threads()'s own RawThreadInfo placeholder for --threads.
+    for base_tid in (t.ThreadId for t in (mf.threads.threads if mf.threads else [])):
+        if base_tid not in tid_map:
+            tid_map[base_tid] = RawThreadInfo(base_tid)
 
     # ── String search mode: find regions, then triage each one ───────
     if report_string and not report_addr:
@@ -1088,14 +1452,24 @@ def _print_anchor_line(card, query_tid, query_addr) -> None:
         print(f"  Addr : {query_addr}")
     elif card.anchor_source == TRIAGE_ANCHOR_STRING_HIT and card.anchor_address is not None:
         print(f"  Addr : 0x{int(card.anchor_address, 16):x}")
+    elif card.anchor_source == TRIAGE_ANCHOR_TID_CURRENT_IP and card.anchor_address is not None:
+        print(f"  Anchor : {card.anchor_address}  "
+              f"{DIM('(this TID has no recorded start address -- anchored on its own captured current IP instead)')}")
     print()
 
 
-def _backed_by_text(module_context: str, backing_module: "str | None") -> str:
+def _backed_by_text(module_context: "str | None", backing_module: "str | None") -> str:
     if module_context == MODULE_CONTEXT_RESOLVED:
         return DIM(ntpath.basename(backing_module))
     if module_context == MODULE_CONTEXT_UNREGISTERED:
         return RED("NOT IN ANY MODULE ⚠")
+    if module_context is None:
+        # None only ever means start_address is itself None -- no address
+        # to classify at all -- and must never read as the DIFFERENT gap
+        # MODULE_CONTEXT_UNAVAILABLE names (ModuleListStream itself
+        # missing): one is "there was nothing to check", the other is "we
+        # could not check it". See ReportThreadInfo's own docstring.
+        return DIM("n/a — no start address to classify")
     return YELLOW("module classification unavailable")
 
 
@@ -1192,6 +1566,33 @@ def _card_instruction_leads(card) -> tuple:
     return tuple(getattr(context, "leads", ()) or ())
 
 
+def _current_ip_scope_gap_text(card) -> "str | None":
+    """None when this card's anchor thread's captured current IP was
+    examined by this card (or there is no anchor thread); otherwise the
+    scope-gap sentence to print beside the verdict. Purely re-derived
+    from already-collected card fields (card.thread.ip/start_address,
+    card.region) through the SAME _current_ip_scope_gap classification
+    _collect_triage_card's own REPORT_CURRENT_IP_NOT_EXAMINED diagnostic
+    uses, so console and JSON can never disagree about whether -- or
+    why -- this card's current IP is unexamined. Never changes
+    card.verdict/findings/coverage."""
+    if card.anchor_tid is None or card.thread is None:
+        return None
+    t = card.thread
+    ip_val = int(t.ip, 16) if t.ip is not None else None
+    start_val = int(t.start_address, 16) if t.start_address is not None else None
+    region = card.region
+    region_base_hex = region.base_address if region is not None else None
+    classification = _current_ip_scope_gap(
+        start_addr=start_val, ip=ip_val,
+        region_base=(int(region.base_address, 16) if region is not None else None),
+        region_size=(region.size if region is not None else None),
+        ip_conflicted=t.ip_context_conflict)
+    return _current_ip_scope_console_text(
+        classification, tid=card.anchor_tid, ip_hex=t.ip,
+        start_hex=t.start_address, region_base_hex=region_base_hex)
+
+
 def _render_assessment(card, coverage) -> None:
     """The current verdict, its supporting findings, and a concise next
     step, rendered together so the caller can print them immediately
@@ -1219,6 +1620,9 @@ def _render_assessment(card, coverage) -> None:
     print(BOLD("ASSESSMENT"))
     print("─" * 50)
     print(f"  {_render_verdict_text(card.verdict, len(card.findings))}\n")
+    scope_gap = _current_ip_scope_gap_text(card)
+    if scope_gap is not None:
+        print(f"  {YELLOW('⚠ Scope:')} {YELLOW(scope_gap)}\n")
     if card.findings:
         for key in card.findings:
             label = INDICATOR_DIMS.get(key, key)
@@ -1776,9 +2180,58 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
             print(DIM("      Thread may have exited before dump was taken."))
         else:
             t = card.thread
-            sa = int(t.start_address, 16)
+            # start_address is None when this TID has no
+            # ThreadInfoListStream entry (present only in the base
+            # ThreadListStream) -- genuinely unrecorded, never coerced to
+            # 0; printed the same way --threads reports it.
+            sa = int(t.start_address, 16) if t.start_address is not None else None
             print(f"  {'TID':<22} 0x{t.tid:x}")
-            print(f"  {'Start Address':<22} 0x{sa:x}")
+            if sa is None:
+                print(f"  {'Start Address':<22} {DIM('unavailable — no ThreadInfoListStream entry')}")
+            else:
+                print(f"  {'Start Address':<22} 0x{sa:x}")
+            # This thread's OWN captured CONTEXT -- independent of Start
+            # Address above, and never inferred from it: a thread that
+            # started cleanly can still be executing somewhere else now.
+            if t.ip is None:
+                print(f"  {'Current IP':<22} {DIM('unavailable — no CONTEXT captured/parsed')}")
+            else:
+                ip = int(t.ip, 16)
+                zero_note = "zero — not treated as a confirmed execution address" if ip == 0 else None
+                if t.ip_context_conflict is None:
+                    # This TID has no ThreadInfoListStream record at all
+                    # to check the base ThreadListStream's own CONTEXT
+                    # against -- the dispute is undeterminable, never a
+                    # confirmed "not disputed" the way a genuinely clean
+                    # DumpFlags is (see ip_context_conflict_for).
+                    unknown = "cannot confirm whether this context is disputed — no ThreadInfoListStream record for this TID"
+                    diverges = DIM(f"  ({zero_note}; {unknown})" if zero_note else f"  ({unknown})")
+                elif zero_note and t.ip_context_conflict:
+                    # Both facts are real and neither explains the other
+                    # away: genuinely captured as 0x0, AND this TID's own
+                    # ThreadInfoListStream record independently flags this
+                    # same context as invalid.
+                    diverges = DIM("  (dump reports this thread's context as invalid — not "
+                                   "confirmed; captured value is 0x0)")
+                elif zero_note:
+                    # A genuinely-zero CONTEXT is real captured data but
+                    # is not treated as a usable execution address
+                    # anywhere else in this module either (the
+                    # instruction-anchor candidate filter above requires
+                    # addr > 0) -- never annotated as a confirmed
+                    # divergent execution location.
+                    diverges = DIM(f"  ({zero_note})")
+                elif t.ip_context_conflict:
+                    # This TID's own ThreadInfoListStream record flags its
+                    # context as invalid, yet the base ThreadListStream's
+                    # own CONTEXT parsed a value anyway -- a genuine
+                    # disagreement between the two sources. Stated
+                    # regardless of region containment: whether this is a
+                    # real execution location at all is a prior question.
+                    diverges = DIM("  (dump reports this thread's context as invalid — not confirmed)")
+                else:
+                    diverges = DIM("  (differs from Start Address)") if sa is not None and ip != sa else ""
+                print(f"  {'Current IP':<22} 0x{ip:x}  ({t.ip_reg}){diverges}")
             print(f"  {'Kernel Time':<22} {_duration_100ns_to_str(t.kernel_time_100ns)}")
             print(f"  {'User Time':<22} {_duration_100ns_to_str(t.user_time_100ns)}")
             if t.module_context == MODULE_CONTEXT_RESOLVED:
@@ -1787,6 +2240,8 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
                 print(f"  {'Backed By':<22} {GREEN(console_safe(t.backing_module))}")
                 print(f"  {'Module Range':<22} 0x{int(t.backing_module_base, 16):x} — "
                       f"0x{int(t.backing_module_end, 16):x}")
+            elif sa is None:
+                print(f"  {'Backed By':<22} {DIM('n/a — no start address to classify')}")
             else:
                 print(f"  {'Backed By':<22} {_backed_by_text(t.module_context, None)}")
         print()
@@ -1878,15 +2333,40 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
                 f"0x{target_addr:x} (different, unrelated location) — excluded from the "
                 f"combined verdict below.\n"))
 
-    # ── 3. Other threads in same region ──────────────────────────────
+    # ── 3. Other threads whose recorded start OR captured current IP
+    #      falls in this region ─────────────────────────────────────────
+    # Membership here is by StartAddress and/or current IP, published on
+    # the record itself as region_membership -- see _collect_triage_card's
+    # own Section 3 and ReportThreadInfo's own docstring -- so each line
+    # names which fact(s) actually placed this thread here (never
+    # recomputed independently at render time, so console and JSON can
+    # never disagree about it) and names which address the module
+    # attribution beside it describes: backing_module/module_context are
+    # ALWAYS about start_address, never ip, even for a `via=current` entry
+    # whose start address may be unrelated to or entirely outside this
+    # region.
     if card.region is not None and card.other_threads_in_region:
-        print(BOLD("THREADS EXECUTING IN THIS REGION"))
+        print(BOLD("OTHER THREADS WITH A START OR CURRENT IP IN THIS REGION"))
         print("─" * 50)
         for t in card.other_threads_in_region:
-            sa2 = int(t.start_address, 16)
+            sa2 = int(t.start_address, 16) if t.start_address is not None else None
+            ip2 = int(t.ip, 16) if t.ip is not None else None
             backed = _backed_by_text(t.module_context, t.backing_module)
             tag = DIM(" ← report TID") if t.tid == card.anchor_tid else ""
-            print(f"  TID=0x{t.tid:<8x}  StartAddr=0x{sa2:x}  {backed}{tag}")
+            start_str = f"0x{sa2:x}" if sa2 is not None else DIM("unavailable")
+            ip_str = f"0x{ip2:x} ({t.ip_reg})" if ip2 is not None else DIM("unavailable")
+            if t.ip_context_conflict is None:
+                # This TID has no ThreadInfoListStream record at all to
+                # check its captured value against -- undeterminable,
+                # never a confirmed "not disputed".
+                ip_str += DIM(" [dispute unconfirmable — no ThreadInfoListStream record]")
+            elif t.ip_context_conflict:
+                # Same disagreement Section 1 and --threads both surface:
+                # this TID's own ThreadInfoListStream record flags its
+                # context as invalid despite a parsed base-stream value.
+                ip_str += DIM(" [context flagged invalid — not confirmed]")
+            print(f"  TID=0x{t.tid:<8x}  StartAddr={start_str}  CurrentIP={ip_str}  "
+                  f"via={t.region_membership}  StartAddr→{backed}{tag}")
         print()
 
     if card.anchor_pe_context is not None:

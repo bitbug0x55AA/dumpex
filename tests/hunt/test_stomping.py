@@ -226,7 +226,7 @@ def test_version_mismatched_reference_does_not_escalate():
 
 # ── RIP inside the 21st+ differing range still scores 2 ───────────────────
 
-def test_rip_in_deep_diff_range_still_scores():
+def test_rip_in_deep_diff_range_still_scores(monkeypatch):
     module_base = 0x7ff600000000
     section = dict(TEXT_SECTION_RX)
     section["vsize"] = section["rawsize"] = 0x4000   # room for many small diffs
@@ -259,8 +259,9 @@ def test_rip_in_deep_diff_range_still_scores():
     # RIP lands exactly on the 25th (last, well past MAX_DIFF_RANGES=20) diff.
     rip_pos = diff_positions[-1]
     rip_va  = module_base + section["vaddr"] + rip_pos
-    stomping.get_thread_contexts = lambda mf: [{"ThreadId": 1, "ip": rip_va,
-                                                  "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 1, "ip": rip_va, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": False}])
 
     with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "legit.dll"), "wb") as fh:
@@ -546,7 +547,7 @@ def test_mixed_scanned_and_oversized_regions_keeps_hits_and_the_gap(capsys):
     assert "CLEAN" not in out
 
 
-def test_oversized_ioc_region_alongside_a_detection(capsys):
+def test_oversized_ioc_region_alongside_a_detection(capsys, monkeypatch):
     """An oversized IOC region must neither suppress nor be suppressed by a
     real stomping detection: score/status stay DETECTED, and the gap is
     still reported next to it (a detected dump is exactly when an analyst
@@ -574,7 +575,7 @@ def test_oversized_ioc_region_alongside_a_detection(capsys):
         modules      = FakeStream(mods, "modules")
     stomping.read_region = mem_reader({module_base: header,
                                         module_base + 0x1000: bytes(mem_text)})
-    stomping.get_thread_contexts = lambda mf: []
+    monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [])
 
     with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "legit.dll"), "wb") as fh:
@@ -799,7 +800,7 @@ def test_verbose_shows_per_token_va_encoding_and_weak_flag(capsys):
 
 # ── Bonus: genuine-detection paths must still work (no false negatives) ───
 
-def test_verified_change_scores_1_then_2_with_rip():
+def test_verified_change_scores_1_then_2_with_rip(monkeypatch):
     module_base = 0x7ff600000000
     timestamp = 0x11111111
     sections = [{"name": b".text", "vaddr": 0x1000, "vsize": 0x2000, "rawptr": 0x400,
@@ -832,15 +833,109 @@ def test_verified_change_scores_1_then_2_with_rip():
             fh.write(bytes(ref_file))
 
         stomping.read_region = mem_reader(read_map)
-        stomping.get_thread_contexts = lambda mf: []
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [])
         f1 = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         assert f1["score"] == 1
 
         changed_va = module_base + 0x1000 + 0x100
-        stomping.get_thread_contexts = lambda mf: [{"ThreadId": 1, "ip": changed_va + 2,
-                                                      "ip_reg": "RIP", "is_wow64": False}]
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [
+            {"ThreadId": 1, "ip": changed_va + 2, "ip_reg": "RIP", "is_wow64": False,
+             "start_address": None, "ip_context_conflict": False}])
         f2 = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         assert f2["score"] == 2
+
+
+# ── AC3: a disputed or undeterminable current IP inside a changed range
+#    must not produce an unqualified CONFIDENCE_HIGH / score == 2 --
+#    --threads/--report already qualify the identical fact for the same
+#    TID, and score == 2 is the "strongest evidence this hunter can
+#    produce" claim.
+
+def _verified_change_scenario_multi(monkeypatch, thread_contexts):
+    module_base = 0x7ff600000000
+    timestamp = 0x11111111
+    sections = [{"name": b".text", "vaddr": 0x1000, "vsize": 0x2000, "rawptr": 0x400,
+                 "rawsize": 0x2000, "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}]
+    header = build_pe_header(sections, timestamp=timestamp, size_of_image=0x5000,
+                              image_base=module_base)
+    text_original = bytes((i * 7) % 251 for i in range(0x2000))
+    ref_file = bytearray(header)
+    ref_file += b'\x00' * (sections[0]["rawptr"] - len(ref_file))
+    ref_file += text_original
+    mem_text = bytearray(text_original)
+    mem_text[0x100:0x110] = b'\xCC' * 0x10   # simulated stomp
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    regions = [Region(module_base + 0x1000, module_base, 0x2000, "MEM_COMMIT",
+                       "PAGE_EXECUTE_READ", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(bytes(ref_file))
+        stomping.read_region = mem_reader(
+            {module_base: header, module_base + 0x1000: bytes(mem_text)})
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: thread_contexts)
+        return stomping._hunt_stomping(MF(), verbose=False, ref_dir=d), module_base
+
+
+def _verified_change_scenario(monkeypatch, thread_context):
+    return _verified_change_scenario_multi(monkeypatch, [thread_context])
+
+
+def test_verified_change_with_disputed_rip_is_qualified_not_unconfirmed_high(monkeypatch):
+    changed_va = 0x7ff600000000 + 0x1000 + 0x100
+    thread_context = {"ThreadId": 1, "ip": changed_va + 2, "ip_reg": "RIP", "is_wow64": False,
+                       "start_address": None, "ip_context_conflict": True}
+    f, _ = _verified_change_scenario(monkeypatch, thread_context)
+    # score/confidence are unchanged by this addition -- only the
+    # limitations gain an explicit caveat, matching --hunt injection's
+    # own "no result is ever newly promoted or demoted" rule.
+    assert f["score"] == 2
+    vc = {finding["check"]: finding for finding in f["findings"]}["stomping.verified_content_change"]
+    assert vc["confidence"] == "high"
+    assert any("ThreadInfoListStream record flags as invalid" in lim
+               for lim in vc["limitations"])
+
+
+def test_verified_change_with_undeterminable_rip_is_qualified(monkeypatch):
+    changed_va = 0x7ff600000000 + 0x1000 + 0x100
+    thread_context = {"ThreadId": 1, "ip": changed_va + 2, "ip_reg": "RIP", "is_wow64": False,
+                       "start_address": None, "ip_context_conflict": None}
+    f, _ = _verified_change_scenario(monkeypatch, thread_context)
+    assert f["score"] == 2
+    vc = {finding["check"]: finding for finding in f["findings"]}["stomping.verified_content_change"]
+    assert vc["confidence"] == "high"
+    assert any("no ThreadInfoListStream record at all" in lim for lim in vc["limitations"])
+
+
+def test_verified_change_multi_thread_conflict_counts_are_not_collapsed_to_one_section(monkeypatch):
+    """Three threads' current RIP all land inside the SAME changed section --
+    two confirmed-disputed, one undeterminable. The caveat must count all
+    three threads individually, not the one section-level value they
+    combine to (see dumpex.hunt._finding.combine_conflicts -- True wins,
+    so a naive per-section count would report only "1 thread(s)" disputed
+    and silently drop the undeterminable one entirely)."""
+    changed_va = 0x7ff600000000 + 0x1000 + 0x100
+    thread_contexts = [
+        {"ThreadId": 1, "ip": changed_va + 1, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": True},
+        {"ThreadId": 2, "ip": changed_va + 2, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": True},
+        {"ThreadId": 3, "ip": changed_va + 3, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": None},
+    ]
+    f, _ = _verified_change_scenario_multi(monkeypatch, thread_contexts)
+    # Score/confidence are driven by the section-level combined value and
+    # are unaffected by this fix -- only the caveat text's accuracy is.
+    assert f["score"] == 2
+    vc = {finding["check"]: finding for finding in f["findings"]}["stomping.verified_content_change"]
+    assert vc["confidence"] == "high"
+    caveat = vc["limitations"][0]
+    assert "2 thread(s) whose captured CONTEXT" in caveat
+    assert "1 thread(s) with no ThreadInfoListStream record" in caveat
 
 
 # ── no --ref-dir: a protection anomaly ALONE stays a plain lead, but one ──
@@ -848,7 +943,7 @@ def test_verified_change_scores_1_then_2_with_rip():
 # distinct medium-confidence lead calling out the correlation — still
 # never scored, never "confirmed stomping" (that requires --ref-dir).
 
-def test_rip_in_anomalous_section_without_ref_dir_is_medium_lead():
+def test_rip_in_anomalous_section_without_ref_dir_is_medium_lead(monkeypatch):
     module_base = 0x7ff600000000
     header, mem_text, ref_file, section = matching_module_and_ref(module_base)
     mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
@@ -862,8 +957,9 @@ def test_rip_in_anomalous_section_without_ref_dir_is_medium_lead():
         memory_info = FakeStream(regions, "infos")
         modules      = FakeStream(mods, "modules")
     stomping.read_region = mem_reader({module_base: header, section_va: mem_text})
-    stomping.get_thread_contexts = lambda mf: [{"ThreadId": 0x42, "ip": section_va + 0x10,
-                                                  "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 0x42, "ip": section_va + 0x10, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": False}])
 
     f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
 
@@ -876,7 +972,7 @@ def test_rip_in_anomalous_section_without_ref_dir_is_medium_lead():
     assert lead["confidence"] == "medium"
 
 
-def test_no_rip_in_anomalous_section_omits_correlation_lead():
+def test_no_rip_in_anomalous_section_omits_correlation_lead(monkeypatch):
     module_base = 0x7ff600000000
     header, mem_text, ref_file, section = matching_module_and_ref(module_base)
     mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
@@ -887,7 +983,7 @@ def test_no_rip_in_anomalous_section_omits_correlation_lead():
         memory_info = FakeStream(regions, "infos")
         modules      = FakeStream(mods, "modules")
     stomping.read_region = mem_reader({module_base: header, module_base + section["vaddr"]: mem_text})
-    stomping.get_thread_contexts = lambda mf: []   # no thread executing anywhere
+    monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [])   # no thread executing anywhere
 
     f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
 

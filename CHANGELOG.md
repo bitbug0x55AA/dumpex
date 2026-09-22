@@ -109,6 +109,270 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   entirely absent stream reports. It now reports the confirmed
   `"unregistered"` / `"unregistered_image"` answer, matching a non-empty
   module list that simply does not cover the address.
+- `--threads` and `--report` reported only a thread's recorded
+  `StartAddress` (where it began) with no visibility into where it is
+  actually captured executing right now, which could read as "this thread
+  is here" when its live RIP/EIP — from its own CONTEXT/WOW64_CONTEXT — is
+  somewhere else entirely. Both commands now show a `CurrentIP` line
+  alongside `StartAddress`, independently sourced and independently
+  unavailable: a thread whose CONTEXT was not captured or could not be
+  parsed reports `CurrentIP` as unavailable rather than silently falling
+  back to (or being indistinguishable from) its own start address. A
+  genuinely-zero CONTEXT (real captured data — never confused with
+  "absent") is printed as a zero address, but is no longer annotated as
+  if it were a confirmed divergent execution location, matching the
+  existing instruction-anchor rule that a zero address is not a usable
+  execution address. `--threads` likewise no longer annotates a captured
+  current IP as confirmed-divergent when that thread's own
+  ThreadInfoListStream record flags its context as invalid
+  (`DumpFlags == MINIDUMP_THREAD_INFO_INVALID_CONTEXT`, rendered as the
+  existing `[NO_CTX]` tag) — a parsed base-stream CONTEXT existing anyway
+  is a genuine disagreement between the two sources, not a confirmed
+  location. This check's reach is exactly as wide as the upstream
+  `minidump` library's own single-member `DumpFlags` parse: a genuinely
+  combined flag value (e.g. exited *and* invalid-context together) is not
+  representable by that parse and leaves `DumpFlags`, and this tag,
+  unset, so it is not caught here either.
+  `--report`'s per-card `coverage.sources` now attributes the base
+  ThreadListStream (`CurrentIP`'s own source) by name, so its absence is
+  visible to a JSON consumer; unlike `thread_info`, its absence alone does
+  not move `coverage.status`/exit code, since that stream is present in
+  nearly every minidump and moving status for it would be a materially
+  wider behavior change than this fix's own scope.
+  `--report`'s own TID resolution previously consulted
+  ThreadInfoListStream alone, so a TID present only in the base
+  ThreadListStream (no ThreadInfoListStream entry — common when a dump
+  wasn't captured with `MiniDumpWithThreadInfo`) incorrectly reported "TID
+  not found in dump" even though that thread's own CONTEXT, and therefore
+  its `CurrentIP`, was fully available; it is now resolved from either
+  stream, matching `--threads`' own union. A `StartAddress` that was
+  genuinely never recorded is kept `null` rather than coerced to `0x0`,
+  which previously let a missing value resolve through module lookup as a
+  confirmed "not in any module" finding and manufacture a false
+  `unbacked_thread`/`SUSPICIOUS` verdict from missing evidence, not a real
+  one.
+  `--report`'s Section 3 ("other threads" beside the anchor's own region)
+  is corrected from "THREADS EXECUTING IN THIS REGION" to a header naming
+  both facts it actually uses: membership is now by a thread's recorded
+  `StartAddress` OR its captured current IP falling inside the region —
+  reusing the identical region-bounds check already used for
+  `StartAddress`, no new algorithm — and each line says which fact(s)
+  placed that thread there, published on the record itself as the new
+  `region_membership` field (`start`/`current`/`start_and_current`) rather
+  than recomputed independently at render time, so console and JSON can
+  never disagree about it. `backing_module`/`module_context` always
+  describe `StartAddress` specifically, never the current IP, on every
+  Section 3 entry regardless of `region_membership`; the console now
+  names this explicitly so a current-IP-only entry's module attribution —
+  the most investigation-relevant member of this list — is never mistaken
+  for describing the region it is listed for. A member with no recorded
+  `StartAddress` at all is now told apart on the console from a missing
+  `ModuleListStream` (previously both fell into the same "module
+  classification unavailable" text, even with the module list fully
+  present) the same way Section 1 already did. A thread admitted only by
+  its current IP never contributes a new finding on its own;
+  `unbacked_thread` is still derived only from a thread's own
+  `StartAddress` failing module resolution, unchanged from before this
+  fix.
+  Per this issue's own AC1 ("a normal start does not establish a clean
+  thread") — and its inverse, an ABSENT start must not establish one
+  either — a `--report-tid` card whose anchor thread has no usable current
+  IP examined now carries a `REPORT_CURRENT_IP_NOT_EXAMINED` diagnostic
+  and prints an explicit `Scope:` line beside the ASSESSMENT verdict,
+  worded for exactly which gap applies: current IP undetermined with a
+  known start, neither start nor a usable current IP recorded, a usable
+  current IP outside the region actually examined, or a usable current IP
+  when no region was resolved at all. The diagnostic and the console line
+  are both derived from one shared classification so they cannot disagree
+  about the same card. A TID recorded only in the base ThreadListStream
+  (no `StartAddress` at all) whose own current IP is a usable, resolvable
+  address now has that address become the card's own anchor, so the card
+  actually examines that region instead of resolving none at all while
+  still reporting a verdict computed over zero evidence. This fallback
+  anchor is labeled on the wire with its own `anchor_source` value,
+  `tid_current_ip`, distinct from the ordinary `tid` value an anchor with
+  a recorded start address uses, and the console names the resolved
+  address and its source under `TID` in that case — a consumer is never
+  left to infer the substitution from `start_address` being null.
+  This changes no `dims`/`findings`/`verdict`/`coverage.status`/exit code
+  beyond the anchor-selection fallback itself (which examines a region a
+  card with a known start would already have examined the same way): it
+  is a visibility and labeling correction, not a new detection signal —
+  correlating what an unexamined region actually contains stays with a
+  future issue. The fallback itself is the one exception: because it
+  reads a region the card previously left unexamined, `dims`/`findings`/
+  `verdict` can move for that narrow, base-only-TID set of documents
+  (a card that previously resolved no anchor and reported `CLEAN` over
+  zero evidence can now report a real finding and a higher verdict for
+  the region its own current IP names), and `coverage.status`/the exit
+  code can likewise move when that newly-examined region's own evidence
+  is incomplete (e.g. a short/truncated read) — see [Output Schema
+  Migration](docs/user/OUTPUT_MIGRATION.md)'s v2.20 row.
+  `--report` discarded a genuine disagreement between the dump's own two
+  thread sources: a TID whose ThreadInfoListStream record flags its
+  context as invalid (`DumpFlags == MINIDUMP_THREAD_INFO_INVALID_CONTEXT`,
+  rendered by `--threads` as `[NO_CTX]`) but whose base ThreadListStream
+  CONTEXT parsed a value anyway (including a genuinely-captured 0) had
+  that value presented as an ordinary, confirmed current IP — including
+  inside Section 3's `region_membership` and the Scope determination,
+  which stayed silent whenever the disputed value happened to land inside
+  the examined region. `ReportThreadInfo` gains `ip_context_conflict`:
+  true exactly when `ip` is set (any captured value, including 0) and
+  this conflict exists. The value is kept either way (it is real, parsed
+  data), but the conflict now travels with it to console, JSON, and the
+  Scope note, which fires regardless of region containment or value
+  whenever this flag is set — whether a disputed value names a real
+  execution location at all is a prior question to whether it falls
+  inside the region this card examined. `ThreadRecord` (`--threads`)
+  gains the identical `ip_context_conflict` field, computed the same way,
+  so `--threads` and `--report` now publish this fact in the same
+  schema-validated shape for the same TID rather than one side deriving
+  it at render time from a free-form `flags` list alone; `--threads`'
+  own console also no longer reports a conflicted-and-zero CONTEXT as
+  merely zero (the two facts are both real and neither explains the other
+  away).
+  The Scope note for a TID with a known start, no usable current IP, and
+  an INDEPENDENTLY supplied `--report-addr` previously always claimed
+  "this assessment covers TID N's recorded start address only", even
+  when the region actually examined was the independently given address
+  and did not cover the thread's own start at all — misattributing a
+  finding at that address to the thread's recorded start. The claim is
+  now conditioned on whether the region this card actually resolved
+  covers the start address; when it does not (or no region resolved at
+  all), the note names the region or address that was actually examined
+  and states plainly that the thread's own start was not.
+  The current-IP scope classification also collapsed two different
+  states into one "current IP could not be determined" wording: no
+  CONTEXT was ever captured for this TID at all, versus a CONTEXT WAS
+  captured and genuinely holds 0. The Scope note and the
+  `REPORT_CURRENT_IP_NOT_EXAMINED` diagnostic now distinguish them —
+  a captured 0x0 is reported as exactly that, never as "no usable CONTEXT
+  captured/parsed", the wording `get_thread_contexts`' own contract
+  reserves for a TID missing from its list entirely — across all four
+  region shapes (start covered, start elsewhere, no region resolved, no
+  start recorded either), and the conflicted-value check now fires for a
+  captured 0 exactly as it does for any other captured value.
+  `reportThreadInfo.region_membership` is now enforced bidirectionally by
+  the schema, not just documented: `null` on Section 1's own anchor
+  thread entry and one of `start`/`current`/`start_and_current` on every
+  Section 3 `other_threads_in_region` entry, in both directions.
+  `ip_context_conflict` (on `reportThreadInfo`, `threadRecord`, and now
+  `huntThreadRef` -- see below) was a plain boolean, so `false` could not
+  distinguish "this TID's own ThreadInfoListStream record confirms no
+  dispute" from "this TID has no ThreadInfoListStream record at all, so
+  the dispute could never be checked" -- the exact MODULE_CONTEXT_
+  UNREGISTERED-vs-MODULE_CONTEXT_UNAVAILABLE distinction this codebase
+  already enforces everywhere else, collapsed into two states instead of
+  three. The field is now tri-state: `true`/`false` when a real
+  ThreadInfoListStream record settles the question, `null` when it can't
+  be settled at all (always `false`, never `null`, when `ip` itself is
+  `null` -- nothing to dispute regardless of stream coverage). The
+  derivation moved to a single shared `dumpex.core.memory.
+  ip_context_conflict_for`, consumed by `--threads`, `--report`, and now
+  `--hunt injection` alike, replacing two independent copies (report.py's
+  own `_ip_flagged_invalid` and an inline duplicate in threads.py).
+  `--threads`' `_THREAD_INFO_ONLY_FIELDS` gains `DumpFlags`, so a
+  degraded (no ThreadInfoListStream) or per-TID-mismatch coverage
+  limitation now names the conflict check among what was lost, instead of
+  silently reporting `false` with no machine-readable trace of why.
+  `--threads`' console also no longer reports a captured-but-conflicted
+  zero CONTEXT as merely zero (both facts are real and neither explains
+  the other away).
+  `--hunt injection` published the same `ip`/`ip_reg` fact
+  `--threads`/`--report` do for a rip-correlated thread, but with no
+  access to the conflict check at all -- a thread whose ThreadInfoListStream
+  record disputes its own captured CONTEXT (or has no such record to
+  check against) was reported by `injection.allocation_correlation` as
+  "currently execute[s] inside" the flagged allocation with no
+  qualification, while the same fact was labeled unconfirmed in the other
+  two commands for the same dump. `dumpex.hunt.injection.thread_scan.
+  resolve_thread_contexts` now joins each TID's own ThreadInfoListStream
+  record in at the same collection boundary (the same join `--threads`/
+  `--report` already perform), giving `ThreadContext`/`RipHitEvidence`
+  their own `start_address`/`ip_context_conflict` fields; `HuntThreadRef`
+  (the wire shape) gains the identical tri-state `ip_context_conflict`.
+  A rip hit's `HuntThreadRef` also no longer drops the thread's own
+  recorded `start_address` (previously always `null` for a rip hit, even
+  when a real `ThreadInfoListStream` entry recorded one). When any thread
+  driving the `injection.allocation_correlation` inference has a disputed
+  or undeterminable `ip_context_conflict`, that check's `limitations` now
+  says so explicitly (first in the list, so it
+  is also the one line the compact console verdict block shows) -- this
+  changes no score, confidence, or verdict; it labels an existing claim
+  the score computation already made, matching this round's own "no
+  result is ever newly promoted toward malicious" rule.
+  The join itself moved to a new shared `dumpex.core.memory.
+  enriched_thread_contexts` (get_thread_contexts()'s own dicts, each
+  augmented with this TID's `start_address`/`ip_context_conflict`) so
+  `--hunt injection`, `--hunt stomping`, and `--hunt pipe` read the
+  identical join instead of each re-deriving it (or, for stomping/pipe
+  previously, not deriving it at all). `stomping.rip_in_anomalous_section_
+  lead` and `stomping.verified_content_change` (the ONLY scored signal in
+  that hunter -- a disputed/undeterminable RIP inside a changed range
+  previously took its confidence straight to HIGH and its score straight
+  to 2/2 with no qualification anywhere) and `pipe.corroboration` (whose
+  `full_corroboration`/CONFIDENCE_HIGH path is that hunter's own score=3
+  case) now carry the identical leading `limitations` sentence, via a new
+  shared `dumpex.hunt._finding.disputed_conflict_limitation` every
+  qualifying hunter calls (injection's own local text builder is now a
+  thin wrapper over it). None of this moves any hunter's score or
+  confidence computation -- only `limitations` gains the caveat, the same
+  "label what the score already claims, do not change what it claims"
+  boundary `--hunt injection`'s own addition above holds to. `--hunt
+  cs_beacon` remains genuinely out of scope: it does not project a thread
+  reference into any scored check's evidence the way injection/stomping/
+  pipe do.
+  Two structural-safety additions accompany this: `ThreadContext`/
+  `RipHitEvidence.ip_context_conflict` now defaults to `None`
+  (undeterminable), not `False` (confirmed clean) -- `ip` has no default
+  at all, so a construction that omitted this field previously granted an
+  unearned "confirmed clean" by omission alone; and `InjectionEvidence`'s
+  own rip-hits-match-thread-contexts invariant now also keys on
+  `start_address`/`ip_context_conflict` (previously only `thread_id`/
+  `ip`/`ip_reg`), so a rip hit whose dispute status silently disagrees
+  with its own source `ThreadContext` -- e.g. a future correlation path
+  that forgets to copy the field -- is rejected at construction rather
+  than only visible once a schema (which never sees the internal Evidence
+  layer) happens to disagree.
+  `stomping`'s `verified_changes[]` entries now include the
+  `rip_context_conflict` value that already qualifies that section's
+  `rip_in_changed_range` internally, and already drove the check's
+  `limitations` sentence -- previously the ONE hunter where a disputed/
+  undeterminable RIP moves a score published that score's own input
+  (`rip_in_changed_range: true`) with no structured field naming it as
+  disputed, unlike `--hunt injection`'s `HuntThreadRef.ip_context_conflict`
+  for the equivalent per-thread fact. `--threads` and `--report` now call
+  `enriched_thread_contexts` directly instead of independently re-deriving
+  the same join from `get_thread_contexts` and `ip_context_conflict_for`,
+  so that helper's own "the single join every command and hunter shares"
+  claim is true rather than aspirational; the combine-priority reducer
+  stomping's RIP-range correlation uses to fold several contributing
+  threads' conflict status into one value now lives next to
+  `disputed_conflict_limitation` in `dumpex.hunt._finding` as
+  `combine_conflicts`, rather than as a second, separately-maintained copy
+  of the identical priority rule in `dumpex.hunt.stomping.correlation`.
+  None of this moves any score, confidence, verdict, or coverage.status.
+- Two of the round above's own qualification caveats were themselves
+  miscounting what they claimed to count. `stomping.verified_content_change`
+  built its "N thread(s) ... disputed/undeterminable" text from each
+  qualifying section's already-combined `rip_context_conflict` (one value
+  per section, folded from every thread that hit it via
+  `combine_conflicts` -- True wins over None wins over False), so three
+  threads hitting the same changed section as disputed/disputed/
+  undeterminable reported only "1 thread(s)" disputed and silently
+  dropped the undeterminable one -- the combined value cannot be
+  un-combined back into individual thread counts. `VerifiedChangeEvidence`
+  now also retains `rip_conflicts`, the UNCOMBINED tuple of each hitting
+  thread's own conflict state (enforced to agree with the combined
+  `rip_context_conflict` via `combine_conflicts` at construction), and the
+  check's caveat is built from that instead. `pipe.corroboration` had the
+  opposite problem: it built its caveat from `corroborated_handles`, which
+  is one entry per HANDLE, so a single thread corroborating two pipe
+  handles at once had its own conflict state counted twice. The caveat is
+  now built from the distinct threads behind those handles (deduplicated
+  by `thread_id`), not the handle count. Neither fix moves any score,
+  confidence, verdict, or coverage.status -- both are corrections to
+  caveat text that was already present, not new evidence.
 
 ### Changed
 
@@ -130,7 +394,26 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   `partial`/3 where it previously reported `complete`/0 (see [Output Schema
   Migration](docs/user/OUTPUT_MIGRATION.md)'s v2.20 row for the exact
   triggers). `verdict`/`findings`/score move only in the direction this
-  release corrects: no result is ever newly promoted toward malicious.
+  correction corrects: no result is ever newly promoted toward malicious
+  by it. (The current-IP anchor fallback described below is a separate,
+  later addition in this same unreleased version, and is the one place in
+  v2.20 where a verdict CAN move toward more severe — see below.)
+  Later same-version addition, still v2.20 (unreleased): `threadRecord` and
+  `reportThreadInfo` gain `ip`/`ip_reg` — a thread's own live RIP/EIP,
+  both-or-neither, same shape `huntThreadRef` already used (see above).
+  `coverage.status` and the exit code do not move for the `ip`/`ip_reg`
+  fields themselves, `region_membership`, `ip_context_conflict`, or any of
+  the Scope/diagnostic labeling in this addition. The one exception is the
+  current-IP anchor fallback: a `--report-tid` card for a thread recorded
+  only in the base ThreadListStream (no `StartAddress`) now examines that
+  thread's own current IP when it is a usable address, so `dims`/
+  `findings`/`verdict` — and, when the newly-examined region itself
+  carries an evidence gap, `coverage.status`/the exit code — can move for
+  that narrow, base-only-TID set of documents where they previously
+  reported `CLEAN`/`complete`/0 over an anchor that resolved nothing. This
+  fallback anchor is labeled on the wire with its own `anchor_source`
+  value, `tid_current_ip`, distinct from the ordinary `tid` value an
+  anchor with a recorded start address uses.
 
 ## 3.9.0 — 2026-09-18
 

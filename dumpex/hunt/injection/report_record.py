@@ -49,11 +49,15 @@ def _thread_ref_from_evidence(ev) -> HuntThreadRef:
 
 
 def _thread_ref_from_context(tc) -> HuntThreadRef:
-    return HuntThreadRef(tid=tc.thread_id, ip=hex_address(tc.ip), ip_reg=tc.ip_reg)
+    return HuntThreadRef(tid=tc.thread_id, start_address=hex_address(tc.start_address),
+                          ip=hex_address(tc.ip), ip_reg=tc.ip_reg,
+                          ip_context_conflict=tc.ip_context_conflict)
 
 
 def _thread_region_hit_from_rip_hit(hit) -> HuntThreadRegionHit:
-    thread = HuntThreadRef(tid=hit.thread_id, ip=hex_address(hit.ip), ip_reg=hit.ip_reg)
+    thread = HuntThreadRef(tid=hit.thread_id, start_address=hex_address(hit.start_address),
+                            ip=hex_address(hit.ip), ip_reg=hit.ip_reg,
+                            ip_context_conflict=hit.ip_context_conflict)
     return HuntThreadRegionHit(thread=thread, region=_region_ref(hit.region))
 
 

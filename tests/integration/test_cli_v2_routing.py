@@ -1029,7 +1029,7 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert doc["result"]["coverage"]["status"] == "partial"
         assert doc["result"]["coverage"]["reasons"] == [
             "ThreadInfoListStream not present; StartAddress/CreateTime/ExitTime/KernelTime/"
-            "UserTime unavailable (TID/SuspendCount/Priority/TEB only)",
+            "UserTime/DumpFlags unavailable (TID/SuspendCount/Priority/TEB/CurrentIP only)",
             "ModuleListStream not present; thread backing-module classification unavailable "
             "(cannot confirm whether a start address is backed by a known module)",
         ]

@@ -156,7 +156,7 @@ _RECORDS = {
         size=0x1000, compiled_utc="2026-01-01T00:00:00Z", file_version="1.0.0.0",
         checksum=1234, anomaly_flags=["NO_NAME"]),
     "threadRecord": lambda: ThreadRecord(
-        tid=4660, start_address=_ADDR, backing_module="a.dll",
+        tid=4660, start_address=_ADDR, ip=_ADDR2, ip_reg="RIP", backing_module="a.dll",
         module_context=MODULE_CONTEXT_RESOLVED, create_time="2026-01-01T00:00:00Z",
         exit_time=None, exit_status=None, kernel_time_100ns=100, user_time_100ns=200,
         suspend_count=0, priority=8, teb=_ADDR2, flags=["SUSPENDED"]),
@@ -248,9 +248,10 @@ _RECORDS = {
         protect_after="PAGE_EXECUTE_READWRITE", type_before="MEM_PRIVATE",
         type_after="MEM_PRIVATE", suspicious_before=False, suspicious_after=True),
     "reportThreadInfo": lambda: ReportThreadInfo(
-        tid=4660, start_address=_ADDR, backing_module="a.dll",
+        tid=4660, start_address=_ADDR, ip=_ADDR2, ip_reg="RIP", backing_module="a.dll",
         module_context=MODULE_CONTEXT_RESOLVED, kernel_time_100ns=100, user_time_100ns=200,
-        backing_module_base=_ADDR, backing_module_end=_ADDR2),
+        backing_module_base=_ADDR, backing_module_end=_ADDR2,
+        region_membership="start_and_current", ip_context_conflict=True),
     "reportRegionInfo": lambda: ReportRegionInfo(
         base_address=_ADDR, size=0x1000, protect="PAGE_EXECUTE_READWRITE",
         type="MEM_PRIVATE", module_owner=None, file_offset=0x400, is_rwx_private=True,
