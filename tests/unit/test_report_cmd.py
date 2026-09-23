@@ -10,9 +10,11 @@ alone would not reach.
 import pytest
 
 from tests.fixtures.fakes import (
-    FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader, build_pe_header,
-    TEXT_SECTION_RX,
+    FakeMF, FakeStream, Module, Region, ThreadInfo, Thread, Ctx, mem_reader, build_pe_header,
+    TEXT_SECTION_RX, parsed_thread_info_stream, build_thread_info_stream,
+    ThreadInfoStreamDirectory, THREAD_INFO_ENTRY_SIZE,
 )
+from dumpex.core.memory import parse_thread_info_stream
 
 # A minimal, structurally-valid PE32+ header (one executable .text section)
 # for tests that need parse_pe_header() to actually confirm a candidate --
@@ -29,8 +31,11 @@ _RESOURCE_ONLY_PE_BYTES = build_pe_header([{
     "rawptr": 0x400, "rawsize": 0x2000, "chars": 0x40000000,  # READ only
 }])
 
+import io
+
 import dumpex.commands.report as report_mod
 import dumpex.core.memory as core_memory_mod
+import dumpex.hunt.injection as injection_mod
 from dumpex.commands.report import collect_report, cmd_report, render_report_console
 from dumpex.output.coverage import (
     SourceState, CoverageStatus, combine_coverage_reports, EXECUTION_COMPLETED, EXECUTION_PARTIAL,
@@ -38,6 +43,7 @@ from dumpex.output.coverage import (
 from dumpex.output.records import (
     TriageCardRecord, ReportThreadInfo, ReportRegionInfo, ReportIocString, Diagnostic,
     TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
+    TRIAGE_ANCHOR_TID_CURRENT_IP,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
 from dumpex.core.memory import (
@@ -46,7 +52,7 @@ from dumpex.core.memory import (
 
 
 def _mk_mf(monkeypatch, *, modules=None, threads=None, regions=None, read_map=None,
-           filename="test.dmp"):
+           filename="test.dmp", thread_contexts=None):
     mf = FakeMF()
     mf.filename = filename
     if modules is not None:
@@ -59,6 +65,12 @@ def _mk_mf(monkeypatch, *, modules=None, threads=None, regions=None, read_map=No
         reader = mem_reader(read_map)
         monkeypatch.setattr(report_mod, "read_region", reader)
         monkeypatch.setattr(core_memory_mod, "read_region", reader)
+    # `thread_contexts` -- base ThreadListStream entries carrying a live
+    # CONTEXT -- is independent of `threads` (ThreadInfoListStream's own
+    # StartAddress/CreateTime/etc): a card's CurrentIP is sourced from
+    # here, never derived from `threads`.
+    if thread_contexts is not None:
+        mf.threads = FakeStream(thread_contexts, "threads")
     return mf
 
 
@@ -166,6 +178,658 @@ def test_unbacked_thread_not_correlated_with_independent_addr_excluded(monkeypat
     assert card.verdict == VERDICT_CLEAN
     codes = [d.code for d in result.diagnostics]
     assert "REPORT_THREAD_NOT_CORRELATED_WITH_REGION" in codes
+
+
+def test_thread_card_retains_start_address_and_differing_current_ip(monkeypatch, capsys):
+    # The whole point of this issue's fix: a triage card's anchor thread
+    # keeps its recorded StartAddress and its independently-sourced,
+    # currently-differing current IP together -- neither one is derived
+    # from or overwrites the other. Asserted at both the record level and
+    # in the rendered Section 1 console text (see this issue's own
+    # cross-projection/console-coverage follow-up).
+    mf = _mk_mf(monkeypatch, modules=[], threads=[ThreadInfo(7, 0x2000)],
+                thread_contexts=[Thread(7, Ctx(0x9000))],
+                regions=[Region(0x2000, 0x2000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x2000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.start_address == "0x0000000000002000"
+    assert card.thread.ip == "0x0000000000009000"
+    assert card.thread.ip_reg == "RIP"
+    assert card.thread.start_address != card.thread.ip
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "Start Address" in body and "0x2000" in body
+    assert "Current IP" in body and "0x9000" in body
+    assert "(differs from Start Address)" in body
+
+
+def test_thread_card_missing_context_gives_unknown_current_ip(monkeypatch):
+    # No base ThreadListStream CONTEXT for this TID -- current IP must be
+    # unknown, never a silent fallback to the thread's own StartAddress.
+    mf = _mk_mf(monkeypatch, modules=[], threads=[ThreadInfo(7, 0x2000)],
+                regions=[Region(0x2000, 0x2000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x2000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.start_address == "0x0000000000002000"
+    assert card.thread.ip is None
+    assert card.thread.ip_reg is None
+
+
+def test_other_thread_in_region_also_carries_independent_current_ip(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[],
+                threads=[ThreadInfo(7, 0x2000), ThreadInfo(8, 0x2100)],
+                thread_contexts=[Thread(8, Ctx(0x2900))],
+                regions=[Region(0x2000, 0x2000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x2000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    others = {t.tid: t for t in card.other_threads_in_region}
+    assert others[7].ip is None            # no CONTEXT for TID 7
+    assert others[8].ip == "0x0000000000002900"   # independent of its own start (0x2100)
+    assert others[8].ip_reg == "RIP"
+
+
+def test_instruction_anchor_falls_back_to_labeled_start_address_when_no_live_ip(monkeypatch):
+    # Criterion: any fallback instruction anchor is explicitly labeled.
+    # With no live current IP available, the instruction window anchor
+    # must fall back to the thread's StartAddress, and say so by name.
+    mf = _mk_mf(monkeypatch, modules=[], threads=[ThreadInfo(7, 0x140001000)],
+                regions=[Region(0x140001000, 0x140001000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x140001000: b"\x90" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.instruction_context is not None
+    assert card.instruction_context.anchor_source == "thread_start_address"
+
+
+def test_instruction_anchor_prefers_live_ip_over_start_address(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[ThreadInfo(7, 0x140001000)],
+                thread_contexts=[Thread(7, Ctx(0x140002000))],
+                regions=[Region(0x140002000, 0x140002000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x140002000: b"\x90" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.instruction_context is not None
+    assert card.instruction_context.anchor_source == "thread_rip"
+    assert card.instruction_context.anchor_address == "0x0000000140002000"
+
+
+def test_tid_present_only_in_base_thread_list_is_found_not_missing(monkeypatch):
+    # A TID with no ThreadInfoListStream entry still exists in the dump:
+    # its own CONTEXT (current IP) is independent of ThreadInfoListStream
+    # and fully available -- it must not report "TID not found in dump"
+    # the way a TID absent from BOTH streams does.
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0x9000))])
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread is not None
+    assert card.thread.start_address is None
+    assert card.thread.ip == "0x0000000000009000"
+    assert card.thread.ip_reg == "RIP"
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_TID_NOT_FOUND" not in codes
+
+
+def test_base_only_tid_falls_back_to_current_ip_and_actually_examines_it(monkeypatch):
+    # AC1's inverse: an ABSENT start must not establish a clean thread
+    # either. A TID with no recorded start address but a resolvable
+    # current IP must have that IP's own region examined -- not silently
+    # resolve no anchor and report CLEAN over zero evidence.
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0x900010))],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.anchor_address == "0x0000000000900010"
+    assert card.region is not None
+    assert card.findings == ["rwx_private"]
+    assert card.verdict == VERDICT_SUSPICIOUS
+    # This TID exists only in the base ThreadListStream -- there is no
+    # ThreadInfoListStream record to check its captured current IP
+    # against, so whether that IP is disputed is undeterminable, not
+    # confirmed clean. That gap is itself worth surfacing (a distinct
+    # Scope note), even though the IP's REGION was fully examined.
+    assert card.thread.ip_context_conflict is None
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+    conflict_msgs = [d.message for d in result.diagnostics
+                     if d.code == "REPORT_CURRENT_IP_NOT_EXAMINED"]
+    assert any("undeterminable" in m for m in conflict_msgs)
+
+
+def test_base_only_tid_fallback_is_labeled_with_its_own_anchor_source(monkeypatch, capsys):
+    # The fallback substitutes the thread's own captured current IP for
+    # its (unrecorded) start address -- the one case where anchor_source
+    # == "tid" would otherwise be indistinguishable from an ordinary
+    # start-address anchor. Must be labeled with its own distinct value
+    # on the wire, and named on the console, rather than left for a
+    # consumer to infer from start_address being null.
+    from dumpex.output.records import TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_TID_CURRENT_IP
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0x900010))],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.anchor_source == TRIAGE_ANCHOR_TID_CURRENT_IP
+    assert card.anchor_source != TRIAGE_ANCHOR_TID
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "0x0000000000900010" in body
+    assert "no ThreadInfoListStream record" in body
+
+
+def test_ordinary_start_address_anchor_keeps_the_plain_tid_source(monkeypatch):
+    from dumpex.output.records import TRIAGE_ANCHOR_TID
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, 0x400100)],
+                modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    assert result.records[0].anchor_source == TRIAGE_ANCHOR_TID
+
+
+def test_base_only_tid_fallback_can_move_coverage_status_and_exit_code(monkeypatch):
+    # The fallback genuinely reads a region this card previously left
+    # unexamined -- unlike every other change in this round, that IS
+    # allowed to move coverage.status/the exit code, when the
+    # newly-examined region's own evidence is incomplete (here: a short
+    # read). See docs/user/OUTPUT_MIGRATION.md's v2.20 row for why this
+    # is the one documented exception.
+    from dumpex.output.coverage import CoverageStatus
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0x900010))],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x40})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.anchor_address == "0x0000000000900010"
+    assert card.findings == ["rwx_private"]
+    assert card.verdict == VERDICT_SUSPICIOUS
+    assert result.coverage.status == CoverageStatus.PARTIAL
+
+
+def test_no_start_and_no_usable_current_ip_gets_a_scope_diagnostic(monkeypatch, capsys):
+    # The narrowest residual gap: no recorded start AND a zero (unusable)
+    # current IP -- this card examines nothing, and must say so rather
+    # than silently reporting CLEAN as if a real, if boring, examination
+    # had occurred. This TID also exists only in the base ThreadListStream
+    # (no ThreadInfoListStream entry at all), so its dispute status is
+    # ALSO undeterminable -- that gap takes priority over the zero-IP
+    # wording, since "is this real" is a prior question to "is it zero".
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0))])
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.anchor_address is None
+    assert card.region is None
+    assert card.verdict == VERDICT_CLEAN
+    assert card.thread.ip_context_conflict is None
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "undeterminable" in body
+
+
+def test_zero_ip_with_real_clean_thread_info_record_gets_the_plain_zero_wording(
+        monkeypatch, capsys):
+    # Same zero, unusable current IP as above, but this time the TID has
+    # a REAL ThreadInfoListStream record with a clean DumpFlags -- the
+    # join CAN be performed and confirms no dispute, so the Scope note
+    # must fall back to the plain "no recorded start, zero IP" wording,
+    # not the undeterminable one.
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, None)],
+                thread_contexts=[Thread(7, Ctx(0))])
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.ip_context_conflict is False
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "examined no location for this thread at all" in body
+    # The DISPUTE was settled -- the record is real and its flags are
+    # clean -- so the Scope note must not reach for the undeterminable
+    # wording. (The coverage block separately reports that this record
+    # established no start address, which is a different fact.)
+    assert "cannot confirm whether this context is disputed" not in body
+
+
+def test_report_surfaces_context_conflict_when_dump_flags_invalid_but_base_context_parsed(
+        monkeypatch, capsys):
+    # A genuine disagreement between the dump's two thread sources: this
+    # TID's ThreadInfoListStream record flags its context as invalid, yet
+    # the base ThreadListStream's own CONTEXT parsed a value anyway. Must
+    # be preserved -- not silently treated as a confirmed value -- even
+    # when that value happens to fall inside the region this card
+    # examines (so no "outside the region" gap would otherwise fire).
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100,
+                                     dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    # The value is kept, not discarded, but its conflict travels with it.
+    assert card.thread.ip == "0x0000000000400200"
+    assert card.thread.ip_context_conflict is True
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+    conflict_msgs = [d.message for d in result.diagnostics
+                      if d.code == "REPORT_CURRENT_IP_NOT_EXAMINED"]
+    assert any("conflicts with its own ThreadInfoListStream record" in m for m in conflict_msgs)
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "context as invalid" in body   # Section 1's Current IP line
+    assert "conflicts with its own ThreadInfoListStream record" in body   # Scope: line
+
+
+def test_report_json_never_confirms_a_context_conflicted_ip_without_the_field(monkeypatch):
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, 0x400100,
+                                                   dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")],
+                thread_contexts=[Thread(7, Ctx(0x400200))])
+    result = collect_report(mf, report_tid="7")
+    d = result.records[0].thread.to_dict()
+    assert d["ip"] == "0x0000000000400200"
+    assert d["ip_context_conflict"] is True
+
+
+def test_other_threads_section_member_also_surfaces_context_conflict(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100),
+                         ThreadInfo(9, 0x400500,
+                                    dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")],
+                thread_contexts=[Thread(9, Ctx(0x400300))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    others = {t.tid: t for t in card.other_threads_in_region}
+    assert others[9].ip_context_conflict is True
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "context flagged invalid — not confirmed" in body
+
+
+def test_threads_and_report_agree_on_context_conflict_for_the_same_tid(monkeypatch):
+    # AC3: reproducible across projections -- --threads already renders
+    # [NO_CTX]-flagged threads as unconfirmed; --report must retain and
+    # show the identical fact for the same dump, not just a raw ip.
+    from dumpex.commands.threads import collect_threads, render_threads_console
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100,
+                                     dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")],
+                thread_contexts=[Thread(7, Ctx(0x400200))])
+    threads_result = collect_threads(mf)
+    report_result = collect_report(mf, report_tid="7")
+    assert threads_result.records[0].ip == report_result.records[0].thread.ip
+    assert "NO_CTX" in threads_result.records[0].flags
+    assert report_result.records[0].thread.ip_context_conflict is True
+
+
+def test_threads_and_report_agree_the_conflict_is_undeterminable_for_a_base_only_tid(
+        monkeypatch):
+    # A TID with no ThreadInfoListStream record at all has an
+    # undeterminable dispute status in BOTH projections -- neither
+    # command may report a confirmed False for a TID the other correctly
+    # reports as unconfirmable.
+    from dumpex.commands.threads import collect_threads
+    mf = _mk_mf(monkeypatch, thread_contexts=[Thread(7, Ctx(0x400200))])
+    threads_result = collect_threads(mf)
+    report_result = collect_report(mf, report_tid="7")
+    assert threads_result.records[0].ip == report_result.records[0].thread.ip
+    assert threads_result.records[0].ip_context_conflict is None
+    assert report_result.records[0].thread.ip_context_conflict is None
+
+
+def test_scope_note_names_the_independently_examined_region_not_the_threads_start(
+        monkeypatch, capsys):
+    # A TID with a known start and no usable current IP, given alongside
+    # an INDEPENDENT --report-addr whose region does not cover that
+    # start: the analysis actually covers the given address, and the
+    # scope note must say so rather than misattributing it to the
+    # thread's own recorded start.
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, 0x400100)],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7", report_addr="0x900000")
+    card = result.records[0]
+    assert card.anchor_address == "0x0000000000900000"
+    assert card.findings == ["rwx_private"]
+    assert card.verdict == VERDICT_SUSPICIOUS
+    codes_msgs = [(d.code, d.message) for d in result.diagnostics]
+    assert any(code == "REPORT_CURRENT_IP_NOT_EXAMINED"
+               and "covers the region at 0x900000" in msg
+               and "0x400100" in msg
+               for code, msg in codes_msgs)
+
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "covers TID 0x7's recorded start address only" not in body
+    assert "covers the region at 0x0000000000900000 only" in body
+
+
+def test_scope_note_still_names_start_address_when_examined_region_covers_it(monkeypatch):
+    # The common case must be unaffected: TID-only mode (no independent
+    # addr), region resolves from the thread's own start, and the region
+    # genuinely covers it -- "covers the recorded start address" is then
+    # an accurate claim, not a default assumption.
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, 0x400100)],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    codes_msgs = [(d.code, d.message) for d in result.diagnostics]
+    assert any(code == "REPORT_CURRENT_IP_NOT_EXAMINED"
+               and "covers only its recorded start address" in msg
+               for code, msg in codes_msgs)
+
+
+def test_scope_note_when_independent_addr_resolves_no_region_at_all(monkeypatch):
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(7, 0x400100)])
+    result = collect_report(mf, report_tid="7", report_addr="0x900000")
+    card = result.records[0]
+    assert card.region is None
+    codes_msgs = [(d.code, d.message) for d in result.diagnostics]
+    assert "REPORT_REGION_NOT_FOUND" in [c for c, _ in codes_msgs]
+    assert any(code == "REPORT_CURRENT_IP_NOT_EXAMINED"
+               and "resolved no region to analyze" in msg
+               and "0x400100" in msg
+               for code, msg in codes_msgs)
+
+
+def test_unrecorded_start_address_is_not_coerced_to_zero_or_flagged_unbacked(monkeypatch):
+    # A genuinely-unrecorded StartAddress must stay None, never a
+    # fabricated 0x0 -- which addr_to_module() would confirm as "not in
+    # any module" and turn into a false unbacked_thread/SUSPICIOUS
+    # verdict out of missing evidence, not a real finding.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, None)], thread_contexts=[Thread(7, Ctx(0x2010))])
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.start_address is None
+    assert card.thread.module_context is None
+    assert card.findings == []
+    assert card.verdict == VERDICT_CLEAN
+
+
+def test_divergent_current_ip_gets_a_scope_diagnostic_not_a_silent_clean(monkeypatch):
+    # AC1: "a normal start does not establish a clean thread." A
+    # module-backed StartAddress whose card examines only that region
+    # must not silently claim the thread overall is clean when its own
+    # captured current IP sits in a different, unexamined region.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)],
+                thread_contexts=[Thread(7, Ctx(0x900010))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.verdict == VERDICT_CLEAN   # findings/verdict computation is unchanged
+    assert card.findings == []
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+
+
+def test_current_ip_scope_gap_classification_matches_both_call_sites():
+    # The diagnostic (_current_ip_scope_diagnostic_text) and the console
+    # Scope: line (_current_ip_scope_console_text) are both built from
+    # this one classification, so they cannot drift apart for the same
+    # card -- pinned directly here across every state.
+    gap = report_mod._current_ip_scope_gap
+    (OK, CONFLICTED, CONFLICT_UNKNOWN, NO_IP_HAS_START, NO_IP_START_ELSEWHERE, NO_IP_NO_REGION,
+     NO_IP_NO_START, ZERO_HAS_START, ZERO_START_ELSEWHERE, ZERO_NO_REGION,
+     ZERO_NO_START, OUTSIDE, NO_REGION) = (
+        report_mod._IP_SCOPE_OK, report_mod._IP_SCOPE_CONFLICTED,
+        report_mod._IP_SCOPE_CONFLICT_UNKNOWN,
+        report_mod._IP_SCOPE_NO_IP_HAS_START, report_mod._IP_SCOPE_NO_IP_START_ELSEWHERE,
+        report_mod._IP_SCOPE_NO_IP_NO_REGION, report_mod._IP_SCOPE_NO_IP_NO_START,
+        report_mod._IP_SCOPE_ZERO_HAS_START, report_mod._IP_SCOPE_ZERO_START_ELSEWHERE,
+        report_mod._IP_SCOPE_ZERO_NO_REGION, report_mod._IP_SCOPE_ZERO_NO_START,
+        report_mod._IP_SCOPE_OUTSIDE_REGION, report_mod._IP_SCOPE_NO_REGION)
+
+    # ip examined, inside region
+    assert gap(start_addr=0x1000, ip=0x1500, region_base=0x1000, region_size=0x1000) == OK
+    # ip is real (including a captured zero) and inside/outside the
+    # region, but its own source conflicts -- wins regardless of
+    # containment or usability.
+    assert gap(start_addr=0x1000, ip=0x1500, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=True) == CONFLICTED
+    assert gap(start_addr=0x1000, ip=0x9000, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=True) == CONFLICTED
+    assert gap(start_addr=0x1000, ip=0, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=True) == CONFLICTED
+    assert gap(start_addr=None, ip=0, region_base=None, region_size=None,
+               ip_conflicted=True) == CONFLICTED
+    # ip_conflicted=None: this TID has no ThreadInfoListStream record at
+    # all to check ip against -- undeterminable, wins over confirmed-zero
+    # or region containment the same way a confirmed conflict does, and
+    # is never treated the same as ip_conflicted=False.
+    assert gap(start_addr=0x1000, ip=0x1500, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=None) == CONFLICT_UNKNOWN
+    assert gap(start_addr=0x1000, ip=0, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=None) == CONFLICT_UNKNOWN
+    assert gap(start_addr=None, ip=0, region_base=None, region_size=None,
+               ip_conflicted=None) == CONFLICT_UNKNOWN
+    assert CONFLICT_UNKNOWN != CONFLICTED
+    # ip=None (no CONTEXT captured at all) is unaffected by ip_conflicted
+    # being None -- there is nothing captured to be undeterminable about.
+    assert gap(start_addr=0x1000, ip=None, region_base=0x1000, region_size=0x1000,
+               ip_conflicted=None) == NO_IP_HAS_START
+    # ip=None: no CONTEXT was ever captured/parsed for this TID -- start
+    # known, examined region covers it / does not / no region at all /
+    # start also unknown.
+    assert gap(start_addr=0x1000, ip=None, region_base=0x1000, region_size=0x1000) \
+        == NO_IP_HAS_START
+    assert gap(start_addr=0x1000, ip=None, region_base=0x9000, region_size=0x1000) \
+        == NO_IP_START_ELSEWHERE
+    assert gap(start_addr=0x1000, ip=None, region_base=None, region_size=None) \
+        == NO_IP_NO_REGION
+    assert gap(start_addr=None, ip=None, region_base=None, region_size=None) \
+        == NO_IP_NO_START
+    # ip=0: a CONTEXT WAS captured and genuinely holds 0 -- same four
+    # region shapes, but a different classification and wording from the
+    # ip=None cases above: a captured zero must never be reported as "no
+    # CONTEXT captured/parsed".
+    assert gap(start_addr=0x1000, ip=0, region_base=0x1000, region_size=0x1000) \
+        == ZERO_HAS_START
+    assert gap(start_addr=0x1000, ip=0, region_base=0x9000, region_size=0x1000) \
+        == ZERO_START_ELSEWHERE
+    assert gap(start_addr=0x1000, ip=0, region_base=None, region_size=None) \
+        == ZERO_NO_REGION
+    assert gap(start_addr=None, ip=0, region_base=None, region_size=None) == ZERO_NO_START
+    # ip usable but outside the resolved region
+    assert gap(start_addr=0x1000, ip=0x9000, region_base=0x1000, region_size=0x1000) \
+        == OUTSIDE
+    # ip usable but no region resolved at all
+    assert gap(start_addr=None, ip=0x9000, region_base=None, region_size=None) == NO_REGION
+
+    for classification in (CONFLICTED, CONFLICT_UNKNOWN, NO_IP_HAS_START, NO_IP_START_ELSEWHERE,
+                            NO_IP_NO_REGION, NO_IP_NO_START, ZERO_HAS_START, ZERO_START_ELSEWHERE,
+                            ZERO_NO_REGION, ZERO_NO_START, OUTSIDE, NO_REGION):
+        diag = report_mod._current_ip_scope_diagnostic_text(
+            classification, tid=7, ip=0x9000, start_addr=0x1000, region_base=0x9000)
+        console = report_mod._current_ip_scope_console_text(
+            classification, tid=7, ip_hex="0x9000", start_hex="0x1000",
+            region_base_hex="0x9000")
+        assert diag is not None and console is not None, classification
+    assert report_mod._current_ip_scope_diagnostic_text(OK, tid=7, ip=0x9000) is None
+    assert report_mod._current_ip_scope_console_text(OK, tid=7, ip_hex="0x9000") is None
+
+    # The two ip=0 states must never reuse the ip=None wording -- pin the
+    # exact distinguishing phrases so a future edit can't quietly merge
+    # them back together.
+    zero_diag = report_mod._current_ip_scope_diagnostic_text(
+        ZERO_HAS_START, tid=7, ip=0, start_addr=0x1000, region_base=0x1000)
+    assert "captured current IP is 0x0" in zero_diag
+    assert "no usable CONTEXT captured/parsed" not in zero_diag
+    assert "no CONTEXT captured/parsed" not in zero_diag
+    no_ip_diag = report_mod._current_ip_scope_diagnostic_text(
+        NO_IP_HAS_START, tid=7, ip=None, start_addr=0x1000, region_base=0x1000)
+    assert "no CONTEXT captured/parsed for this thread" in no_ip_diag
+    assert "0x0" not in no_ip_diag
+
+    # CONFLICT_UNKNOWN (undeterminable) must never read as CONFLICTED
+    # (confirmed) -- the whole point of the tri-state split.
+    conflicted_diag = report_mod._current_ip_scope_diagnostic_text(
+        CONFLICTED, tid=7, ip=0x9000, start_addr=0x1000, region_base=0x1000)
+    unknown_diag = report_mod._current_ip_scope_diagnostic_text(
+        CONFLICT_UNKNOWN, tid=7, ip=0x9000, start_addr=0x1000, region_base=0x1000)
+    assert "undeterminable" in unknown_diag
+    assert "undeterminable" not in conflicted_diag
+    assert "conflicts with" in conflicted_diag
+    assert "conflicts with" not in unknown_diag
+    unknown_console = report_mod._current_ip_scope_console_text(
+        CONFLICT_UNKNOWN, tid=7, ip_hex="0x9000")
+    assert "undeterminable" in unknown_console
+
+
+def test_no_scope_diagnostic_when_current_ip_falls_inside_examined_region(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" not in codes
+
+
+def test_missing_current_ip_also_gets_a_scope_diagnostic(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+
+
+def test_other_threads_section_includes_a_thread_admitted_only_by_current_ip(monkeypatch):
+    # Section 3 membership by current IP alone, independent of
+    # StartAddress -- the "no new algorithm" reuse of the same region
+    # bounds check already used for StartAddress.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100), ThreadInfo(8, 0x9999000)],
+                thread_contexts=[Thread(8, Ctx(0x400300))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    others = {t.tid: t for t in card.other_threads_in_region}
+    assert 8 in others
+    assert others[8].start_address == "0x0000000009999000"   # own start, unrelated to this region
+    assert others[8].ip == "0x0000000000400300"
+    assert others[8].region_membership == "current"
+    assert others[7].region_membership == "start"
+    # Admission-only-by-current-ip must never synthesize a new finding.
+    assert 'unbacked_thread' not in card.findings
+
+
+def test_other_threads_section_member_with_no_start_address_is_not_unavailable(monkeypatch, capsys):
+    # A Section 3 member admitted only by its current IP, with no
+    # recorded start address at all, must be told apart from "the module
+    # list itself is unavailable" -- the two are different gaps
+    # (ReportThreadInfo.module_context's own None-vs-'unavailable' rule)
+    # and the console must not conflate them, even though ModuleListStream
+    # here is fully present.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)],
+                thread_contexts=[Thread(7, Ctx(0x400100)), Thread(9, Ctx(0x400500))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    others = {t.tid: t for t in card.other_threads_in_region}
+    assert others[9].start_address is None
+    assert others[9].module_context is None
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "module classification unavailable" not in body
+    assert "n/a — no start address to classify" in body
+    # The module attribution column always describes StartAddr, stated
+    # explicitly so it is never mistaken for describing CurrentIP.
+    assert "StartAddr→" in body
+
+
+def test_zero_current_ip_is_not_annotated_as_a_confirmed_divergent_location(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)], thread_contexts=[Thread(7, Ctx(0))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.ip == "0x0000000000000000"
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "differs from Start Address" not in body
+    assert "not treated as a confirmed execution address" in body
+
+
+def test_threads_and_report_agree_on_current_ip_for_the_same_tid(monkeypatch):
+    # AC3: reproducible across projections -- --threads and --report must
+    # never disagree about one thread's own captured current IP.
+    from dumpex.commands.threads import collect_threads
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)], thread_contexts=[Thread(7, Ctx(0x900010))])
+    threads_result = collect_threads(mf)
+    report_result = collect_report(mf, report_tid="7")
+    threads_rec = threads_result.records[0]
+    report_rec = report_result.records[0].thread
+    assert threads_rec.ip == report_rec.ip == "0x0000000000900010"
+    assert threads_rec.ip_reg == report_rec.ip_reg == "RIP"
+
+
+def test_base_thread_list_stream_is_attributed_in_coverage_sources(monkeypatch):
+    # current IP's own source (the base ThreadListStream) must be
+    # attributed in coverage.sources so a consumer can tell it was
+    # absent -- but its absence alone must not move coverage.status/exit
+    # code, unlike thread_info's: ThreadListStream is present in nearly
+    # every minidump, and moving status for every fixture that simply
+    # never sets mf.threads would be a much wider behavior change than
+    # this issue's own "labeling and evidence-retention" scope.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, "ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100)],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})   # full read -- isolates this from the
+                                                            # unrelated short-read partial
+    result = collect_report(mf, report_tid="7")
+    assert result.coverage.sources["threads"].state == SourceState.ABSENT
+    assert result.coverage.status == CoverageStatus.COMPLETE
 
 
 # ── string-search mode ────────────────────────────────────────────────────
@@ -1121,3 +1785,570 @@ def test_cmd_report_returns_command_result_and_prints(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "TRIAGE REPORT" in out
     assert "No committed region found" in out
+
+
+# -- ThreadInfoListStream records that disown their own fields -----------
+# A MINIDUMP_THREAD_INFO carrying MINIDUMP_THREAD_INFO_ERROR_THREAD (or
+# MINIDUMP_THREAD_INFO_INVALID_INFO) is documented as a placeholder: "no
+# thread information exists beyond the thread identifier". Its zeroed
+# StartAddress field is missing evidence, and a triage card must not turn
+# it into a confirmed one.
+
+def _error_thread_mf(monkeypatch, *, flag="MINIDUMP_THREAD_INFO_ERROR_THREAD"):
+    """A dump whose TID 7 has an invalid ThreadInfoListStream record with
+    a zeroed StartAddress, while its own independently captured CONTEXT
+    sits inside an ordinary module-backed region."""
+    return _mk_mf(
+        monkeypatch,
+        modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+        threads=[ThreadInfo(7, 0, dump_flags=flag)],
+        thread_contexts=[Thread(7, Ctx(0x400200))],
+        regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                        "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+        read_map={0x400000: b"\x00" * 0x1000})
+
+
+@pytest.mark.parametrize("flag", ["MINIDUMP_THREAD_INFO_ERROR_THREAD",
+                                  "MINIDUMP_THREAD_INFO_INVALID_INFO"])
+def test_invalid_thread_info_start_is_unknown_not_address_zero(monkeypatch, flag):
+    result = collect_report(_error_thread_mf(monkeypatch, flag=flag), report_tid="7")
+    card = result.records[0]
+    assert card.thread.start_address is None
+    assert card.thread.start_address_state == "invalid"
+    assert card.thread.dump_flags_state == "resolved"
+
+
+@pytest.mark.parametrize("flag", ["MINIDUMP_THREAD_INFO_ERROR_THREAD",
+                                  "MINIDUMP_THREAD_INFO_INVALID_INFO"])
+def test_invalid_thread_info_never_becomes_an_unbacked_thread_finding(monkeypatch, flag):
+    # Anchoring on a fabricated 0x0 would resolve to no module at all and
+    # promote a field the producer never wrote into a CONFIRMED
+    # unbacked-thread finding.
+    result = collect_report(_error_thread_mf(monkeypatch, flag=flag), report_tid="7")
+    card = result.records[0]
+    assert "unbacked_thread" not in card.findings
+    assert card.verdict == VERDICT_CLEAN
+    assert card.anchor_address != "0x0000000000000000"
+
+
+def test_invalid_thread_info_falls_back_to_the_independently_captured_ip(monkeypatch):
+    # The current IP comes from the base ThreadListStream's own CONTEXT
+    # and is untouched by the ThreadInfoListStream record's invalidity --
+    # so the card still has something real to examine.
+    result = collect_report(_error_thread_mf(monkeypatch), report_tid="7")
+    card = result.records[0]
+    assert card.anchor_source == TRIAGE_ANCHOR_TID_CURRENT_IP
+    assert card.anchor_address == "0x0000000000400200"
+    assert card.thread.ip == "0x0000000000400200"
+    assert card.region.base_address == "0x0000000000400000"
+
+
+def test_invalid_thread_info_is_reported_as_its_own_diagnostic(monkeypatch):
+    result = collect_report(_error_thread_mf(monkeypatch), report_tid="7")
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_THREAD_INFO_INVALID" in codes
+    (msg,) = [d.message for d in result.diagnostics if d.code == "REPORT_THREAD_INFO_INVALID"]
+    assert "start address unknown, not 0x0" in msg
+
+
+def test_invalid_thread_info_console_says_why_the_start_address_is_missing(monkeypatch, capsys):
+    mf = _error_thread_mf(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "record is marked invalid" in body
+    assert "no ThreadInfoListStream entry" not in body
+
+
+def test_invalid_thread_info_does_not_invalidate_an_independent_target_address(monkeypatch):
+    # An explicitly supplied --report-addr is the analyst's own anchor and
+    # is unaffected; only the thread's own disowned start address is. The
+    # current-IP fallback does not fire here -- it is only ever reached
+    # when no independent address was given.
+    result = collect_report(_error_thread_mf(monkeypatch), report_tid="7",
+                             report_addr="0x400000")
+    card = result.records[0]
+    assert card.anchor_source == TRIAGE_ANCHOR_ADDRESS
+    assert card.anchor_address == "0x0000000000400000"
+    assert card.thread.start_address is None
+    assert "unbacked_thread" not in card.findings
+
+
+def test_invalid_thread_info_member_of_section_three_contributes_no_finding(monkeypatch):
+    # Same rule for a Section 3 entry: a thread whose record disowns its
+    # own start address can only ever be admitted by its current IP, and
+    # never sets unbacked_thread.
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x500000, 0x1000, r"C:\ntdll.dll")],
+                threads=[ThreadInfo(7, 0x500100),
+                         ThreadInfo(9, 0, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")],
+                thread_contexts=[Thread(9, Ctx(0x500300))],
+                regions=[Region(0x500000, 0x500000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x500000: b"\x00" * 0x1000})
+    card = collect_report(mf, report_tid="7").records[0]
+    others = {t.tid: t for t in card.other_threads_in_region}
+    assert others[9].start_address is None
+    assert others[9].start_address_state == "invalid"
+    assert others[9].region_membership == "current"
+    assert "unbacked_thread" not in card.findings
+
+
+def test_invalid_thread_info_timings_are_unknown_not_zero(monkeypatch):
+    # KernelTime/UserTime live in the same record the producer never
+    # wrote, so they are unknown too -- not the zeros they were left at.
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                threads=[ThreadInfo(7, 0, kernel_time=0, user_time=0,
+                                     dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    card = collect_report(mf, report_tid="7").records[0]
+    assert card.thread.kernel_time_100ns is None
+    assert card.thread.user_time_100ns is None
+
+
+# -- DumpFlags values the upstream Enum parse cannot represent -----------
+# These go through the REAL ThreadInfoListStream parse, because the state
+# they pin -- a combined DumpFlags value that the installed library's
+# single-member Enum lookup silently drops -- only exists once real
+# stream bytes have been through that parser.
+
+def _real_stream_mf(monkeypatch, entries, *, ip=0x400200):
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(7, Ctx(ip))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    mf.thread_info = parsed_thread_info_stream(entries)
+    return mf
+
+
+def test_combined_dump_flags_still_confirm_a_context_conflict(monkeypatch, capsys):
+    # 0x14 == INVALID_CONTEXT | EXITED_THREAD: a value MiniDumpWriteDump
+    # emits routinely and the upstream Enum lookup leaves as None. The
+    # dispute it carries is the same fact as a lone INVALID_CONTEXT.
+    mf = _real_stream_mf(monkeypatch,
+                          [{"tid": 7, "dump_flags": 0x14, "start_address": 0x400100}])
+    assert mf.thread_info.infos[0].DumpFlags is None   # unrepresentable upstream
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.ip_context_conflict is True
+    assert card.thread.dump_flags_state == "resolved"
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in codes
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "conflicts with its own ThreadInfoListStream record" in body
+
+
+def test_combined_dump_flags_carrying_error_thread_still_disown_the_start_address(monkeypatch):
+    # ERROR_THREAD | EXITED_THREAD, again unrepresentable upstream.
+    mf = _real_stream_mf(monkeypatch,
+                          [{"tid": 7, "dump_flags": 0x05, "start_address": 0}])
+    card = collect_report(mf, report_tid="7").records[0]
+    assert card.thread.start_address is None
+    assert card.thread.start_address_state == "invalid"
+    assert "unbacked_thread" not in card.findings
+
+
+def test_a_flagless_thread_is_still_a_confirmed_absence_of_conflict(monkeypatch):
+    # The other half of the same fix: 0x0 must stay a CONFIRMED "no flags
+    # set", not degrade to undeterminable just because the upstream Enum
+    # lookup also leaves it None.
+    mf = _real_stream_mf(monkeypatch,
+                          [{"tid": 7, "dump_flags": 0x00, "start_address": 0x400100}])
+    assert mf.thread_info.infos[0].DumpFlags is None
+    card = collect_report(mf, report_tid="7").records[0]
+    assert card.thread.ip_context_conflict is False
+    assert card.thread.dump_flags_state == "resolved"
+    assert card.thread.start_address_state == "recorded"
+
+
+def test_unreadable_dump_flags_are_never_reported_as_confirmed_clean(monkeypatch, capsys):
+    # The state the recovery itself cannot reach a value for: neither the
+    # raw UINT32 nor the upstream Enum lookup establishes anything, so no
+    # fact derived from these flags may be published as confirmed.
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                threads=[ThreadInfo(7, 0x400100, raw_dump_flags=None)],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.ip_context_conflict is None
+    assert card.thread.dump_flags_state == "unresolved"
+    # The recorded address survives -- it is real data -- but is labelled
+    # as something nothing vouches for.
+    assert card.thread.start_address == "0x0000000000400100"
+    assert card.thread.start_address_state == "unverified"
+    assert "REPORT_CURRENT_IP_NOT_EXAMINED" in [d.code for d in result.diagnostics]
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "own DumpFlags could not be read" in body
+
+
+def test_unverified_start_address_cannot_confirm_an_unbacked_thread(monkeypatch):
+    # An address outside every known module, from a record whose own
+    # DumpFlags could not be read: reported, diagnosed, and kept out of
+    # the verdict.
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                threads=[ThreadInfo(7, 0x900000, raw_dump_flags=None)],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.start_address == "0x0000000000900000"
+    assert "unbacked_thread" not in card.findings
+    assert "REPORT_THREAD_START_UNVERIFIED" in [d.code for d in result.diagnostics]
+
+
+def test_unverified_start_is_never_rendered_as_a_confirmed_unbacked_thread(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                threads=[ThreadInfo(7, 0x900000, raw_dump_flags=None)],
+                regions=[Region(0x900000, 0x900000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_READWRITE", "MEM_PRIVATE")],
+                read_map={0x900000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    assert result.records[0].thread.module_context == MODULE_CONTEXT_UNREGISTERED
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "NOT IN ANY MODULE" not in body
+    assert "not in any module, but this thread's own DumpFlags could not be read" in body
+
+
+def test_threads_and_report_agree_on_a_combined_dump_flags_value(monkeypatch):
+    # The same reproducibility rule the single-value case already pins:
+    # one derivation, so the two commands cannot disagree about one TID.
+    from dumpex.commands.threads import collect_threads
+    mf = _real_stream_mf(monkeypatch,
+                          [{"tid": 7, "dump_flags": 0x14, "start_address": 0x400100}])
+    threads_result = collect_threads(mf)
+    report_result = collect_report(mf, report_tid="7")
+    assert threads_result.records[0].flags == ["EXITED", "NO_CTX"]
+    assert threads_result.records[0].ip_context_conflict is True
+    assert report_result.records[0].thread.ip_context_conflict is True
+
+
+# -- unreadable flags: one cause, told the same way in JSON and console --
+# The record EXISTS; only its DumpFlags could not be read. Every output
+# that explains an undeterminable dispute has to say that, not that the
+# record is missing.
+
+def _unreadable_flags_mf(monkeypatch):
+    return _mk_mf(monkeypatch,
+                  modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                  threads=[ThreadInfo(7, 0x400100, raw_dump_flags=None)],
+                  thread_contexts=[Thread(7, Ctx(0x400200))],
+                  regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                  "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                  read_map={0x400000: b"\x00" * 0x1000})
+
+
+def test_unreadable_flags_scope_line_agrees_with_the_record_it_describes(monkeypatch, capsys):
+    mf = _unreadable_flags_mf(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    card = result.records[0]
+    assert card.thread.to_dict()["dump_flags_state"] == "unresolved"
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "own DumpFlags could not be read" in body
+    assert "no ThreadInfoListStream record" not in body
+
+
+def test_unreadable_flags_diagnostic_and_scope_line_name_the_same_cause(monkeypatch, capsys):
+    mf = _unreadable_flags_mf(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    (msg,) = [d.message for d in result.diagnostics
+              if d.code == "REPORT_CURRENT_IP_NOT_EXAMINED"]
+    assert "no record at all, or a record whose flags could not be read" in msg
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    # Both outputs derive from one classification, so neither may assert a
+    # cause the other's own record contradicts.
+    assert "this thread's own DumpFlags could not be read" in body
+
+
+def test_absent_record_still_says_the_record_is_absent(monkeypatch, capsys):
+    # The other half of the same distinction: an actually-missing record
+    # must keep its own wording rather than inherit the widened one.
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    assert result.records[0].thread.to_dict()["dump_flags_state"] == "absent"
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    body = capsys.readouterr().out
+    assert "no ThreadInfoListStream record for this TID" in body
+    assert "own DumpFlags could not be read" not in body
+
+
+# -- the three causes of a null start address, told apart everywhere ----
+# `start_address: null` has three different meanings, and the structured
+# result already distinguishes them. Every rendered explanation has to
+# agree with the record it is describing.
+
+def _record_without_a_start_address_field(monkeypatch):
+    """A dump whose TID 7 HAS a ThreadInfoListStream record with readable
+    DumpFlags, whose declared record size simply stops before the
+    StartAddress field."""
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    mf.thread_info = parsed_thread_info_stream(
+        [{"tid": 7, "dump_flags": 0x0, "start_address": 0x500100}], size_of_entry=8)
+    return mf
+
+
+def test_a_record_without_a_start_address_field_is_structurally_distinct(monkeypatch):
+    card = collect_report(_record_without_a_start_address_field(monkeypatch),
+                           report_tid="7").records[0]
+    d = card.thread.to_dict()
+    assert d["start_address"] is None
+    assert d["start_address_state"] == "absent"
+    assert d["dump_flags_state"] == "resolved"     # the record IS there, and readable
+
+
+def _start_address_line(body: str) -> str:
+    """Section 1's own `Start Address` line -- the line whose whole job is
+    to say why there is no address. Asserted on by itself so a cause
+    named there cannot be confused with the coverage block's own
+    sentence, which necessarily enumerates every cause."""
+    (line,) = [l for l in body.splitlines() if "Start Address" in l]
+    return line
+
+
+def test_a_record_without_a_start_address_field_is_not_called_a_missing_record(
+        monkeypatch, capsys):
+    mf = _record_without_a_start_address_field(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    line = _start_address_line(capsys.readouterr().out)
+    assert "record carried no StartAddress field" in line
+    assert "no ThreadInfoListStream entry" not in line
+    assert "marked invalid" not in line
+
+
+def test_each_cause_of_a_null_start_address_gets_its_own_console_wording(monkeypatch, capsys):
+    # No record at all.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(7, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    result = collect_report(mf, report_tid="7")
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    absent = _start_address_line(capsys.readouterr().out)
+    assert "no ThreadInfoListStream entry for this thread" in absent
+
+    # A record that disowns every field but its ThreadId.
+    mf = _error_thread_mf(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    invalid = _start_address_line(capsys.readouterr().out)
+    assert "record is marked invalid" in invalid
+    assert "carried no StartAddress field" not in invalid
+
+    # A record that simply stops before the field.
+    mf = _record_without_a_start_address_field(monkeypatch)
+    result = collect_report(mf, report_tid="7")
+    render_report_console(result.records, result.coverage, result.diagnostics, [],
+                          result.summary, mf, 4, False)
+    no_field = _start_address_line(capsys.readouterr().out)
+    assert "carried no StartAddress field" in no_field
+
+    assert len({absent, invalid, no_field}) == 3
+
+
+def test_threads_tells_the_same_three_causes_apart_for_the_same_dumps(monkeypatch, capsys):
+    from dumpex.commands.threads import collect_threads, render_threads_console
+
+    mf = _record_without_a_start_address_field(monkeypatch)
+    result = collect_threads(mf)
+    (rec,) = result.records
+    assert (rec.start_address_state, rec.dump_flags_state) == ("absent", "resolved")
+    render_threads_console(result.records, result.coverage)
+    body = capsys.readouterr().out
+    assert "carried no StartAddress field" in body
+    assert "requires ThreadInfoListStream" not in body
+
+
+def test_injection_names_the_missing_field_among_the_causes_it_holds_back(monkeypatch):
+    # The hunter excludes the same record, and its own account of why has
+    # to cover this cause too rather than asserting the flags were bad.
+    from dumpex.hunt.injection import _build_injection_report
+
+    report = _build_injection_report(_record_without_a_start_address_field(monkeypatch))
+    checks = {r.check: r for r in report.results}
+    assert "injection.unbacked_thread_startaddress" not in checks
+    excluded = checks["injection.start_address_not_established"]
+    assert "carried no StartAddress field at all" in excluded.inference
+
+
+# -- an incomplete thread source reaches every command's own coverage ---
+# A gap one command reports as partial cannot read as complete in
+# another for the same dump: the analyst would take whichever answer they
+# happened to run.
+
+def _mf_for_every_command(monkeypatch, parsed):
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(1, Ctx(0x400200))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    mf.thread_info = parsed
+    monkeypatch.setattr(injection_mod, "read_region", mem_reader({0x400000: b"\x00" * 0x1000}))
+    return mf
+
+
+def _undelivered_record_stream():
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x0, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 3)
+    return parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+
+
+def test_an_undelivered_record_is_partial_in_report_as_well_as_threads(monkeypatch):
+    from dumpex.commands.threads import collect_threads
+
+    mf = _mf_for_every_command(monkeypatch, _undelivered_record_stream())
+    assert collect_threads(mf).coverage.status == CoverageStatus.PARTIAL
+    coverage = collect_report(mf, report_tid="1").coverage
+    assert coverage.status == CoverageStatus.PARTIAL
+    assert "THREAD_INFO_STREAM_TRUNCATED" in [l.code.value for l in coverage.limitations]
+
+
+def test_an_undelivered_record_stops_injection_reporting_a_clean_complete_result(monkeypatch):
+    mf = _mf_for_every_command(monkeypatch, _undelivered_record_stream())
+    f = injection_mod._hunt_injection(mf, verbose=False)
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("more thread record(s) than this dump delivered" in r
+               for r in f["coverage_reasons"])
+
+
+def _record_without_a_start_address_stream():
+    return parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x500100}], size_of_entry=8)
+
+
+def test_a_record_missing_its_start_address_field_is_partial_in_every_command(monkeypatch):
+    from dumpex.commands.threads import collect_threads
+
+    mf = _mf_for_every_command(monkeypatch, _record_without_a_start_address_stream())
+    for coverage in (collect_threads(mf).coverage, collect_report(mf, report_tid="1").coverage):
+        assert coverage.status == CoverageStatus.PARTIAL
+        assert "THREAD_START_ADDRESS_UNAVAILABLE" in [l.code.value for l in coverage.limitations]
+
+    f = injection_mod._hunt_injection(mf, verbose=False)
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("establish no start address" in r for r in f["coverage_reasons"])
+
+
+def test_a_fully_delivered_clean_stream_still_reports_complete(monkeypatch):
+    # The other half: neither limitation may fire for a dump whose thread
+    # records all arrived and all carry an address.
+    from dumpex.commands.threads import collect_threads
+
+    mf = _mf_for_every_command(monkeypatch, parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100}]))
+    for coverage in (collect_threads(mf).coverage, collect_report(mf, report_tid="1").coverage):
+        codes = [l.code.value for l in coverage.limitations]
+        assert "THREAD_INFO_STREAM_TRUNCATED" not in codes
+        assert "THREAD_START_ADDRESS_UNAVAILABLE" not in codes
+
+
+# -- a TID this stream never covered is a gap in every command ----------
+# ThreadInfoListStream is present and delivered everything it declared --
+# it simply does not describe one of the threads the base
+# ThreadListStream lists. Nothing about the stream itself is missing, so
+# the whole-stream source requirement stays silent and this gap has to be
+# reported on its own.
+
+def _mf_missing_one_tids_record(monkeypatch):
+    mf = _mk_mf(monkeypatch,
+                modules=[Module(0x400000, 0x1000, r"C:\ntdll.dll")],
+                thread_contexts=[Thread(7, Ctx(0x400200)), Thread(8, Ctx(0x400300))],
+                regions=[Region(0x400000, 0x400000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READ", "MEM_IMAGE")],
+                read_map={0x400000: b"\x00" * 0x1000})
+    mf.thread_info = parsed_thread_info_stream(
+        [{"tid": 7, "dump_flags": 0x0, "start_address": 0x400100}])
+    monkeypatch.setattr(injection_mod, "read_region", mem_reader({0x400000: b"\x00" * 0x1000}))
+    return mf
+
+
+def test_a_card_for_a_tid_with_no_record_is_partial_not_complete(monkeypatch):
+    mf = _mf_missing_one_tids_record(monkeypatch)
+    coverage = collect_report(mf, report_tid="8").coverage
+    assert coverage.status == CoverageStatus.PARTIAL
+    assert "SOURCE_KEY_MISMATCH" in [l.code.value for l in coverage.limitations]
+    assert any("missing from ThreadInfoListStream" in r for r in coverage.reasons)
+
+
+def test_a_card_for_a_tid_that_does_have_a_record_stays_complete(monkeypatch):
+    # The gap belongs to the thread that has it. A card anchored on a
+    # thread this stream fully describes is not degraded by another
+    # thread's missing record.
+    coverage = collect_report(_mf_missing_one_tids_record(monkeypatch),
+                               report_tid="7").coverage
+    assert coverage.status == CoverageStatus.COMPLETE
+    assert list(coverage.limitations) == []
+
+
+def test_injection_counts_a_thread_with_no_record_as_a_start_it_cannot_check(monkeypatch):
+    mf = _mf_missing_one_tids_record(monkeypatch)
+    f = injection_mod._hunt_injection(mf, verbose=False)
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("have no ThreadInfoListStream record" in r for r in f["coverage_reasons"])
+
+
+def test_every_command_agrees_the_same_dump_is_incomplete(monkeypatch):
+    from dumpex.commands.threads import collect_threads
+
+    mf = _mf_missing_one_tids_record(monkeypatch)
+    assert collect_threads(mf).coverage.status == CoverageStatus.PARTIAL
+    assert collect_report(mf, report_tid="8").coverage.status == CoverageStatus.PARTIAL
+    assert injection_mod._hunt_injection(mf, verbose=False)["coverage_status"] == "partial"
+
+
+def test_a_missing_record_and_a_record_that_came_up_short_are_named_apart(monkeypatch):
+    # Both are "no start address could be established", and each has to
+    # say which one it is -- one sentence must not be used for the other.
+    missing = collect_report(_mf_missing_one_tids_record(monkeypatch),
+                              report_tid="8").coverage
+    short = collect_report(
+        _mf_for_every_command(monkeypatch, _record_without_a_start_address_stream()),
+        report_tid="1").coverage
+    assert [l.code.value for l in missing.limitations] == ["SOURCE_KEY_MISMATCH"]
+    assert [l.code.value for l in short.limitations] == ["THREAD_START_ADDRESS_UNAVAILABLE"]
+    assert missing.reasons != short.reasons

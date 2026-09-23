@@ -20,7 +20,10 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from dumpex.core.memory import get_thread_contexts as _real_get_thread_contexts
+from dumpex.core.memory import (
+    get_thread_contexts as _real_get_thread_contexts,
+    enriched_thread_contexts as _real_enriched_thread_contexts,
+)
 from tests.fixtures.fakes import FAKE_DUMP_BYTES, FakeMF
 import dumpex.hunt.stomping as stomping
 import dumpex.hunt.pipe as pipemod
@@ -28,7 +31,12 @@ import dumpex.hunt.cs_beacon as cs_beacon
 import dumpex.rules_pkg.loader as _rules_loader
 import dumpex.hunt.yara_hunt as _yara_hunt_mod
 
-_THREAD_CONTEXT_MODULES = (stomping, pipemod, cs_beacon)
+# stomping/pipe read the ThreadInfoListStream-joined enriched_thread_contexts
+# (needed for ip_context_conflict qualification); cs_beacon still reads the
+# raw, single-stream get_thread_contexts -- each module-attribute name is
+# reset to its OWN real implementation below, never the other one's.
+_ENRICHED_THREAD_CONTEXT_MODULES = (stomping, pipemod)
+_RAW_THREAD_CONTEXT_MODULES = (cs_beacon,)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -64,22 +72,34 @@ def _fake_dump_file_on_disk(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _reset_thread_context_monkeypatches():
     """
-    hunt/stomping/, hunt/pipe/, and hunt/cs_beacon/ all hold
-    get_thread_contexts as a plain module attribute (imported from
+    hunt/stomping/, hunt/pipe/, and hunt/cs_beacon/ all hold their own
+    thread-context reader as a plain module attribute (imported from
     dumpex.core.memory) rather than always calling through the module,
     specifically so tests can monkeypatch it to inject a synthetic
     RIP/EIP. That attribute persists at module scope for the rest of the
     process — a test that patches it and doesn't clean up would leak a
     stale thread context into every later test that happens to run after
     it, regardless of file or execution order (a real bug hit during
-    phase-two development). This fixture resets all of them to the real
-    implementation before AND after every test, so no test's outcome can
-    depend on what ran before it.
+    phase-two development). This fixture resets all of them to their own
+    real implementation before AND after every test, so no test's outcome
+    can depend on what ran before it.
+
+    stomping/pipe read enriched_thread_contexts (the ThreadInfoListStream-
+    joined version, needed to qualify a disputed/undeterminable RIP);
+    cs_beacon still reads the raw, single-stream get_thread_contexts --
+    each module gets its OWN real implementation reset, never the other's,
+    or a module reset to a function it never actually calls would leave
+    its true monkeypatch target unreset and silently fail to guard against
+    the exact leak this fixture exists to prevent.
     """
-    for mod in _THREAD_CONTEXT_MODULES:
+    for mod in _ENRICHED_THREAD_CONTEXT_MODULES:
+        mod.enriched_thread_contexts = _real_enriched_thread_contexts
+    for mod in _RAW_THREAD_CONTEXT_MODULES:
         mod.get_thread_contexts = _real_get_thread_contexts
     yield
-    for mod in _THREAD_CONTEXT_MODULES:
+    for mod in _ENRICHED_THREAD_CONTEXT_MODULES:
+        mod.enriched_thread_contexts = _real_enriched_thread_contexts
+    for mod in _RAW_THREAD_CONTEXT_MODULES:
         mod.get_thread_contexts = _real_get_thread_contexts
 
 

@@ -12,7 +12,7 @@ trampolines are not specially excluded and may require analyst review.
 """
 from minidump.minidumpfile import MinidumpFile
 from dumpex.rules_pkg.loader import get_rules
-from dumpex.core.memory import (get_modules, get_memory_regions, get_thread_contexts,
+from dumpex.core.memory import (get_modules, get_memory_regions, enriched_thread_contexts,
     read_region, va_to_file_offset)
 from dumpex.hunt._runtime import HunterRuntime
 
@@ -40,7 +40,7 @@ def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
-    thread_contexts = get_thread_contexts(mf)
+    thread_contexts = enriched_thread_contexts(mf)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
     module_list_available = bool(mf.modules and mf.modules.modules)
 

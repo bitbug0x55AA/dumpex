@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.20.schema.json",
   "title": "dumpex v2 structured output (schema_version 2.20)",
-  "description": "Validates the v2.20 `--json` envelope for --list, --modules, --threads, --process, --sysinfo, --handles, --profile, --diff, --extract, --strings, --report, and --hunt. `result.kind` selects the record and summary shapes. Record objects are closed where declared; `processRecord.peb_extended` is the only optional record property and appears only for `--process --verbose`. Hunt investigation actions are present only for `selected == \"all\"` and describe unresolved coverage targets rather than verdicts. Later same-version addition (still schema_version 2.13): `coverageLimitation.code` may be `SCAN_ITEMS_UNACCOUNTED` -- N region(s) or segment(s) whose outcome a scan's own eligibility ledger cannot reconcile, either taken into scope with no outcome recorded or an outcome recorded for items never taken into scope. It always emits `targets: []` (an unreconciled item is one whose identity the scan never captured) and carries `affected_count`; `scope` names the scan layer (sleep_mask, entropy, or decode) when `source` is \"encoding_scan\". The `code` field is open, so this is additive for consumers pinned to 2.13. v2.14 exposes `--hunt-addr` targeted rescans: every `hunt` summary carries a closed `scan_scope` tag naming what the invocation covered, and a targeted result's hunter details additionally carry one `targeted_scope` entry per coverage closure. Full-scope hunt details omit `targeted_scope` entirely rather than emitting null. A `hunt` result's `summary.scan_scope` is cross-checked against the rest of the document: a `targeted` tag pins `summary.selected` to the same analyzer (which in turn pins the single record's `hunter`), pins `source`/`scopes` to that analyzer's registered targeted capability, and requires `targeted_scope` on the record's details; a `full` tag forbids `targeted_scope`. Later same-version addition (still schema_version 2.14, which is unreleased): a `targeted_scope` entry additionally carries `applicability_reason` and `measurements`, and its `coverage_status` may be \"not_applicable\" -- the source's own descriptor-eligibility gate declined the target, which is the boundary of what that source speaks about rather than a gap in what it did. A consumer must not count \"not_applicable\" as a coverage failure: the record's `coverage.status` does not, and a rescan whose every closure is inapplicable reports `coverage.status` \"not_evaluated\". v2.15 adds `coverage.missed_bytes`, required on every result and on every hunter record: how much captured in-scope memory the run's own coverage gaps add up to. `state` labels the figure -- \"exact\" (every gap's extent is established), \"lower_bound\" (some gaps could not be measured, so `bytes` is a floor), or \"unknown\" (no gap's extent is established, and `bytes` is null rather than 0). `complete` is true exactly when `unquantified_gaps` is 0, which is exactly when `state` is \"exact\". A consumer thresholding on `bytes` must read `state` first: null and a lower bound both mean something other than \"this much was missed\", and 0 with state \"exact\" is the only way to say nothing capturable was missed. `bytes` measures MEMORY: it is a union of address ranges, so one physical region named by several gaps at once (obfuscation's three scan layers skip overlapping region sets, and one region can exceed two or three of their caps) is counted once. `quantified_gaps` counts the gap records, `distinct_ranges` the physical ranges they cover once merged, and `distinct_ranges <= quantified_gaps` always; neither counts bytes, and neither does a limitation's own `affected_count`. The same version adds `examined_size` and `unexamined_size` to `scanTarget`: how many of that target's captured bytes a scan actually looked at, and the remainder it did not. Both are null when the extent was never established, which is not the same claim as 0; `unexamined_size` is derived from `captured_size - examined_size`, and the aggregate is the union of exactly those per-target remainders, so the two cannot disagree. `coverage.status` keeps its three values and its meaning: this grades a `partial`, it does not redefine when one is reported. v2.16 adds `eligible_bytes`, `unscanned_pass_bytes` and `unscanned_fraction` to `coverage.missed_bytes`: how much scanning work the run had in front of it, how much of that work did not happen, and the second as a proportion of the first. The proportion is what lets one run be judged on its own -- 3.2 MB unscanned is a rounding error out of 11.4 GB eligible and almost the whole hunt out of 3.4 MB -- so a single threshold can be applied across dumps of any size. Both are measured PER SCAN PASS and summed over the passes, which is a different basis from `bytes`: a hunter running three passes over one region had three passes' worth of work in front of it, and a region only one pass skipped is one pass's worth of work not done. `bytes` keeps its own basis (memory with at least one unanswered question, unioned across passes, what a re-collection would have to recover) and is deliberately NOT the numerator here: dividing it by a per-pass scope would report a region EVERY pass skipped as two-thirds scanned. Within one pass the unexamined ranges are unioned, so a segment reported under two codes at once costs that pass's work once; across passes they are summed. A pass's scope includes items a whole-scan budget left unreached, so every gap it reports is inside the scope it is measured against and `unscanned_pass_bytes <= eligible_bytes` always. The scope is per producer and reflects that producer's own filters, so two hunters over one dump legitimately report different denominators; it is a property of the hunter, never of the dump. `eligible_bytes` and `unscanned_fraction` are null when no denominator was established -- a producer that measures no eligibility, a scan loop that took items into scope without measuring them, and every `coverage.status` of \"not_evaluated\", which has no work for a gap to be a proportion of. Null and 0 are different answers: 0 says a scan measured its scope and had no capturable memory in front of it. `unscanned_fraction` is additionally null when `state` is \"unknown\": null is the only honest answer where no gap has a measured extent, and 0 is reserved for a run that missed nothing. Where it is non-null it is exactly `unscanned_pass_bytes / eligible_bytes` and carries `state`'s own qualifier -- an exact proportion when \"exact\", a floor under the real one when \"lower_bound\". The `--hunt` document-level `coverage.missed_bytes` reports `eligible_bytes` and `unscanned_fraction` as null: eligibility is each hunter's own, and there is no dump-wide scope to roll up into. `coverage.status`, verdicts, scores, and exit codes are untouched. Report enrichment adds one process-wide `result.summary.process_enrichment` and four card-scoped projections on every triageCardRecord (`exception_context`, `allocation_neighborhood`, `handle_correlation`, `string_context`). Each carries an enrichmentSection stating its scope, missing/partial/complete evidence state, eligible and included counts, cap, truncation, provenance, and limitations. Enrichment is captured evidence only: it never appears in `findings`, `finding_details`, or `verdict`, and it cannot change coverage status or exit behavior. v2.18 adds PE, instruction, and IAT correlation to report enrichment: one process-wide `result.summary.pe_context` (the main image's identity and the main-image correlation layer's consistent/conflict/unavailable tally plus its retained `conflict` observations), and three more card-scoped projections on every triageCardRecord -- `anchor_pe_context` (the anchor placed against the PE image that owns it: headers/code/data/import_iat/relocation/unmapped/outside_image, or private/unresolved when no module owns it, with the section's declared R/W/X versus the live region protection), `instruction_context` (a bounded x86/x64 instruction window at the highest-priority approved anchor source -- an exception RIP, a live thread RIP, a thread StartAddress, then the card anchor -- decoded through the isolated disassembler seam every supported installation carries, with direct branch targets and mechanically-proven indirect memory-slot targets resolved to module/section/region), and `iat_correlation` (the anchor module's import table summary plus only the slots a window branch targets or whose live thunk target is unusual). Each carries an enrichmentSection with the same missing/partial/complete semantics. `instruction_context.decoder_state` is `decoded`, `not_run`, `unavailable` (no decoder answered: a broken installation or build), `unsupported_arch` (a determined non-x86 machine), `arch_undetermined` (no signal fixed the architecture), `decode_error` (an invalid opcode with room for a whole instruction after it), or `undecoded_tail` (a short trailing run did not decode -- an invalid opcode or a cut-short instruction, indistinguishable); every value but `decoded` makes the section `partial`, as does a window the byte cap or the end of the capture cut short. The decode architecture comes from the COFF `Machine` of the module that owns the chosen anchor, then a WOW64 thread context, then the main image `Machine` (before the host SystemInfo), then the anchor thread's context flavour, then SystemInfo -- so an anchor in unbacked private code is still decoded and a WOW64 process is decoded x86. A `branch_targets` entry with `kind` `indirect_memory` carries `iat_classification_uncertain: true` when the run could not confirm the slot is outside the IAT. A `pe_context` conflict observation, a redirected or private IAT thunk target, and a declared-versus-live protection mismatch are investigation leads, never verdict dimensions: v2.18 changes no `findings`, `finding_details`, `verdict`, `coverage.status`, score, confidence, Finding identity, or exit code. v2.19 exposes the canonical main-image PE profile through `--process`: every processRecord now carries a required, always-present `pe_image` object holding the profile dumpex.core.pe_profile collects at the PEB-reported image base and the consistency observations dumpex.core.pe_correlation derives over it -- the same two objects `--report`'s `summary.pe_context` projects, so the two commands cannot disagree about one dump. `collected` says whether a profile was built and `unavailable_reason` (`no_image_base` or `header_unreadable`) says why when it was not; an uncollected profile leaves every fact null and every array empty and changes nothing about the process identity fields beside it. `pe_image` carries the image's architecture and 32/64-bit format, its actual and preferred base with the signed relocation delta and the relocation evidence around it, SizeOfImage/SizeOfHeaders/alignments, the declared and decoded section counts, the entry point resolved into the process with its section and memory context, the full decoded section table, all sixteen data-directory descriptors, the acquisition's stage ladder and its requested/captured/read byte facts with any attributed bounded stop and the exact unexamined ranges, and every evaluated consistency observation with its three-valued state, dumpex-authored reason, evidence sources, and compared operands. `structural_state` is the profile's own component rollup (`complete`, `partial`, `unavailable`, `malformed`, `declared_absent`) and answers \"is the image defective?\"; the legacy `identity_evidence.main_image_pe` `checked`/`valid`/`reason` triple is unchanged and keeps answering \"will re-reading these bytes help?\" -- neither is derived from the other, and `collected` equals `checked` whenever an image base was normalized. The complete record is emitted regardless of `--verbose`: verbosity changes console presentation, never evidence collection. This PE evidence is optional and self-contained -- it adds no coverage source, no limitation code, no verdict, score, confidence, or ATT&CK field, and moves no `coverage.status` and no exit code, and its absence can neither erase nor downgrade an otherwise available process identity fact. The `reportPeObservation` def of v2.18 is renamed `peObservation` and is now shared by `summary.pe_context` and `pe_image`: one observation shape, two consumers, identical meanings. Every other v2.18 shape is unchanged. v2.20 widens `anchorPeContext.classification`'s \"no module owns this\" bucket from two values to four: \"private\" (confirmed MEM_PRIVATE) is unchanged, and \"unresolved\" (no module AND no region place the anchor) is unchanged, but the prior blanket \"mapped\"-shaped case is now three distinct, only-ever-CONFIRMED values -- \"mapped\" (confirmed MEM_MAPPED), \"unregistered_image\" (confirmed MEM_IMAGE with no module-list entry -- a manually mapped or stomped module), and \"region_type_unavailable\" (the region's own type is null or an unrecognized/numeric value, a genuine gap never asserted as \"mapped\"). No other field, and no finding, verdict, score, confidence, coverage, or exit-code behavior, changes in v2.20.",
+  "description": "Validates the v2.20 `--json` envelope for --list, --modules, --threads, --process, --sysinfo, --handles, --profile, --diff, --extract, --strings, --report, and --hunt. `result.kind` selects the record and summary shapes. Record objects are closed where declared; `processRecord.peb_extended` is the only optional record property and appears only for `--process --verbose`. Hunt investigation actions are present only for `selected == \"all\"` and describe unresolved coverage targets rather than verdicts. Later same-version addition (still schema_version 2.13): `coverageLimitation.code` may be `SCAN_ITEMS_UNACCOUNTED` -- N region(s) or segment(s) whose outcome a scan's own eligibility ledger cannot reconcile, either taken into scope with no outcome recorded or an outcome recorded for items never taken into scope. It always emits `targets: []` (an unreconciled item is one whose identity the scan never captured) and carries `affected_count`; `scope` names the scan layer (sleep_mask, entropy, or decode) when `source` is \"encoding_scan\". The `code` field is open, so this is additive for consumers pinned to 2.13. v2.14 exposes `--hunt-addr` targeted rescans: every `hunt` summary carries a closed `scan_scope` tag naming what the invocation covered, and a targeted result's hunter details additionally carry one `targeted_scope` entry per coverage closure. Full-scope hunt details omit `targeted_scope` entirely rather than emitting null. A `hunt` result's `summary.scan_scope` is cross-checked against the rest of the document: a `targeted` tag pins `summary.selected` to the same analyzer (which in turn pins the single record's `hunter`), pins `source`/`scopes` to that analyzer's registered targeted capability, and requires `targeted_scope` on the record's details; a `full` tag forbids `targeted_scope`. Later same-version addition (still schema_version 2.14, which is unreleased): a `targeted_scope` entry additionally carries `applicability_reason` and `measurements`, and its `coverage_status` may be \"not_applicable\" -- the source's own descriptor-eligibility gate declined the target, which is the boundary of what that source speaks about rather than a gap in what it did. A consumer must not count \"not_applicable\" as a coverage failure: the record's `coverage.status` does not, and a rescan whose every closure is inapplicable reports `coverage.status` \"not_evaluated\". v2.15 adds `coverage.missed_bytes`, required on every result and on every hunter record: how much captured in-scope memory the run's own coverage gaps add up to. `state` labels the figure -- \"exact\" (every gap's extent is established), \"lower_bound\" (some gaps could not be measured, so `bytes` is a floor), or \"unknown\" (no gap's extent is established, and `bytes` is null rather than 0). `complete` is true exactly when `unquantified_gaps` is 0, which is exactly when `state` is \"exact\". A consumer thresholding on `bytes` must read `state` first: null and a lower bound both mean something other than \"this much was missed\", and 0 with state \"exact\" is the only way to say nothing capturable was missed. `bytes` measures MEMORY: it is a union of address ranges, so one physical region named by several gaps at once (obfuscation's three scan layers skip overlapping region sets, and one region can exceed two or three of their caps) is counted once. `quantified_gaps` counts the gap records, `distinct_ranges` the physical ranges they cover once merged, and `distinct_ranges <= quantified_gaps` always; neither counts bytes, and neither does a limitation's own `affected_count`. The same version adds `examined_size` and `unexamined_size` to `scanTarget`: how many of that target's captured bytes a scan actually looked at, and the remainder it did not. Both are null when the extent was never established, which is not the same claim as 0; `unexamined_size` is derived from `captured_size - examined_size`, and the aggregate is the union of exactly those per-target remainders, so the two cannot disagree. `coverage.status` keeps its three values and its meaning: this grades a `partial`, it does not redefine when one is reported. v2.16 adds `eligible_bytes`, `unscanned_pass_bytes` and `unscanned_fraction` to `coverage.missed_bytes`: how much scanning work the run had in front of it, how much of that work did not happen, and the second as a proportion of the first. The proportion is what lets one run be judged on its own -- 3.2 MB unscanned is a rounding error out of 11.4 GB eligible and almost the whole hunt out of 3.4 MB -- so a single threshold can be applied across dumps of any size. Both are measured PER SCAN PASS and summed over the passes, which is a different basis from `bytes`: a hunter running three passes over one region had three passes' worth of work in front of it, and a region only one pass skipped is one pass's worth of work not done. `bytes` keeps its own basis (memory with at least one unanswered question, unioned across passes, what a re-collection would have to recover) and is deliberately NOT the numerator here: dividing it by a per-pass scope would report a region EVERY pass skipped as two-thirds scanned. Within one pass the unexamined ranges are unioned, so a segment reported under two codes at once costs that pass's work once; across passes they are summed. A pass's scope includes items a whole-scan budget left unreached, so every gap it reports is inside the scope it is measured against and `unscanned_pass_bytes <= eligible_bytes` always. The scope is per producer and reflects that producer's own filters, so two hunters over one dump legitimately report different denominators; it is a property of the hunter, never of the dump. `eligible_bytes` and `unscanned_fraction` are null when no denominator was established -- a producer that measures no eligibility, a scan loop that took items into scope without measuring them, and every `coverage.status` of \"not_evaluated\", which has no work for a gap to be a proportion of. Null and 0 are different answers: 0 says a scan measured its scope and had no capturable memory in front of it. `unscanned_fraction` is additionally null when `state` is \"unknown\": null is the only honest answer where no gap has a measured extent, and 0 is reserved for a run that missed nothing. Where it is non-null it is exactly `unscanned_pass_bytes / eligible_bytes` and carries `state`'s own qualifier -- an exact proportion when \"exact\", a floor under the real one when \"lower_bound\". The `--hunt` document-level `coverage.missed_bytes` reports `eligible_bytes` and `unscanned_fraction` as null: eligibility is each hunter's own, and there is no dump-wide scope to roll up into. `coverage.status`, verdicts, scores, and exit codes are untouched. Report enrichment adds one process-wide `result.summary.process_enrichment` and four card-scoped projections on every triageCardRecord (`exception_context`, `allocation_neighborhood`, `handle_correlation`, `string_context`). Each carries an enrichmentSection stating its scope, missing/partial/complete evidence state, eligible and included counts, cap, truncation, provenance, and limitations. Enrichment is captured evidence only: it never appears in `findings`, `finding_details`, or `verdict`, and it cannot change coverage status or exit behavior. v2.18 adds PE, instruction, and IAT correlation to report enrichment: one process-wide `result.summary.pe_context` (the main image's identity and the main-image correlation layer's consistent/conflict/unavailable tally plus its retained `conflict` observations), and three more card-scoped projections on every triageCardRecord -- `anchor_pe_context` (the anchor placed against the PE image that owns it: headers/code/data/import_iat/relocation/unmapped/outside_image, or private/unresolved when no module owns it, with the section's declared R/W/X versus the live region protection), `instruction_context` (a bounded x86/x64 instruction window at the highest-priority approved anchor source -- an exception RIP, a live thread RIP, a thread StartAddress, then the card anchor -- decoded through the isolated disassembler seam every supported installation carries, with direct branch targets and mechanically-proven indirect memory-slot targets resolved to module/section/region), and `iat_correlation` (the anchor module's import table summary plus only the slots a window branch targets or whose live thunk target is unusual). Each carries an enrichmentSection with the same missing/partial/complete semantics. `instruction_context.decoder_state` is `decoded`, `not_run`, `unavailable` (no decoder answered: a broken installation or build), `unsupported_arch` (a determined non-x86 machine), `arch_undetermined` (no signal fixed the architecture), `decode_error` (an invalid opcode with room for a whole instruction after it), or `undecoded_tail` (a short trailing run did not decode -- an invalid opcode or a cut-short instruction, indistinguishable); every value but `decoded` makes the section `partial`, as does a window the byte cap or the end of the capture cut short. The decode architecture comes from the COFF `Machine` of the module that owns the chosen anchor, then a WOW64 thread context, then the main image `Machine` (before the host SystemInfo), then the anchor thread's context flavour, then SystemInfo -- so an anchor in unbacked private code is still decoded and a WOW64 process is decoded x86. A `branch_targets` entry with `kind` `indirect_memory` carries `iat_classification_uncertain: true` when the run could not confirm the slot is outside the IAT. A `pe_context` conflict observation, a redirected or private IAT thunk target, and a declared-versus-live protection mismatch are investigation leads, never verdict dimensions: v2.18 changes no `findings`, `finding_details`, `verdict`, `coverage.status`, score, confidence, Finding identity, or exit code. v2.19 exposes the canonical main-image PE profile through `--process`: every processRecord now carries a required, always-present `pe_image` object holding the profile dumpex.core.pe_profile collects at the PEB-reported image base and the consistency observations dumpex.core.pe_correlation derives over it -- the same two objects `--report`'s `summary.pe_context` projects, so the two commands cannot disagree about one dump. `collected` says whether a profile was built and `unavailable_reason` (`no_image_base` or `header_unreadable`) says why when it was not; an uncollected profile leaves every fact null and every array empty and changes nothing about the process identity fields beside it. `pe_image` carries the image's architecture and 32/64-bit format, its actual and preferred base with the signed relocation delta and the relocation evidence around it, SizeOfImage/SizeOfHeaders/alignments, the declared and decoded section counts, the entry point resolved into the process with its section and memory context, the full decoded section table, all sixteen data-directory descriptors, the acquisition's stage ladder and its requested/captured/read byte facts with any attributed bounded stop and the exact unexamined ranges, and every evaluated consistency observation with its three-valued state, dumpex-authored reason, evidence sources, and compared operands. `structural_state` is the profile's own component rollup (`complete`, `partial`, `unavailable`, `malformed`, `declared_absent`) and answers \"is the image defective?\"; the legacy `identity_evidence.main_image_pe` `checked`/`valid`/`reason` triple is unchanged and keeps answering \"will re-reading these bytes help?\" -- neither is derived from the other, and `collected` equals `checked` whenever an image base was normalized. The complete record is emitted regardless of `--verbose`: verbosity changes console presentation, never evidence collection. This PE evidence is optional and self-contained -- it adds no coverage source, no limitation code, no verdict, score, confidence, or ATT&CK field, and moves no `coverage.status` and no exit code, and its absence can neither erase nor downgrade an otherwise available process identity fact. The `reportPeObservation` def of v2.18 is renamed `peObservation` and is now shared by `summary.pe_context` and `pe_image`: one observation shape, two consumers, identical meanings. Every other v2.18 shape is unchanged. v2.20 widens `anchorPeContext.classification`'s \"no module owns this\" bucket from two values to four: \"private\" (confirmed MEM_PRIVATE) is unchanged, and \"unresolved\" (no module AND no region place the anchor) is unchanged, but the prior blanket \"mapped\"-shaped case is now three distinct, only-ever-CONFIRMED values -- \"mapped\" (confirmed MEM_MAPPED), \"unregistered_image\" (confirmed MEM_IMAGE with no module-list entry -- a manually mapped or stomped module), and \"region_type_unavailable\" (the region's own type is null or an unrecognized/numeric value, a genuine gap never asserted as \"mapped\"). No other field, and no finding, verdict, score, confidence, coverage, or exit-code behavior, changes in v2.20. Later same-version addition (still schema_version 2.20, which is unreleased): `threadRecord` (`--threads`) and `reportThreadInfo` (`--report`'s anchor thread and any other thread admitted into Section 3) gain `ip`/`ip_reg` -- this thread's OWN live RIP/EIP, from its own captured CONTEXT/WOW64_CONTEXT -- mirroring the both-or-neither shape `huntThreadRef` already used. `start_address` (where a thread BEGAN) and `ip` (where it IS captured executing right now) are independent facts from independent sources: neither is derived from or substitutes for the other, and `ip`/`ip_reg` are null together whenever this thread's CONTEXT was not captured or could not be parsed -- never defaulted to `start_address` or to 0. `reportThreadInfo` also gains `region_membership` (`start` / `current` / `start_and_current` / null, Section 3 only): which address actually placed a Section 3 entry in the list, published on the record itself so console and JSON cannot disagree about it; `backing_module`/`module_context` always describe `start_address`, never `ip`, regardless of `region_membership`. `reportThreadInfo`'s own TID resolution now consults the base ThreadListStream as well as ThreadInfoListStream, so a TID present only in the former (its `ip` fully available, its `start_address` genuinely unknown, never coerced to 0) is resolved rather than reported missing, and when that TID's own current IP is a usable (non-zero) address it becomes the card's own anchor so the card examines that region rather than none at all; `--report`'s console Section 3 additionally admits a thread by its current IP falling inside the anchor's resolved region (not only by `start_address`, reusing the identical region-bounds check). `reportThreadInfo` also gains `ip_context_conflict`: true exactly when `ip` is set and this TID's own ThreadInfoListStream record independently flags that same context as invalid (a genuine disagreement between the dump's two thread sources); `ip` keeps the real, parsed value either way, and the Scope note now fires for a conflicted value regardless of region containment. No finding, verdict, score, confidence, coverage, or exit-code behavior changes with this addition.",
   "type": "object",
   "required": [
     "meta",
@@ -486,11 +486,14 @@
       }
     },
     "threadRecord": {
+      "description": "Matches dumpex.output.records.ThreadRecord.to_dict(). `start_address` (where this thread BEGAN, from ThreadInfoListStream) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent facts from independent sources -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed, never defaulted to `start_address` or to 0. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record: true when `ip` is set AND that record independently flags this same context as invalid (the same fact `flags` already carries as `NO_CTX`); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null (nothing to dispute regardless of ThreadInfoListStream coverage); null when `ip` is set but no DumpFlags value could be established for this TID (no ThreadInfoListStream record at all, or a record whose flags could not be read -- see `dump_flags_state`) -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case. Mirrors `reportThreadInfo.ip_context_conflict` (same dumpex.core.memory.ip_context_conflict_for derivation) so `--threads` and `--report` publish this fact in the same schema-validated shape for the same TID.",
       "type": "object",
       "additionalProperties": false,
       "required": [
         "tid",
         "start_address",
+        "ip",
+        "ip_reg",
         "backing_module",
         "module_context",
         "flags",
@@ -501,7 +504,10 @@
         "user_time_100ns",
         "suspend_count",
         "priority",
-        "teb"
+        "teb",
+        "ip_context_conflict",
+        "start_address_state",
+        "dump_flags_state"
       ],
       "properties": {
         "tid": {
@@ -512,6 +518,15 @@
         },
         "start_address": {
           "$ref": "#/$defs/hexAddress"
+        },
+        "ip": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "ip_reg": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "backing_module": {
           "type": [
@@ -578,8 +593,149 @@
         },
         "teb": {
           "$ref": "#/$defs/hexAddress"
+        },
+        "ip_context_conflict": {
+          "type": ["boolean", "null"]
+        },
+        "start_address_state": {
+          "description": "What this thread's `start_address` is worth. `recorded`: a real ThreadInfoListStream entry whose own DumpFlags are known and carry neither MINIDUMP_THREAD_INFO_ERROR_THREAD nor MINIDUMP_THREAD_INFO_INVALID_INFO -- the address is evidence. `invalid`: that entry's own DumpFlags say only ThreadId is valid, so `start_address` is null -- a field the producer never wrote, NOT address 0x0, and NOT evidence that this thread starts outside every module. `unverified`: a real entry whose DumpFlags value could not be established at all, so `start_address` keeps its recorded value but nothing establishes it as evidence -- it never feeds a confirmed finding on its own. `absent`: no start address was recorded for this thread at all -- no ThreadInfoListStream entry for this TID, or an entry whose own declared record size stopped short of the StartAddress field -- so `start_address` is null. Readable DumpFlags say nothing about whether the address field was captured, so they never promote this case: a record can be `resolved` on `dump_flags_state` and still be `absent` here. `recorded` and `unverified` always carry a non-null `start_address`; `invalid` and `absent` never do. `recorded`/`invalid` require a `dump_flags_state` of `resolved` and `unverified` requires `unresolved`, and a `dump_flags_state` of `absent` forces this field to `absent` too.",
+          "enum": [
+            "recorded",
+            "invalid",
+            "unverified",
+            "absent"
+          ]
+        },
+        "dump_flags_state": {
+          "description": "Whether this thread's DumpFlags value could be established, which is what decides the meaning of an empty flag list. `resolved`: the value is known, so an empty list means no flag is set. `unresolved`: a ThreadInfoListStream entry exists but its DumpFlags value could not be read, so an empty list means nothing is known -- a combined value the upstream single-member Enum parse cannot represent lands here, and is never reported as a confirmed absence of flags. `absent`: no ThreadInfoListStream entry for this TID at all.",
+          "enum": [
+            "resolved",
+            "unresolved",
+            "absent"
+          ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "const": null
+              },
+              "ip_context_conflict": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "invalid"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "resolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "const": "unverified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "unresolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "absent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_state": {
+                "const": "absent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["invalid", "absent"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "unverified"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "sysInfoRecord": {
       "description": "The 18-field `--sysinfo` record. Process identity and runtime fields belong to `--process`; this record carries system, host, current-directory, and environment facts. `environment_variables` is an ordered array of `{name, value}` entries, never a map, so duplicate names, `=`-prefixed names, and source order remain evidence.",
@@ -4764,18 +4920,24 @@
       }
     },
     "reportThreadInfo": {
-      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring).",
+      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring). `start_address` (where this thread BEGAN) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed. `backing_module`/`module_context` always describe `start_address` specifically, never `ip`. `region_membership` (Section 3 only, enforced null on Section 1's own thread entry and non-null on every other_threads_in_region entry by this document's own triageCardRecord constraints) says which address actually placed this entry in Section 3's list: `start`, `current`, or `start_and_current` -- for a `current`-only entry, `backing_module`/`module_context` still describe `start_address`, which may be unrelated to or entirely outside the region this entry is listed for. `region_membership` names WHICH address admitted the entry, not whether that address is disputed -- a consumer must separately check `ip_context_conflict` for that. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record (dumpex.core.memory.ip_context_conflict_for, the same derivation `threadRecord.ip_context_conflict` uses): true when `ip` is set AND that record independently flags this same context as invalid (a genuine disagreement between the dump's two thread sources); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null; null when `ip` is set but no DumpFlags value could be established for this TID (no ThreadInfoListStream record at all, or a record whose flags could not be read -- see `dump_flags_state`) -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case.",
       "type": "object",
       "additionalProperties": false,
       "required": [
         "tid",
         "start_address",
+        "ip",
+        "ip_reg",
         "backing_module",
         "module_context",
         "kernel_time_100ns",
         "user_time_100ns",
         "backing_module_base",
-        "backing_module_end"
+        "backing_module_end",
+        "region_membership",
+        "ip_context_conflict",
+        "start_address_state",
+        "dump_flags_state"
       ],
       "properties": {
         "tid": {
@@ -4784,6 +4946,15 @@
         },
         "start_address": {
           "$ref": "#/$defs/hexAddress"
+        },
+        "ip": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "ip_reg": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "backing_module": {
           "type": [
@@ -4816,6 +4987,34 @@
         },
         "backing_module_end": {
           "$ref": "#/$defs/hexAddress"
+        },
+        "region_membership": {
+          "enum": [
+            "start",
+            "current",
+            "start_and_current",
+            null
+          ]
+        },
+        "ip_context_conflict": {
+          "type": ["boolean", "null"]
+        },
+        "start_address_state": {
+          "description": "What this thread's `start_address` is worth. `recorded`: a real ThreadInfoListStream entry whose own DumpFlags are known and carry neither MINIDUMP_THREAD_INFO_ERROR_THREAD nor MINIDUMP_THREAD_INFO_INVALID_INFO -- the address is evidence. `invalid`: that entry's own DumpFlags say only ThreadId is valid, so `start_address` is null -- a field the producer never wrote, NOT address 0x0, and NOT evidence that this thread starts outside every module. `unverified`: a real entry whose DumpFlags value could not be established at all, so `start_address` keeps its recorded value but nothing establishes it as evidence -- it never feeds a confirmed finding on its own. `absent`: no start address was recorded for this thread at all -- no ThreadInfoListStream entry for this TID, or an entry whose own declared record size stopped short of the StartAddress field -- so `start_address` is null. Readable DumpFlags say nothing about whether the address field was captured, so they never promote this case: a record can be `resolved` on `dump_flags_state` and still be `absent` here. `recorded` and `unverified` always carry a non-null `start_address`; `invalid` and `absent` never do. `recorded`/`invalid` require a `dump_flags_state` of `resolved` and `unverified` requires `unresolved`, and a `dump_flags_state` of `absent` forces this field to `absent` too.",
+          "enum": [
+            "recorded",
+            "invalid",
+            "unverified",
+            "absent"
+          ]
+        },
+        "dump_flags_state": {
+          "description": "Whether this thread's DumpFlags value could be established, which is what decides the meaning of an empty flag list. `resolved`: the value is known, so an empty list means no flag is set. `unresolved`: a ThreadInfoListStream entry exists but its DumpFlags value could not be read, so an empty list means nothing is known -- a combined value the upstream single-member Enum parse cannot represent lands here, and is never reported as a confirmed absence of flags. `absent`: no ThreadInfoListStream entry for this TID at all.",
+          "enum": [
+            "resolved",
+            "unresolved",
+            "absent"
+          ]
         }
       },
       "allOf": [
@@ -4831,6 +5030,22 @@
             "properties": {
               "module_context": {
                 "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_context_conflict": {
+                "const": false
               }
             }
           }
@@ -4870,6 +5085,122 @@
             "properties": {
               "backing_module_end": {
                 "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "invalid"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "resolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "const": "unverified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "unresolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "absent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_state": {
+                "const": "absent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["invalid", "absent"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "unverified"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "not": {
+                  "const": null
+                }
               }
             }
           }
@@ -6979,7 +7310,8 @@
           "enum": [
             "tid",
             "address",
-            "string_hit"
+            "string_hit",
+            "tid_current_ip"
           ]
         },
         "thread": {
@@ -6988,7 +7320,14 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/reportThreadInfo"
+              "allOf": [
+                { "$ref": "#/$defs/reportThreadInfo" },
+                {
+                  "properties": {
+                    "region_membership": { "const": null }
+                  }
+                }
+              ]
             }
           ]
         },
@@ -7039,7 +7378,16 @@
         "other_threads_in_region": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/reportThreadInfo"
+            "allOf": [
+              { "$ref": "#/$defs/reportThreadInfo" },
+              {
+                "properties": {
+                  "region_membership": {
+                    "enum": ["start", "current", "start_and_current"]
+                  }
+                }
+              }
+            ]
           }
         },
         "notable_strings": {
@@ -12426,14 +12774,15 @@
       }
     },
     "huntThreadRef": {
-      "description": "Matches dumpex.output.records.HuntThreadRef.to_dict() -- a TID plus optional StartAddress/current-instruction-pointer, hex-formatted. `ip`/`ip_reg` are both-or-neither: a thread reference either carries no live register snapshot (both null) or a real one (both set) -- there is no case where the register name is known but its value isn't, or vice versa.",
+      "description": "Matches dumpex.output.records.HuntThreadRef.to_dict() -- a TID plus optional StartAddress/current-instruction-pointer, hex-formatted. `ip`/`ip_reg` are both-or-neither: a thread reference either carries no live register snapshot (both null) or a real one (both set) -- there is no case where the register name is known but its value isn't, or vice versa. `ip_context_conflict` is the tri-state dumpex.core.memory.ip_context_conflict_for result (the same fact reportThreadInfo/threadRecord publish for the identical TID): true when this TID's own ThreadInfoListStream record flags its context as invalid despite the parsed `ip`; false when `ip` is null, or a real record confirms no dispute; null when `ip` is set but no DumpFlags value could be established for this TID, whether because no ThreadInfoListStream record exists or because that record's flags could not be read -- undeterminable, never a confirmed false. `start_address` is likewise null whenever no start address was established for this thread, including a record whose own DumpFlags disown every field but ThreadId -- never address 0x0.",
       "type": "object",
       "additionalProperties": false,
       "required": [
         "tid",
         "start_address",
         "ip",
-        "ip_reg"
+        "ip_reg",
+        "ip_context_conflict"
       ],
       "properties": {
         "tid": {
@@ -12451,6 +12800,9 @@
             "string",
             "null"
           ]
+        },
+        "ip_context_conflict": {
+          "type": ["boolean", "null"]
         }
       },
       "allOf": [
@@ -12466,6 +12818,9 @@
             "properties": {
               "ip_reg": {
                 "const": null
+              },
+              "ip_context_conflict": {
+                "const": false
               }
             }
           }

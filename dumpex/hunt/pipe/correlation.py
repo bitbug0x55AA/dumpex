@@ -13,7 +13,9 @@ Report enforces that at construction (see
 `dumpex.hunt.pipe.domain.PipeEvidence`), which is what makes
 "corroborated handle #1" and "open handle #1" provably the same handle.
 """
-from dumpex.core.memory import addr_to_module
+from dumpex.core.memory import (
+    addr_to_module, recorded_start_address, START_ADDRESS_RECORDED,
+)
 from dumpex.hunt.pipe.patterns import canonical_pipe_name, framework_match
 from dumpex.hunt.pipe.models import (
     C2ContextEvidence, CorrelationResult, CorroboratedHandleEvidence,
@@ -102,7 +104,17 @@ def correlate(handle_scan, pipe_name_scan, thread_contexts: list, infos: list,
         # reported as a lead only.
         if rip_hit is None:
             for ti in infos:
-                sa = ti.StartAddress or 0
+                # Only an address its own record stands behind can place a
+                # thread near anything: a record that disowns its own
+                # fields, or one whose DumpFlags could not be read,
+                # establishes no location to measure a distance from (see
+                # dumpex.core.memory.recorded_start_address -- the same
+                # rule --threads/--report and the injection hunter apply
+                # to the same TID).
+                sa, sa_state = recorded_start_address(ti)
+                if sa_state != START_ADDRESS_RECORDED:
+                    continue
+                sa = sa or 0
                 if sa and abs(sa - pipe_va) <= context_distance and not addr_to_module(sa, modules):
                     start_address_leads.append(StartAddressLeadEvidence(
                         handle=handle, string_hit=sh,
@@ -131,7 +143,13 @@ def correlate(handle_scan, pipe_name_scan, thread_contexts: list, infos: list,
     # CorroboratedHandleEvidence for the scored, handle-anchored version)
     unbacked_threads = []
     for ti in infos:
-        sa = ti.StartAddress or 0
+        # Same rule as the start-address proximity lead above: an
+        # unestablished start address cannot be claimed to fall inside
+        # this or any other region.
+        sa, sa_state = recorded_start_address(ti)
+        if sa_state != START_ADDRESS_RECORDED:
+            continue
+        sa = sa or 0
         for r in regions:
             region = region_by_base.get(r.BaseAddress)
             if region is None:

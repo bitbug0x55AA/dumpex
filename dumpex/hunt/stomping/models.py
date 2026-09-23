@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from dumpex.core.memory import prot_str
 from dumpex.hunt._domain import as_tuple, require_recursively_immutable
+from dumpex.hunt._finding import combine_conflicts
 from dumpex.output.coverage import ScanTarget
 
 
@@ -220,26 +221,40 @@ class RegionRef:
 @dataclass(frozen=True)
 class ThreadHitRef:
     """One thread's CURRENT instruction pointer, as
-    `dumpex.core.memory.get_thread_contexts()` read it out of
-    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT.
+    `dumpex.core.memory.enriched_thread_contexts()` read it out of
+    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT (joined against
+    this same TID's own ThreadInfoListStream record).
 
-    That function returns plain `{"ThreadId", "ip", "ip_reg", "is_wow64"}`
-    dicts; this is that dict's typed equivalent, so a raw thread-context
-    dict never survives past correlation.py into the Report (mirrors
-    `dumpex.hunt.injection.models.ThreadContext`)."""
+    That function returns plain `{"ThreadId", "ip", "ip_reg", "is_wow64",
+    "start_address", "ip_context_conflict"}` dicts; this is that dict's
+    typed equivalent, so a raw thread-context dict never survives past
+    correlation.py into the Report (mirrors
+    `dumpex.hunt.injection.models.ThreadContext`).
+
+    `ip_context_conflict` is the tri-state dumpex.core.memory.
+    ip_context_conflict_for result for this TID: True/False are
+    confirmed (this TID's own ThreadInfoListStream record settles
+    whether it disputes the parsed `ip`); None means this TID has no
+    such record at all -- undeterminable, never a confirmed False.
+    Callers that turn a hit carrying this ref into a "currently
+    executing" claim must qualify it when this field is not False."""
     thread_id: int
     ip: int
     ip_reg: str     # "RIP" (native x64) or "EIP" (WOW64 32-on-64)
+    ip_context_conflict: "bool | None" = None
 
     def __post_init__(self):
         _require_count(self.thread_id, "ThreadHitRef.thread_id")
         _require_count(self.ip, "ThreadHitRef.ip")
         _require_str(self.ip_reg, "ThreadHitRef.ip_reg")
+        if self.ip_context_conflict is not None and not isinstance(self.ip_context_conflict, bool):
+            raise ValueError("ThreadHitRef.ip_context_conflict must be None or a bool")
 
     @classmethod
     def from_context(cls, context: dict) -> "ThreadHitRef":
         return cls(thread_id=context["ThreadId"], ip=context["ip"],
-                   ip_reg=context.get("ip_reg", "RIP"))
+                   ip_reg=context.get("ip_reg", "RIP"),
+                   ip_context_conflict=context.get("ip_context_conflict"))
 
 
 # ── Evidence ──────────────────────────────────────────────────────────────
@@ -305,7 +320,25 @@ class VerifiedChangeEvidence:
     keeping the real total) are BOTH applied at construction time, in
     correlation.py: the RIP scan must see every range the diff produced
     (up to MAX_DIFF_RANGES_SCAN), not the display-truncated slice, so doing
-    it any later would silently lose a hit in e.g. the 21st range."""
+    it any later would silently lose a hit in e.g. the 21st range.
+
+    `rip_context_conflict` summarizes the tri-state `ip_context_conflict`
+    (see `ThreadHitRef`) across every thread whose current RIP/EIP landed
+    inside a changed range for THIS section: True if any is a confirmed
+    dispute, else None if any is undeterminable, else False if every
+    contributing thread is confirmed clean -- same combine-priority
+    `dumpex.hunt._finding.combine_conflicts` applies.
+    Only meaningful when `rip_in_changed_range` is True; stays False
+    (not applicable, not "confirmed clean") when it is False.
+
+    `rip_conflicts` is the UNCOMBINED tuple `rip_context_conflict` was
+    folded from, one entry per thread whose current RIP/EIP landed inside
+    a changed range for this section -- kept alongside the combined value
+    (never derivable back out of it: `combine_conflicts` is lossy, e.g.
+    [True, True, None] and [True, None] both reduce to True) so a caller
+    building a limitations caveat can still say how many threads are
+    disputed vs. undeterminable, not just the one collapsed fact for the
+    whole section. Empty exactly when `rip_in_changed_range` is False."""
     module:               ModuleRef
     section:              SectionRef
     va_start:             int
@@ -318,6 +351,8 @@ class VerifiedChangeEvidence:
     mem_sha256:           str = ""
     file_offset:          "int | None" = None   # .dmp offset of va_start, or None
                                                  # if those bytes were never captured
+    rip_context_conflict: "bool | None" = False
+    rip_conflicts:        tuple = field(default_factory=tuple)   # (bool | None, ...)
 
     def __post_init__(self):
         _require_type(self.module, ModuleRef, "VerifiedChangeEvidence.module")
@@ -332,6 +367,28 @@ class VerifiedChangeEvidence:
         _require_str(self.disk_sha256, "VerifiedChangeEvidence.disk_sha256")
         _require_str(self.mem_sha256, "VerifiedChangeEvidence.mem_sha256")
         _require_optional_count(self.file_offset, "VerifiedChangeEvidence.file_offset")
+        object.__setattr__(self, "rip_conflicts", _require_typed_tuple(
+            self.rip_conflicts, (bool, type(None)), "VerifiedChangeEvidence.rip_conflicts"))
+        if self.rip_context_conflict is not None and not isinstance(self.rip_context_conflict, bool):
+            raise ValueError("VerifiedChangeEvidence.rip_context_conflict must be None or a bool")
+        if not self.rip_in_changed_range and self.rip_context_conflict is not False:
+            raise ValueError(
+                "VerifiedChangeEvidence.rip_context_conflict must be False when "
+                "rip_in_changed_range is False -- nothing to dispute with no rip hit at all")
+        if not self.rip_in_changed_range and self.rip_conflicts:
+            raise ValueError(
+                "VerifiedChangeEvidence.rip_conflicts must be empty when "
+                "rip_in_changed_range is False -- nothing hit this section at all")
+        if self.rip_in_changed_range and not self.rip_conflicts:
+            raise ValueError(
+                "VerifiedChangeEvidence.rip_conflicts must be non-empty when "
+                "rip_in_changed_range is True -- at least one thread's RIP/EIP hit "
+                "this section, and its own conflict state must be retained")
+        if self.rip_in_changed_range and combine_conflicts(self.rip_conflicts) != self.rip_context_conflict:
+            raise ValueError(
+                "VerifiedChangeEvidence.rip_context_conflict must equal "
+                "combine_conflicts(rip_conflicts) -- the combined field and the "
+                "per-thread detail it was folded from must never disagree")
         if self.total_ranges < len(self.diff_ranges):
             raise ValueError(
                 f"VerifiedChangeEvidence.total_ranges ({self.total_ranges}) must be >= the "

@@ -16,13 +16,13 @@ byte-identical hunter dicts and console text.
 
 Every builder takes pytest's own `monkeypatch` fixture and uses
 `monkeypatch.setattr()` for every module-attribute override
-(`read_region`/`get_thread_contexts`), the same convention
-tests/integration/test_report_compat_freeze.py already established for the
-prior (`--report`) compatibility freeze. This is NOT the same pattern
-tests/hunt/test_*.py's existing per-hunter unit tests use (those assign
-`module.read_region = ...` directly and never restore it — see
-tests/conftest.py's own `_reset_thread_context_monkeypatches` docstring for
-the "a real bug hit during phase-two development" this caused for
+(`read_region`/`get_thread_contexts`/`enriched_thread_contexts`), the same
+convention tests/integration/test_report_compat_freeze.py already
+established for the prior (`--report`) compatibility freeze. This is NOT
+the same pattern tests/hunt/test_*.py's existing per-hunter unit tests use
+(those assign `module.read_region = ...` directly and never restore it —
+see tests/conftest.py's own `_reset_thread_context_monkeypatches` docstring
+for the "a real bug hit during phase-two development" this caused for
 `get_thread_contexts` specifically) — `monkeypatch` restores the original
 attribute automatically at the end of the requesting test, so calling two
 of these scenarios in the same test session can never leak state between
@@ -226,8 +226,9 @@ def pipe_detected_full_corroboration(monkeypatch):
         thread_info   = FakeStream(thread_infos, "infos")
         handles        = FakeStream(handle_list, "handles")
     monkeypatch.setattr(pipemod, "read_region", mem_reader({region_base: data}))
-    monkeypatch.setattr(pipemod, "get_thread_contexts", lambda mf: [
-        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False}])
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": region_base + 0x10, "ip_context_conflict": False}])
     return _capture(lambda: pipemod._hunt_pipe(MF(), verbose=False))
 
 

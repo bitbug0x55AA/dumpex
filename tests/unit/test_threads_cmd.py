@@ -7,7 +7,11 @@ attributes, never unpacked as a tuple. degraded/has_times -- extra
 rendering context this command alone needs -- are derived via
 thread_info_is_degraded()/thread_records_have_times() rather than
 returned separately."""
-from tests.fixtures.fakes import ThreadInfo, Thread, Ctx, Module, FakeStream, FakeMF
+import pytest
+
+from tests.fixtures.fakes import (
+    ThreadInfo, Thread, Ctx, Module, FakeStream, FakeMF, parsed_thread_info_stream,
+)
 
 from dumpex.commands.threads import (
     collect_threads, render_threads_console, cmd_threads,
@@ -61,6 +65,97 @@ def test_collect_threads_confirmed_not_in_any_module_is_unregistered():
     assert result.coverage.status == "complete"   # ModuleListStream WAS available; this is a confirmed answer
     assert result.records[0].module_context == MODULE_CONTEXT_UNREGISTERED
     assert result.records[0].backing_module is None
+
+
+def test_collect_threads_current_ip_differs_from_start_address_retains_both():
+    # The whole point of this issue's fix: a thread's recorded start and
+    # its captured current IP are independent facts, retained together --
+    # neither is derived from or overwrites the other.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x7ffe1234))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
+    mf.modules = FakeStream([Module(0x7ffe0000, 0x1000, "legit.dll")], "modules")
+    result = collect_threads(mf)
+    rec = result.records[0]
+    assert rec.start_address == "0x000000007ffe0000"
+    assert rec.ip == "0x000000007ffe1234"
+    assert rec.ip_reg == "RIP"
+    assert rec.start_address != rec.ip
+
+
+def test_collect_threads_missing_context_gives_unknown_current_ip_not_start_address():
+    # A thread whose CONTEXT was never captured/parsed reports an unknown
+    # CurrentIP -- never a silent fallback where StartAddress masquerades
+    # as the current one.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, None)], "threads")   # no ContextObject
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
+    result = collect_threads(mf)
+    rec = result.records[0]
+    assert rec.start_address == "0x000000007ffe0000"
+    assert rec.ip is None
+    assert rec.ip_reg is None
+
+
+def test_collect_threads_degraded_still_reports_current_ip_from_base_stream():
+    # ThreadInfoListStream absence (StartAddress degraded to unknown) must
+    # not suppress CurrentIP: CONTEXT comes from the independent base
+    # ThreadListStream and is unaffected by ThreadInfoListStream being
+    # absent -- StartAddress being unknown is never a reason to also treat
+    # CurrentIP as unknown.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x7ffe9999))], "threads")   # no thread_info stream
+    result = collect_threads(mf)
+    rec = result.records[0]
+    assert rec.start_address is None
+    assert rec.ip == "0x000000007ffe9999"
+    assert rec.ip_reg == "RIP"
+
+
+def test_collect_threads_degraded_ip_context_conflict_is_undeterminable_not_confirmed_clean():
+    # No ThreadInfoListStream at all means DumpFlags can never be joined
+    # against this TID's captured ip -- must be None (undeterminable),
+    # never the same False a genuinely clean DumpFlags would produce, and
+    # the coverage limitation must name the conflict check (DumpFlags)
+    # among what was lost.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x7ffe9999))], "threads")   # no thread_info stream
+    result = collect_threads(mf)
+    rec = result.records[0]
+    assert rec.ip_context_conflict is None
+    reasons = " ".join(result.coverage.reasons)
+    assert "DumpFlags" in reasons
+
+
+def test_collect_threads_tid_present_only_in_thread_info_has_confirmed_false_conflict():
+    # The counterpart mismatch direction: a TID with a REAL
+    # ThreadInfoListStream record but no base-stream CONTEXT has ip=None,
+    # so ip_context_conflict is a confirmed False (nothing to dispute) --
+    # not None, since there is no ambiguity about a value that was never
+    # captured at all.
+    mf = FakeMF()
+    mf.threads = FakeStream([], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(9, 0x7ffe0000)], "infos")
+    result = collect_threads(mf)
+    rec = next(r for r in result.records if r.tid == 9)
+    assert rec.ip is None
+    assert rec.ip_context_conflict is False
+
+
+def test_collect_threads_tid_mismatch_undeterminable_conflict_differs_from_clean_dump_flags():
+    # Same captured ip (0x7ffe9999), same DumpFlags-would-be-clean value,
+    # but one TID has a real ThreadInfoListStream record (clean DumpFlags,
+    # confirmed False) and the other has none at all (undeterminable,
+    # None) -- these must never collapse to the same published value.
+    mf = FakeMF()
+    mf.threads = FakeStream(
+        [Thread(1, Ctx(0x7ffe9999)), Thread(2, Ctx(0x7ffe9999))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x400000)], "infos")   # TID 2 has no entry
+    result = collect_threads(mf)
+    by_tid = {r.tid: r for r in result.records}
+    assert by_tid[1].ip_context_conflict is False
+    assert by_tid[2].ip_context_conflict is None
+    assert by_tid[1].ip_context_conflict != by_tid[2].ip_context_conflict
 
 
 def test_collect_threads_degraded_is_partial():
@@ -161,7 +256,7 @@ def test_collect_threads_base_list_missing_info_stream_has_threads():
     assert limitation.source == "threads"
     assert limitation.counterpart_source == "thread_info"
     assert limitation.affected_count == 2
-    assert limitation.unavailable_fields == ("SuspendCount", "Priority", "TEB")
+    assert limitation.unavailable_fields == ("SuspendCount", "Priority", "TEB", "CurrentIP")
     assert result.coverage.sources["threads"].state == "absent"
 
 
@@ -198,6 +293,66 @@ def test_render_threads_console_normal_does_not_crash(capsys):
     out = capsys.readouterr().out
     assert "0x1" in out
     assert "1 thread(s)" in out
+
+
+def test_render_threads_console_zero_current_ip_is_not_annotated_as_divergent(capsys):
+    # A genuinely-zero CONTEXT is real captured data, but must never be
+    # printed as a confirmed divergent execution location -- the
+    # instruction-anchor candidate filter elsewhere in this codebase
+    # already treats a zero address as unusable, and the console must
+    # not disagree.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
+    result = collect_threads(mf)
+    render_threads_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "differs from StartAddress" not in out
+    assert "not treated as a confirmed execution address" in out
+
+
+def test_render_threads_console_no_ctx_flagged_ip_is_not_confirmed_divergent(capsys):
+    # The dump producer's own ThreadInfoListStream flags this thread's
+    # context as invalid; a base-ThreadListStream CONTEXT parsing anyway
+    # is a genuine disagreement between the two sources, not a confirmed
+    # divergent execution location -- must not print an unqualified
+    # "differs from StartAddress" claim.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x9000))], "threads")
+    mf.thread_info = FakeStream(
+        [ThreadInfo(1, 0x7ffe0000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")], "infos")
+    result = collect_threads(mf)
+    assert "NO_CTX" in result.records[0].flags
+    assert result.records[0].ip_context_conflict is True
+    render_threads_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "differs from StartAddress" not in out
+    assert "context as invalid" in out
+
+
+def test_ip_context_conflict_is_false_when_dump_flags_ok_despite_parsed_context():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x9000))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
+    result = collect_threads(mf)
+    assert result.records[0].ip_context_conflict is False
+
+
+def test_render_threads_console_zero_and_context_conflicted_is_not_reported_as_merely_zero(capsys):
+    # A genuinely-zero CONTEXT AND a ThreadInfoListStream record that
+    # independently flags this same context as invalid are both real
+    # facts, and neither explains the other away -- the console must
+    # surface the conflict, not silently fall back to the plain "zero"
+    # qualifier the way a naive if/elif ordering would.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    mf.thread_info = FakeStream(
+        [ThreadInfo(1, 0x7ffe0000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")], "infos")
+    result = collect_threads(mf)
+    assert result.records[0].ip_context_conflict is True
+    render_threads_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "context as invalid" in out
 
 
 def test_render_threads_console_present_empty_does_not_crash(capsys):
@@ -272,3 +427,129 @@ def test_cmd_threads_returns_command_result(capsys):
     assert len(result.records) == 1
     assert result.coverage.status == "partial"
     capsys.readouterr()
+
+
+# -- ThreadInfoListStream records that disown their own fields -----------
+
+def _error_thread_result(flag="MINIDUMP_THREAD_INFO_ERROR_THREAD", **info_kwargs):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(0x400200))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(7, 0, dump_flags=flag, **info_kwargs)], "infos")
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    return collect_threads(mf)
+
+
+@pytest.mark.parametrize("flag", ["MINIDUMP_THREAD_INFO_ERROR_THREAD",
+                                  "MINIDUMP_THREAD_INFO_INVALID_INFO"])
+def test_collect_threads_invalid_record_reports_no_start_address_and_no_anomaly(flag):
+    # The zeroed StartAddress of a record documented as carrying nothing
+    # beyond its ThreadId is missing evidence. Reporting it as 0x0 would
+    # also run it through the module lookup and confirm "NOT IN ANY
+    # MODULE" -- a DFIR signal manufactured out of an absence.
+    (rec,) = _error_thread_result(flag).records
+    assert rec.start_address is None
+    assert rec.start_address_state == "invalid"
+    assert rec.module_context is None
+    assert rec.ip == "0x0000000000400200"   # independently captured, untouched
+
+
+def test_collect_threads_invalid_record_reports_its_other_fields_as_unknown_too():
+    (rec,) = _error_thread_result(kernel_time=0, user_time=0, exit_status=0,
+                                   create_time=0x1d0000000000000).records
+    assert rec.kernel_time_100ns is None
+    assert rec.user_time_100ns is None
+    assert rec.exit_status is None
+    assert rec.create_time is None
+    assert rec.flags == ["ERROR"]
+
+
+def test_render_threads_console_says_why_an_invalid_records_start_is_missing(capsys):
+    result = _error_thread_result()
+    render_threads_console(result.records, result.coverage)
+    body = capsys.readouterr().out
+    assert "record as invalid" in body
+    assert "requires ThreadInfoListStream" not in body
+
+
+# -- DumpFlags values the upstream Enum parse cannot represent -----------
+
+def _combined_flags_result(raw, *, start_address=0x400100, ip=0x400200):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(ip))], "threads")
+    mf.thread_info = parsed_thread_info_stream(
+        [{"tid": 7, "dump_flags": raw, "start_address": start_address}])
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    return mf, collect_threads(mf)
+
+
+def test_collect_threads_renders_every_bit_of_a_combined_dump_flags_value():
+    # 0x14 == INVALID_CONTEXT | EXITED_THREAD, which the installed
+    # library's single-member Enum lookup cannot represent at all.
+    mf, result = _combined_flags_result(0x14)
+    assert mf.thread_info.infos[0].DumpFlags is None
+    (rec,) = result.records
+    assert rec.flags == ["EXITED", "NO_CTX"]
+    assert rec.dump_flags_state == "resolved"
+    assert rec.ip_context_conflict is True
+
+
+def test_collect_threads_treats_a_zero_dump_flags_value_as_a_confirmed_clean_record():
+    # The other half of the same fix: 0x0 leaves the upstream Enum lookup
+    # empty exactly like a combination does, and must stay a CONFIRMED
+    # absence of flags rather than degrade to undeterminable.
+    _mf, result = _combined_flags_result(0x00)
+    (rec,) = result.records
+    assert rec.flags == []
+    assert rec.dump_flags_state == "resolved"
+    assert rec.ip_context_conflict is False
+    assert rec.start_address_state == "recorded"
+
+
+def test_collect_threads_never_confirms_a_clean_record_from_unreadable_dump_flags():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(0x400200))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(7, 0x400100, raw_dump_flags=None)], "infos")
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    (rec,) = collect_threads(mf).records
+    assert rec.flags == []
+    assert rec.dump_flags_state == "unresolved"
+    assert rec.ip_context_conflict is None
+    assert rec.start_address == "0x0000000000400100"
+    assert rec.start_address_state == "unverified"
+
+
+def test_render_threads_console_distinguishes_unreadable_flags_from_a_missing_record(capsys):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(0x400200))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(7, 0x400100, raw_dump_flags=None)], "infos")
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    result = collect_threads(mf)
+    render_threads_console(result.records, result.coverage)
+    body = capsys.readouterr().out
+    assert "own DumpFlags could not be read" in body
+    assert "no ThreadInfoListStream record for this thread" not in body
+
+
+def test_render_threads_console_never_confirms_an_unbacked_unverified_start(capsys):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(0x400200))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(7, 0x900000, raw_dump_flags=None)], "infos")
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    result = collect_threads(mf)
+    assert result.records[0].module_context == MODULE_CONTEXT_UNREGISTERED
+    render_threads_console(result.records, result.coverage)
+    body = capsys.readouterr().out
+    assert "NOT IN ANY MODULE" not in body
+    assert "not in any module, but this thread's own DumpFlags could not be read" in body
+
+
+def test_render_threads_console_keeps_a_resolved_module_and_flags_the_unverified_address(capsys):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(7, Ctx(0x400200))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(7, 0x400100, raw_dump_flags=None)], "infos")
+    mf.modules = FakeStream([Module(0x400000, 0x1000, r"C:\ntdll.dll")], "modules")
+    result = collect_threads(mf)
+    render_threads_console(result.records, result.coverage)
+    body = capsys.readouterr().out
+    assert "ntdll.dll" in body          # the classification still holds
+    assert "address unverified" in body  # what nothing establishes is the address

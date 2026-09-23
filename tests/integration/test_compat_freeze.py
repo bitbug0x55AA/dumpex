@@ -423,27 +423,38 @@ SCENARIOS = [
         "threads_degraded", ["--threads"], _threads_degraded, 3,
         '  [~] ThreadInfoListStream not present in this dump \u2014 falling back to the\n'
         '      base ThreadListStream. StartAddress / CreateTime / ExitTime / Kernel-\n'
-        '      UserTime are NOT available in this mode (only TID / SuspendCount /\n'
-        '      Priority / TEB, from the raw thread record).\n\n'
+        '      UserTime / DumpFlags are NOT available in this mode (only TID /\n'
+        '      SuspendCount / Priority / TEB / CurrentIP, from the raw thread record\n'
+        '      and its own captured CONTEXT) -- ip_context_conflict is unconfirmable\n'
+        '      (not a confirmed False) for every thread shown.\n\n'
         '  [~] ModuleListStream not present; thread backing-module classification unavailable '
         '(cannot confirm whether a start address is backed by a known module)\n\n\n'
         '  TID              0x1\n'
-        '  StartAddress     unavailable  \u2190 (unknown \u2014 requires ThreadInfoListStream)\n\n'
+        '  StartAddress     unavailable  \u2190 (unknown \u2014 requires ThreadInfoListStream)\n'
+        '  CurrentIP        0x0000000000000000  (RIP) (zero \u2014 not treated as a confirmed '
+        'execution address; cannot confirm whether this context is disputed \u2014 no '
+        'ThreadInfoListStream record for this thread)\n\n'
         '[+] 1 thread(s).\n',
         {"kind": "threads", "execution_status": "completed",
          "coverage": {"status": "partial",
                       "reasons": [
                           "ThreadInfoListStream not present; StartAddress/CreateTime/ExitTime/"
-                          "KernelTime/UserTime unavailable (TID/SuspendCount/Priority/TEB only)",
+                          "KernelTime/UserTime/DumpFlags unavailable (TID/SuspendCount/Priority/"
+                          "TEB/CurrentIP only)",
                           "ModuleListStream not present; thread backing-module classification "
                           "unavailable (cannot confirm whether a start address is backed by a "
                           "known module)"]},
          "summary": {"count": 1},
-         "data": {"records": [{"tid": 1, "start_address": None, "backing_module": None,
+         "data": {"records": [{"tid": 1, "start_address": None,
+                                "ip": "0x0000000000000000", "ip_reg": "RIP",
+                                "backing_module": None,
                                 "module_context": None, "flags": [], "create_time": None,
                                 "exit_time": None, "exit_status": None,
                                 "kernel_time_100ns": None, "user_time_100ns": None,
-                                "suspend_count": None, "priority": None, "teb": None}]}},
+                                "suspend_count": None, "priority": None, "teb": None,
+                                "ip_context_conflict": None,
+                                "start_address_state": "absent",
+                                "dump_flags_state": "absent"}]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,partial,ThreadInfoListStream not present; StartAddress/CreateTime/'
         'ExitTime/KernelTime/UserTime unavailable (TID/SuspendCount/Priority/TEB only); '
@@ -464,17 +475,23 @@ SCENARIOS = [
     ),
     (
         "threads_complete", ["--threads"], _threads_complete, 0,
-        '\n  TID              0x1\n  StartAddress     0x000000007ffe0000  \u2190 legit.dll\n\n'
+        '\n  TID              0x1\n  StartAddress     0x000000007ffe0000  \u2190 legit.dll\n'
+        '  CurrentIP        0x0000000000000000  (RIP) (zero \u2014 not treated as a confirmed '
+        'execution address)\n\n'
         '  [~] CreateTime/ExitTime not available in the captured ThreadInfo data.\n\n[+] 1 thread(s).\n',
         {"kind": "threads", "execution_status": "completed",
          "coverage": {"status": "complete", "reasons": []},
          "summary": {"count": 1},
          "data": {"records": [{"tid": 1, "start_address": "0x000000007ffe0000",
+                                "ip": "0x0000000000000000", "ip_reg": "RIP",
                                 "backing_module": "legit.dll", "module_context": "resolved",
                                 "flags": [], "create_time": None, "exit_time": None,
                                 "exit_status": None, "kernel_time_100ns": None,
                                 "user_time_100ns": None, "suspend_count": None,
-                                "priority": None, "teb": None}]}},
+                                "priority": None, "teb": None,
+                                "ip_context_conflict": False,
+                                "start_address_state": "recorded",
+                                "dump_flags_state": "resolved"}]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,complete,,1\n\n'
         '## threads / records\ntid,start_address,backing_module,module_context,flags,create_time,'
@@ -484,42 +501,63 @@ SCENARIOS = [
     (
         "threads_tid_mismatch", ["--threads"], _threads_tid_mismatch, 3,
         '  [~] 2 thread(s) present in ThreadListStream but missing from ThreadInfoListStream '
-        '(StartAddress/CreateTime/ExitTime/KernelTime/UserTime unavailable for those)\n\n'
+        '(StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those)\n\n'
         '  [~] 1 thread(s) present in ThreadInfoListStream but missing from ThreadListStream '
-        '(SuspendCount/Priority/TEB unavailable for those)\n\n\n'
-        '  TID              0x1\n  StartAddress     0x000000007ffe0000  ← ⚠  NOT IN ANY MODULE\n\n'
+        '(SuspendCount/Priority/TEB/CurrentIP unavailable for those)\n\n\n'
+        '  TID              0x1\n  StartAddress     0x000000007ffe0000  ← ⚠  NOT IN ANY MODULE\n'
+        '  CurrentIP        0x0000000000000000  (RIP) (zero — not treated as a confirmed '
+        'execution address)\n\n'
         '  TID              0x2\n  StartAddress     unavailable  ← (unknown — requires '
-        'ThreadInfoListStream)\n\n'
+        'ThreadInfoListStream)\n'
+        '  CurrentIP        0x0000000000000000  (RIP) (zero — not treated as a confirmed '
+        'execution address; cannot confirm whether this context is disputed — no '
+        'ThreadInfoListStream record for this thread)\n\n'
         '  TID              0x3\n  StartAddress     unavailable  ← (unknown — requires '
-        'ThreadInfoListStream)\n\n'
-        '  TID              0x4\n  StartAddress     0x000000007fff0000  ← ⚠  NOT IN ANY MODULE\n\n'
+        'ThreadInfoListStream)\n'
+        '  CurrentIP        0x0000000000000000  (RIP) (zero — not treated as a confirmed '
+        'execution address; cannot confirm whether this context is disputed — no '
+        'ThreadInfoListStream record for this thread)\n\n'
+        '  TID              0x4\n  StartAddress     0x000000007fff0000  ← ⚠  NOT IN ANY MODULE\n'
+        '  CurrentIP        unavailable  ← (no CONTEXT captured/parsed for this thread)\n\n'
         '  [~] CreateTime/ExitTime not available in the captured ThreadInfo data.\n\n[+] 4 thread(s).\n',
         {"kind": "threads", "execution_status": "completed",
          "coverage": {"status": "partial",
                       "reasons": ["2 thread(s) present in ThreadListStream but missing from "
                                   "ThreadInfoListStream (StartAddress/CreateTime/ExitTime/"
-                                  "KernelTime/UserTime unavailable for those)",
+                                  "KernelTime/UserTime/DumpFlags unavailable for those)",
                                   "1 thread(s) present in ThreadInfoListStream but missing from "
-                                  "ThreadListStream (SuspendCount/Priority/TEB unavailable for "
-                                  "those)"]},
+                                  "ThreadListStream (SuspendCount/Priority/TEB/CurrentIP "
+                                  "unavailable for those)"]},
          "summary": {"count": 4},
          "data": {"records": [
-             {"tid": 1, "start_address": "0x000000007ffe0000", "backing_module": None,
+             {"tid": 1, "start_address": "0x000000007ffe0000",
+              "ip": "0x0000000000000000", "ip_reg": "RIP", "backing_module": None,
               "module_context": "unregistered", "flags": [], "create_time": None,
               "exit_time": None, "exit_status": None, "kernel_time_100ns": None,
-              "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None},
-             {"tid": 2, "start_address": None, "backing_module": None, "module_context": None,
+              "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None,
+              "ip_context_conflict": False, "start_address_state": "recorded",
+              "dump_flags_state": "resolved"},
+             {"tid": 2, "start_address": None,
+              "ip": "0x0000000000000000", "ip_reg": "RIP",
+              "backing_module": None, "module_context": None,
               "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
               "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-              "priority": None, "teb": None},
-             {"tid": 3, "start_address": None, "backing_module": None, "module_context": None,
+              "priority": None, "teb": None, "ip_context_conflict": None,
+              "start_address_state": "absent", "dump_flags_state": "absent"},
+             {"tid": 3, "start_address": None,
+              "ip": "0x0000000000000000", "ip_reg": "RIP",
+              "backing_module": None, "module_context": None,
               "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
               "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-              "priority": None, "teb": None},
-             {"tid": 4, "start_address": "0x000000007fff0000", "backing_module": None,
+              "priority": None, "teb": None, "ip_context_conflict": None,
+              "start_address_state": "absent", "dump_flags_state": "absent"},
+             {"tid": 4, "start_address": "0x000000007fff0000",
+              "ip": None, "ip_reg": None, "backing_module": None,
               "module_context": "unregistered", "flags": [], "create_time": None,
               "exit_time": None, "exit_status": None, "kernel_time_100ns": None,
-              "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None},
+              "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None,
+              "ip_context_conflict": False, "start_address_state": "recorded",
+              "dump_flags_state": "resolved"},
          ]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,partial,2 thread(s) present in ThreadListStream but missing from '
@@ -775,8 +813,8 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
         {"threads": _src("present", 1), "thread_info": _src("absent"), "modules": _src("absent")},
         [_lim("SOURCE_ABSENT", "thread_info", scope="dump",
               unavailable_fields=["StartAddress", "CreateTime", "ExitTime", "KernelTime",
-                                   "UserTime"],
-              available_fields=["TID", "SuspendCount", "Priority", "TEB"]),
+                                   "UserTime", "DumpFlags"],
+              available_fields=["TID", "SuspendCount", "Priority", "TEB", "CurrentIP"]),
          _lim("MODULE_CLASSIFICATION_UNAVAILABLE", "modules", scope="dump")],
     ),
     "threads_present_empty": (
@@ -794,10 +832,10 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
          "modules": _src("present_empty", 0)},
         [_lim("SOURCE_KEY_MISMATCH", "thread_info", scope="thread", affected_count=2,
               unavailable_fields=["StartAddress", "CreateTime", "ExitTime", "KernelTime",
-                                   "UserTime"],
+                                   "UserTime", "DumpFlags"],
               counterpart_source="threads"),
          _lim("SOURCE_KEY_MISMATCH", "threads", scope="thread", affected_count=1,
-              unavailable_fields=["SuspendCount", "Priority", "TEB"],
+              unavailable_fields=["SuspendCount", "Priority", "TEB", "CurrentIP"],
               counterpart_source="thread_info")],
     ),
     # --sysinfo's seven sources, and its limitations in §4.7's SECTION

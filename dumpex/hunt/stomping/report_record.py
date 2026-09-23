@@ -66,6 +66,7 @@ def _verified_change_dict(vc) -> dict:
         "total_ranges": vc.total_ranges,
         "compared_len": vc.compared_len,
         "rip_in_changed_range": vc.rip_in_changed_range,
+        "rip_context_conflict": vc.rip_context_conflict,
         "disk_sha256": vc.disk_sha256,
         "mem_sha256": vc.mem_sha256,
     }

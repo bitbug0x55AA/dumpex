@@ -465,7 +465,7 @@ def test_c2_budget_exhaustion_marks_coverage_partial(monkeypatch):
     # scan begins -- `dumpex.hunt.pipe.__init__` binds this constant into
     # its own module namespace at import time (`from ...config import
     # PIPE_C2_BUDGET_MAX_HITS`), so patching it here, like this module's
-    # existing `pipemod.read_region`/`pipemod.get_thread_contexts`
+    # existing `pipemod.read_region`/`pipemod.enriched_thread_contexts`
     # monkeypatches, changes what `_build_pipe_report()` actually
     # constructs.
     monkeypatch.setattr(pipemod, "PIPE_C2_BUDGET_MAX_HITS", 0)
@@ -480,7 +480,7 @@ def test_c2_budget_exhaustion_marks_coverage_partial(monkeypatch):
 
 # ── pipe + nearby C2 + nearby RIP -> score 3 ────────────────────────────────
 
-def test_pipe_nearby_c2_and_rip_scores_3():
+def test_pipe_nearby_c2_and_rip_scores_3(monkeypatch):
     region_base = 0x1000000
     region_size = 0x10000
     pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
@@ -499,16 +499,144 @@ def test_pipe_nearby_c2_and_rip_scores_3():
         thread_info   = FakeStream([], "infos")
         handles        = FakeStream(handle_list, "handles")
     pipemod.read_region = mem_reader({region_base: bytes(data)})
-    pipemod.get_thread_contexts = lambda mf: [{"ThreadId": 1, "ip": pipe_va + 50,
-                                                 "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 1, "ip": pipe_va + 50, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": False}])
 
     f = pipemod._hunt_pipe(MF(), verbose=False)
     assert f["score"] == 3
 
 
+# ── AC3: a disputed or undeterminable current IP corroborating a handle
+#    must not produce an unqualified CONFIDENCE_HIGH / score == 3 --
+#    --threads/--report already qualify the identical fact for the same
+#    TID, and full_corroboration is "the score=3 case".
+
+def _pipe_full_corroboration_scenario(monkeypatch, thread_context):
+    region_base = 0x1000000
+    region_size = 0x10000
+    pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
+    data = bytearray(region_size)
+    data[0x100:0x100 + len(pipe_name)] = pipe_name
+    c2_offset = 0x100 + len(pipe_name) + 100
+    data[c2_offset:c2_offset + 40] = b"http://198.51.100.7:8080/submit.php\x00\x00\x00"
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(0x99, "File", r"\Device\NamedPipe\my_custom_ipc_channel")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: bytes(data)})
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [thread_context])
+    return pipemod._hunt_pipe(MF(), verbose=False)
+
+
+def test_full_corroboration_with_disputed_rip_is_qualified_not_unconfirmed_high(monkeypatch):
+    pipe_va = 0x1000000 + 0x100
+    thread_context = {"ThreadId": 1, "ip": pipe_va + 50, "ip_reg": "RIP", "is_wow64": False,
+                       "start_address": None, "ip_context_conflict": True}
+    f = _pipe_full_corroboration_scenario(monkeypatch, thread_context)
+    # score/confidence are unchanged by this addition -- only the
+    # limitations gain an explicit caveat, matching --hunt injection's
+    # own "no result is ever newly promoted or demoted" rule.
+    assert f["score"] == 3
+    corr = {finding["check"]: finding for finding in f["findings"]}["pipe.corroboration"]
+    assert corr["confidence"] == "high"
+    assert any("ThreadInfoListStream record flags as invalid" in lim
+               for lim in corr["limitations"])
+
+
+def test_full_corroboration_with_undeterminable_rip_is_qualified(monkeypatch):
+    pipe_va = 0x1000000 + 0x100
+    thread_context = {"ThreadId": 1, "ip": pipe_va + 50, "ip_reg": "RIP", "is_wow64": False,
+                       "start_address": None, "ip_context_conflict": None}
+    f = _pipe_full_corroboration_scenario(monkeypatch, thread_context)
+    assert f["score"] == 3
+    corr = {finding["check"]: finding for finding in f["findings"]}["pipe.corroboration"]
+    assert corr["confidence"] == "high"
+    assert any("no ThreadInfoListStream record at all" in lim for lim in corr["limitations"])
+
+
+# ── AC3 continued: the same thread corroborating MULTIPLE handles must be
+#    counted once, not once per handle -- `corroborated_handles` is one
+#    entry per HANDLE, and the caveat counts threads.
+
+def _pipe_multi_handle_scenario(monkeypatch, thread_contexts, pipe_specs):
+    """`pipe_specs` is [(handle_id, pipe_basename, string_offset), ...] --
+    every pipe name is planted in the SAME executable region so proximity
+    correlation can match any of them against any thread context supplied."""
+    region_base = 0x1000000
+    region_size = 0x10000
+    data = bytearray(region_size)
+    handle_list = []
+    for handle_id, basename, offset in pipe_specs:
+        pipe_name = ("\\\\.\\pipe\\" + basename).encode()
+        data[offset:offset + len(pipe_name)] = pipe_name
+        handle_list.append(Handle(handle_id, "File", r"\Device\NamedPipe\%s" % basename))
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: bytes(data)})
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: thread_contexts)
+    return pipemod._hunt_pipe(MF(), verbose=False)
+
+
+def test_corroboration_caveat_counts_one_thread_not_one_per_handle(monkeypatch):
+    region_base = 0x1000000
+    pipe1_va = region_base + 0x100
+    pipe2_va = region_base + 0x200
+    thread_contexts = [
+        {"ThreadId": 1, "ip": pipe1_va + 10, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": True},
+    ]
+    pipe_specs = [(0x88, "chan_a", 0x100), (0x99, "chan_b", 0x200)]
+    f = _pipe_multi_handle_scenario(monkeypatch, thread_contexts, pipe_specs)
+    corr = {finding["check"]: finding for finding in f["findings"]}["pipe.corroboration"]
+    # Both handles are corroborated by the SAME thread -- the caveat must
+    # still count one thread, not one per handle.
+    caveat = corr["limitations"][0]
+    assert "1 thread(s) whose captured CONTEXT" in caveat
+    assert "2 thread(s)" not in caveat
+
+
+def test_corroboration_caveat_counts_distinct_threads_across_multiple_handles_each(monkeypatch):
+    region_base = 0x1000000
+    thread_a_ip = region_base + 0x150
+    thread_b_ip = region_base + 0x3050
+    thread_contexts = [
+        {"ThreadId": 1, "ip": thread_a_ip, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": True},
+        {"ThreadId": 2, "ip": thread_b_ip, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": None},
+    ]
+    # Group 1 (near thread A's ip) and group 2 (near thread B's ip) are
+    # farther apart than PIPE_CONTEXT_DISTANCE (4096 bytes), so each
+    # thread only ever corroborates its own group's two handles.
+    pipe_specs = [
+        (0x11, "chan_a1", 0x100), (0x12, "chan_a2", 0x200),
+        (0x21, "chan_b1", 0x3000), (0x22, "chan_b2", 0x3100),
+    ]
+    f = _pipe_multi_handle_scenario(monkeypatch, thread_contexts, pipe_specs)
+    assert f["score"] == 2   # RIP-only corroboration (no C2 context) -- never full_corroboration
+    corr = {finding["check"]: finding for finding in f["findings"]}["pipe.corroboration"]
+    caveat = corr["limitations"][0]
+    # Four corroborated handles, but only two distinct threads behind them.
+    assert "1 thread(s) whose captured CONTEXT" in caveat
+    assert "1 thread(s) for which no DumpFlags value could be established" in caveat
+    assert "2 thread(s)" not in caveat
+
+
 # ── Bonus: framework-matched pipe + full corroboration -> score 3 ─────────
 
-def test_framework_plus_full_corroboration_scores_3():
+def test_framework_plus_full_corroboration_scores_3(monkeypatch):
     region_base = 0x1230000
     pipe_name = b"\\\\.\\pipe\\msagent_1337"
     pipe_off  = 0x100
@@ -528,8 +656,9 @@ def test_framework_plus_full_corroboration_scores_3():
     pipemod.read_region = mem_reader({region_base: data})
     # RIP within PIPE_CONTEXT_DISTANCE of the pipe name's own VA — StartAddress
     # alone (thread_infos above) is no longer enough to score, only a lead.
-    pipemod.get_thread_contexts = lambda mf: [{"ThreadId": 0x999, "ip": pipe_va + 5,
-                                                 "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": region_base + 0x10, "ip_context_conflict": False}])
 
     f = pipemod._hunt_pipe(MF(), verbose=False)
     assert f["score"] == 3
@@ -627,3 +756,56 @@ def test_verbose_lists_every_handle_beyond_the_facts_cap(capsys):
     for i in range(25):
         assert rf"\Device\NamedPipe\test_{i}" in verbose_out, \
             f"handle {i} (beyond the 20-item Finding.facts cap) missing from --verbose output"
+
+
+# -- a start address its own record disowns places a thread nowhere ------
+# The pipe hunter's StartAddress proximity lead and its unbacked-thread
+# list read the same field --threads/--report and the injection hunter
+# read, so all four answer "is this address established" the same way.
+
+_PIPE_REGION_BASE = 0x1230000
+_PIPE_NAME_OFFSET = 0x100
+_PIPE_START_ADDRESS = _PIPE_REGION_BASE + _PIPE_NAME_OFFSET + 0x10
+
+
+def _pipe_start_proximity_report(thread_infos):
+    """A handle-confirmed pipe whose name sits in an executable region,
+    with no thread CONTEXT at all -- so the only thing that can place a
+    thread near it is a recorded StartAddress."""
+    data = (b"A" * _PIPE_NAME_OFFSET + rb"\\.\pipe\chan_x" + b"\x00" + b"B" * 0x200)
+    regions = [Region(_PIPE_REGION_BASE, _PIPE_REGION_BASE, 0x1000, "MEM_COMMIT",
+                      "PAGE_EXECUTE_READ", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        handles        = FakeStream([Handle(0x88, "File", r"\Device\NamedPipe\chan_x")],
+                                    "handles")
+    pipemod.read_region = mem_reader({_PIPE_REGION_BASE: data})
+    return pipemod._build_pipe_report(MF())
+
+
+def test_pipe_start_address_lead_fires_for_an_established_start():
+    report = _pipe_start_proximity_report([ThreadInfo(0x999, _PIPE_START_ADDRESS)])
+    assert "pipe.start_address_proximity_lead" in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads
+
+
+def test_pipe_start_address_lead_ignores_a_record_that_disowns_its_own_start():
+    # Same address bytes, same distance, same region -- only the record's
+    # own DumpFlags differ. A record documented as carrying nothing
+    # beyond its ThreadId establishes no location, so it can produce
+    # neither a proximity lead nor an unbacked-thread record.
+    report = _pipe_start_proximity_report(
+        [ThreadInfo(0x999, _PIPE_START_ADDRESS,
+                    dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")])
+    assert "pipe.start_address_proximity_lead" not in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads == ()
+
+
+def test_pipe_start_address_lead_ignores_a_record_whose_flags_are_unreadable():
+    report = _pipe_start_proximity_report(
+        [ThreadInfo(0x999, _PIPE_START_ADDRESS, raw_dump_flags=None)])
+    assert "pipe.start_address_proximity_lead" not in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads == ()

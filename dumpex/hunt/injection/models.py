@@ -112,11 +112,34 @@ class UnbackedThreadEvidence:
 @dataclass(frozen=True)
 class RipHitEvidence:
     """One thread whose CURRENT RIP/EIP lands inside a suspicious
-    allocation -- built once in correlation.correlate()."""
+    allocation -- built once in correlation.correlate().
+
+    `start_address` is this same thread's own recorded StartAddress
+    (possibly None), copied through from the ThreadContext that produced
+    this hit -- never re-derived, and never confused with `ip` (where the
+    thread BEGAN vs. where it IS now are independent facts, same rule
+    dumpex.output.records.ReportThreadInfo/ThreadRecord already enforce).
+    `ip_context_conflict` is the tri-state dumpex.core.memory.
+    ip_context_conflict_for result for this TID: True when this TID's own
+    ThreadInfoListStream record flags its context as invalid despite the
+    parsed `ip`; None when this TID has no ThreadInfoListStream record at
+    all (undeterminable); False when a real record confirms no dispute.
+    A conflicted or undeterminable `ip` is still a real, captured value
+    and still correlated against the region here -- callers that turn
+    this into a "currently executing" claim must qualify it when this
+    field is not False.
+
+    Defaults to None (undeterminable), never False: a construction that
+    omits this field carries a real `ip` with no accompanying dispute
+    check, and the field's whole purpose is to withhold confirmation, not
+    grant it by omission -- an unqualified "currently executing" claim
+    must never come from a caller simply forgetting to pass this."""
     thread_id: int
     ip: int
     ip_reg: str
     region: RegionRef
+    start_address: "int | None" = None
+    ip_context_conflict: "bool | None" = None
 
 
 @dataclass(frozen=True)
@@ -150,11 +173,24 @@ class ThreadContext:
     A thread whose context could not be parsed at all is simply ABSENT
     from the collected tuple -- never present with ip=0 (see
     get_thread_contexts()'s own docstring: "not in this list" means "no
-    live IP available", which is a different claim than "IP is 0")."""
+    live IP available", which is a different claim than "IP is 0").
+
+    `start_address` and `ip_context_conflict` are resolved by
+    thread_scan.resolve_thread_contexts() from this same TID's
+    ThreadInfoListStream record (StartAddress, and DumpFlags via
+    dumpex.core.memory.ip_context_conflict_for) -- a second, independent
+    source joined in at the same collection boundary, not re-derived
+    later. Same tri-state rule as ReportThreadInfo/ThreadRecord's
+    identical field: True/False are confirmed, None means this TID has no
+    ThreadInfoListStream record to check `ip` against at all. Defaults to
+    None, not False: an omitted value must degrade to "cannot confirm",
+    never to a silent, unearned "confirmed clean"."""
     thread_id: int
     ip: int
     ip_reg: str      # "RIP" (native x64) or "EIP" (WOW64 32-on-64)
     is_wow64: bool
+    start_address: "int | None" = None
+    ip_context_conflict: "bool | None" = None
 
 
 @dataclass(frozen=True)

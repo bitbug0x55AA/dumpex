@@ -421,12 +421,22 @@ def _require_ordered_subsequence(hit_keys: list, source_keys: list,
 
 def _require_rip_hits_match_thread_contexts(rip_hits: tuple, thread_contexts: tuple) -> None:
     """Every `RipHitEvidence` in `rip_hits` must be an order-preserving
-    subsequence match, by (thread_id, ip, ip_reg), of `InjectionEvidence.
-    thread_contexts` -- `correlate()` builds `rip_hits` by iterating
-    `thread_contexts` and copying those three fields verbatim onto
-    whichever entries pass its geometric filter."""
-    hit_keys = [(hit.thread_id, hit.ip, hit.ip_reg) for hit in rip_hits]
-    source_keys = [(tc.thread_id, tc.ip, tc.ip_reg) for tc in thread_contexts]
+    subsequence match, by (thread_id, ip, ip_reg, start_address,
+    ip_context_conflict), of `InjectionEvidence.thread_contexts` --
+    `correlate()` builds `rip_hits` by iterating `thread_contexts` and
+    copying all five fields verbatim onto whichever entries pass its
+    geometric filter. `start_address`/`ip_context_conflict` are in the key
+    (not just thread_id/ip/ip_reg) so a hit whose dispute status or
+    recorded start silently disagrees with its own source ThreadContext
+    -- e.g. a future correlate()-like path that forgets to copy
+    ip_context_conflict, reverting a rip hit to its None default while
+    the matching thread_contexts entry says otherwise -- is caught here,
+    not just left to a schema that only ever sees the already-projected
+    HuntThreadRef."""
+    hit_keys = [(hit.thread_id, hit.ip, hit.ip_reg, hit.start_address, hit.ip_context_conflict)
+                for hit in rip_hits]
+    source_keys = [(tc.thread_id, tc.ip, tc.ip_reg, tc.start_address, tc.ip_context_conflict)
+                   for tc in thread_contexts]
     _require_ordered_subsequence(hit_keys, source_keys,
                                   "InjectionEvidence.correlation.rip_hits",
                                   "InjectionEvidence.thread_contexts")
@@ -491,6 +501,23 @@ class CoverageSnapshot:
     region_count:      "int | None" = None
     thread_info_count: "int | None" = None
     module_count:      "int | None" = None
+    # ThreadInfoListStream records the unbacked-thread scan held back
+    # because no start address was established for them (see
+    # dumpex.core.memory.recorded_start_address). A checked-and-excluded
+    # thread is not a checked negative, so the count is a coverage fact,
+    # not evidence.
+    starts_not_established: int = 0
+    # Records this stream declared but never delivered (see
+    # dumpex.core.memory.truncated_thread_info_count). Which threads they
+    # describe is unknown, so they are threads this hunter could not
+    # examine at all.
+    thread_info_truncated: int = 0
+    # Threads the base ThreadListStream lists that ThreadInfoListStream
+    # never covered -- the same per-TID mismatch --threads reports. Their
+    # start address could not be checked for lack of any record at all,
+    # which is a different fact from a record that arrived and came up
+    # short (starts_not_established).
+    threads_without_a_record: int = 0
 
     def __post_init__(self):
         for name in ("memory_info_stream", "thread_info_stream",
@@ -546,13 +573,21 @@ class CoverageSnapshot:
         out either way. `pe_evidence_capped` counts VALIDATED hidden PE
         headers the scan found but did not retain (evidence cap) -- the
         memory was searched, but the report does not list everything that
-        search found, which is not a complete result either."""
+        search found, which is not a complete result either.
+        `starts_not_established`/`thread_info_truncated`/
+        `threads_without_a_record` join them for the same reason on this
+        hunter's other signal: a thread whose start address this dump
+        could not establish, whose record never arrived, or which this
+        stream never covered at all, is an unbacked-thread check that
+        could not be run -- not one that ran and came back negative."""
         return (self.memory_info_stream and self.thread_info_stream
                 and self.module_list_stream
                 and self.pe_read_failed == 0 and self.pe_short_reads == 0
                 and self.pe_scan_truncated == 0 and self.pe_scan_not_started == 0
                 and self.pe_evidence_capped == 0
-                and self.thread_context and self.contexts_missing == 0)
+                and self.thread_context and self.contexts_missing == 0
+                and self.starts_not_established == 0 and self.thread_info_truncated == 0
+                and self.threads_without_a_record == 0)
 
     @property
     def status(self) -> str:

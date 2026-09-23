@@ -326,7 +326,7 @@ def test_oversized_ioc_region_survives_not_evaluated_when_module_list_absent(hun
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
-def test_verified_change_scores_1_then_2_with_rip(hunter_record_validator):
+def test_verified_change_scores_1_then_2_with_rip(hunter_record_validator, monkeypatch):
     module_base = 0x7ff600000000
     timestamp = 0x11111111
     sections = [{"name": b".text", "vaddr": 0x1000, "vsize": 0x2000, "rawptr": 0x400,
@@ -356,7 +356,7 @@ def test_verified_change_scores_1_then_2_with_rip(hunter_record_validator):
             fh.write(bytes(ref_file))
 
         stomping.read_region = mem_reader(read_map)
-        stomping.get_thread_contexts = lambda mf: []
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [])
         console_dict1 = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         rec1 = collect_stomping_record(MF(), ref_dir=d)
         _assert_matches_console_dict(rec1, console_dict1)
@@ -370,8 +370,9 @@ def test_verified_change_scores_1_then_2_with_rip(hunter_record_validator):
         assert list(hunter_record_validator.iter_errors(rec1.to_dict())) == []
 
         changed_va = module_base + 0x1000 + 0x100
-        stomping.get_thread_contexts = lambda mf: [{"ThreadId": 1, "ip": changed_va + 2,
-                                                      "ip_reg": "RIP", "is_wow64": False}]
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [
+            {"ThreadId": 1, "ip": changed_va + 2, "ip_reg": "RIP", "is_wow64": False,
+             "start_address": None, "ip_context_conflict": False}])
         console_dict2 = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         rec2 = collect_stomping_record(MF(), ref_dir=d)
         _assert_matches_console_dict(rec2, console_dict2)

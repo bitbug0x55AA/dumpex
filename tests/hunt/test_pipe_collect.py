@@ -300,7 +300,7 @@ def test_memory_info_absent_alone_does_not_force_partial(hunter_record_validator
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
-def test_pipe_nearby_c2_and_rip_scores_3(hunter_record_validator):
+def test_pipe_nearby_c2_and_rip_scores_3(hunter_record_validator, monkeypatch):
     region_base = 0x1000000
     region_size = 0x10000
     pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
@@ -319,8 +319,9 @@ def test_pipe_nearby_c2_and_rip_scores_3(hunter_record_validator):
         thread_info   = FakeStream([], "infos")
         handles        = FakeStream(handle_list, "handles")
     pipemod.read_region = mem_reader({region_base: bytes(data)})
-    pipemod.get_thread_contexts = lambda mf: [{"ThreadId": 1, "ip": pipe_va + 50,
-                                                 "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(pipemod, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 1, "ip": pipe_va + 50, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": None, "ip_context_conflict": False}])
 
     console_dict = pipemod._hunt_pipe(MF(), verbose=False)
     rec = collect_pipe_record(MF())

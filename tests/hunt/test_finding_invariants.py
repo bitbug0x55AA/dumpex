@@ -81,7 +81,7 @@ def test_cs_beacon_detected_has_detection_tag():
     _assert_detected_has_detection_tag(f)
 
 
-def test_pipe_detected_has_detection_tag():
+def test_pipe_detected_has_detection_tag(monkeypatch):
     region_base = 0x1230000
     pipe_name = b"\\\\.\\pipe\\msagent_1337"
     pipe_off  = 0x100
@@ -98,14 +98,15 @@ def test_pipe_detected_has_detection_tag():
         thread_info   = FakeStream(thread_infos, "infos")
         handles        = FakeStream(handle_list, "handles")
     pipe.read_region = mem_reader({region_base: data})
-    pipe.get_thread_contexts = lambda mf: [{"ThreadId": 0x999, "ip": pipe_va + 5,
-                                             "ip_reg": "RIP", "is_wow64": False}]
+    monkeypatch.setattr(pipe, "enriched_thread_contexts", lambda mf: [
+        {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False,
+         "start_address": region_base + 0x10, "ip_context_conflict": False}])
 
     f = pipe._hunt_pipe(MF(), verbose=False)
     _assert_detected_has_detection_tag(f)
 
 
-def test_stomping_detected_has_detection_tag():
+def test_stomping_detected_has_detection_tag(monkeypatch):
     module_base = 0x7ff600000000
     timestamp = 0x11111111
     sections = [{"name": b".text", "vaddr": 0x1000, "vsize": 0x2000, "rawptr": 0x400,
@@ -134,7 +135,7 @@ def test_stomping_detected_has_detection_tag():
             fh.write(bytes(ref_file))
 
         stomping.read_region = mem_reader(read_map)
-        stomping.get_thread_contexts = lambda mf: []
+        monkeypatch.setattr(stomping, "enriched_thread_contexts", lambda mf: [])
         f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         _assert_detected_has_detection_tag(f)
 

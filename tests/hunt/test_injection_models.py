@@ -310,38 +310,43 @@ def _fake_mf_with_unbacked_thread_missing_start_address():
     return MF()
 
 
-def test_unbacked_thread_evidence_preserves_none_start_address():
+def test_a_thread_with_no_recorded_start_address_produces_no_unbacked_evidence():
+    # A record that never carried a StartAddress establishes no location.
+    # Substituting 0 to classify it finds no module and would confirm an
+    # unbacked thread out of a field the producer never wrote, so the
+    # record contributes no evidence at all (see dumpex.core.memory.
+    # recorded_start_address, the single rule --threads/--report and
+    # every hunter share).
     mf = _fake_mf_with_unbacked_thread_missing_start_address()
-    hits = thread_scan._hunt_unbacked_threads(mf, module_list_available=True)
-
-    assert len(hits) == 1
-    assert hits[0].start_address is None
-    # Location resolution still ran (using a 0-substituted lookup address
-    # internally) without raising.
-    assert isinstance(hits[0].location, Location)
+    assert thread_scan._hunt_unbacked_threads(mf, module_list_available=True) == ()
+    assert thread_scan.count_unestablished_start_addresses(mf) == 1
 
 
-def test_v2_6_record_emits_null_not_a_fabricated_zero_address():
+def test_v2_6_record_carries_no_thread_for_an_unrecorded_start_address():
     from dumpex.hunt.injection import collect
 
     mf = _fake_mf_with_unbacked_thread_missing_start_address()
     record = collect.collect_injection_record(mf)
 
-    assert len(record.details.threads) == 1
-    assert record.details.threads[0].start_address is None
+    assert list(record.details.threads) == []
 
 
-def test_console_facts_do_not_crash_and_display_zero_for_none_start_address(capsys):
-    from dumpex.hunt.injection import _hunt_injection
+def test_an_unrecorded_start_address_is_named_rather_than_silently_dropped(capsys):
+    from dumpex.hunt.injection import _hunt_injection, _build_injection_report
 
     mf = _fake_mf_with_unbacked_thread_missing_start_address()
 
-    f = _hunt_injection(mf, verbose=False)   # must not raise formatting None as hex
-    assert len(f["threads"]) == 1
+    f = _hunt_injection(mf, verbose=False)
+    assert f["threads"] == []
+    assert f["score"] == 0
 
-    f = _hunt_injection(mf, verbose=True)    # must not raise either
+    checks = {r.check for r in _build_injection_report(mf).results}
+    assert "injection.unbacked_thread_startaddress" not in checks
+    assert "injection.start_address_not_established" in checks
+
+    _hunt_injection(mf, verbose=True)        # must not raise either
     out = capsys.readouterr().out
-    assert "StartAddress_VA=0x0000000000000000" in out
+    assert "StartAddress_VA=0x0000000000000000" not in out
 
 
 def test_correlate_returns_frozen_region_ref_hits_not_raw_regions():

@@ -53,8 +53,28 @@ def test_thread_ref_to_dict_shape():
                        ip="0x0000000000002000", ip_reg="RIP")
     assert t.to_dict() == {
         "tid": 5, "start_address": "0x0000000000002000",
-        "ip": "0x0000000000002000", "ip_reg": "RIP",
+        "ip": "0x0000000000002000", "ip_reg": "RIP", "ip_context_conflict": False,
     }
+
+
+def test_thread_ref_rejects_ip_context_conflict_true_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        HuntThreadRef(tid=1, ip=None, ip_reg=None, ip_context_conflict=True)
+
+
+def test_thread_ref_rejects_ip_context_conflict_none_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        HuntThreadRef(tid=1, ip=None, ip_reg=None, ip_context_conflict=None)
+
+
+def test_thread_ref_rejects_non_bool_ip_context_conflict():
+    with pytest.raises(ValueError, match="ip_context_conflict must be None or a bool"):
+        HuntThreadRef(tid=1, ip="0x0000000000001000", ip_reg="RIP", ip_context_conflict=1)
+
+
+def test_thread_ref_accepts_undeterminable_ip_context_conflict_when_ip_is_set():
+    t = HuntThreadRef(tid=1, ip="0x0000000000001000", ip_reg="RIP", ip_context_conflict=None)
+    assert t.to_dict()["ip_context_conflict"] is None
 
 
 # ── HuntPeHeaderHit ──────────────────────────────────────────────────────

@@ -88,11 +88,126 @@ MODULE_CONTEXT_UNAVAILABLE  = "unavailable"     # ModuleListStream itself missin
                                                  # tell either way, NOT a confirmed anomaly
 
 
+# What standing a thread's `start_address` has, and whether its record's
+# DumpFlags could be read at all. Mirrors dumpex.core.memory's own
+# START_ADDRESS_*/DUMP_FLAGS_* by convention (same literal strings), the
+# same way _TRIAGE_VERDICTS below mirrors that module's verdict constants
+# rather than importing them -- the dependency direction stays
+# command/domain model -> output layer, never the reverse.
+START_ADDRESS_RECORDED   = "recorded"     # the record stands behind this address
+START_ADDRESS_INVALID    = "invalid"      # its own DumpFlags disown every field but
+                                            # ThreadId; start_address is null
+START_ADDRESS_UNVERIFIED = "unverified"   # address present, DumpFlags unreadable, so
+                                            # nothing establishes it as evidence
+START_ADDRESS_ABSENT     = "absent"       # no address was recorded for this thread at
+                                            # all; start_address is null
+_START_ADDRESS_STATES = (START_ADDRESS_RECORDED, START_ADDRESS_INVALID,
+                          START_ADDRESS_UNVERIFIED, START_ADDRESS_ABSENT)
+
+DUMP_FLAGS_RESOLVED   = "resolved"     # value known; an empty `flags` means no flag set
+DUMP_FLAGS_UNRESOLVED = "unresolved"   # record present, value unreadable; an empty
+                                        # `flags` means nothing is known
+DUMP_FLAGS_ABSENT     = "absent"       # no ThreadInfoListStream record at all
+_DUMP_FLAGS_STATES = (DUMP_FLAGS_RESOLVED, DUMP_FLAGS_UNRESOLVED, DUMP_FLAGS_ABSENT)
+
+# The `dump_flags_state` each start-address state requires, for the three
+# states that are decided BY the flags. `absent` is deliberately absent
+# from this table: whether an address was captured at all is independent
+# of whether the flags were readable, so a record with perfectly readable
+# flags can still have stopped short of its own StartAddress field.
+_START_ADDRESS_STATE_FLAGS_STATE = {
+    START_ADDRESS_RECORDED:   DUMP_FLAGS_RESOLVED,
+    START_ADDRESS_INVALID:    DUMP_FLAGS_RESOLVED,
+    START_ADDRESS_UNVERIFIED: DUMP_FLAGS_UNRESOLVED,
+}
+
+# The states that describe an address this record actually carries, and
+# the states that describe the absence of one. Enforced against
+# `start_address` itself, so a null can never be published as an address
+# the record stood behind, nor an address as one it never held.
+_START_ADDRESS_STATES_WITH_ADDRESS = (START_ADDRESS_RECORDED, START_ADDRESS_UNVERIFIED)
+_START_ADDRESS_STATES_WITHOUT_ADDRESS = (START_ADDRESS_INVALID, START_ADDRESS_ABSENT)
+
+
+def _require_thread_info_states(start_address, start_address_state, dump_flags_state, where):
+    """Shared validation of the two thread-record fields that say what a
+    `start_address` is worth. Used by every record carrying them, so the
+    rules cannot drift between `--threads` and `--report`."""
+    if start_address_state not in _START_ADDRESS_STATES:
+        raise ValueError(
+            f"{where}.start_address_state must be one of {_START_ADDRESS_STATES}, "
+            f"got {start_address_state!r}")
+    if dump_flags_state not in _DUMP_FLAGS_STATES:
+        raise ValueError(
+            f"{where}.dump_flags_state must be one of {_DUMP_FLAGS_STATES}, "
+            f"got {dump_flags_state!r}")
+    expected = _START_ADDRESS_STATE_FLAGS_STATE.get(start_address_state)
+    if expected is not None and dump_flags_state != expected:
+        raise ValueError(
+            f"{where}.start_address_state {start_address_state!r} requires "
+            f"dump_flags_state {expected!r}, got {dump_flags_state!r}")
+    if dump_flags_state == DUMP_FLAGS_ABSENT and start_address_state != START_ADDRESS_ABSENT:
+        raise ValueError(
+            f"{where}.start_address_state must be {START_ADDRESS_ABSENT!r} when "
+            f"dump_flags_state is {DUMP_FLAGS_ABSENT!r} -- a thread with no "
+            f"ThreadInfoListStream record has no recorded start address either")
+    if start_address is None and start_address_state in _START_ADDRESS_STATES_WITH_ADDRESS:
+        raise ValueError(
+            f"{where}.start_address_state {start_address_state!r} describes an address this "
+            f"record carries, but start_address is None")
+    if start_address is not None and start_address_state in _START_ADDRESS_STATES_WITHOUT_ADDRESS:
+        raise ValueError(
+            f"{where}.start_address must be None when start_address_state is "
+            f"{start_address_state!r} -- no address was established for this thread")
+
+
 @dataclass
 class ThreadRecord:
-    """One thread, as reported by `--threads`."""
+    """One thread, as reported by `--threads`.
+
+    `start_address` (where the thread BEGAN, from ThreadInfoListStream) and
+    `ip`/`ip_reg` (where it IS RIGHT NOW, the live RIP/EIP captured in this
+    thread's own CONTEXT at dump time) are independent facts from
+    independent sources -- a thread whose current `ip` differs from its
+    `start_address` is not reducible to either address alone, and one is
+    never substituted for the other. `ip` is None whenever this thread's
+    CONTEXT was not captured/parsed (see dumpex.core.memory.
+    get_thread_contexts's own "not in this list" contract) -- never
+    defaulted to `start_address` or to 0.
+
+    `ip_context_conflict` is a tri-state join against this TID's own
+    ThreadInfoListStream record, computed by dumpex.core.memory.
+    ip_context_conflict_for (the single derivation `--threads` and
+    `--report` both consume): True when `ip` is set (the base
+    ThreadListStream's own CONTEXT parsed a value) AND that record
+    independently flags this same context as invalid (the same [NO_CTX]
+    tag `flags` already carries); False when `ip` is set and that record
+    is real and clean, OR whenever `ip` itself is None (nothing to
+    dispute, regardless of ThreadInfoListStream coverage); None when `ip`
+    is set but no DumpFlags value could be established to check it
+    against -- no ThreadInfoListStream record for this TID at all (see
+    RawThreadInfo), or one whose flags could not be read (see
+    `dump_flags_state`). The dispute is then undeterminable, never a
+    confirmed False the way genuinely clean, readable DumpFlags are.
+    `ip` keeps the real, parsed value in every case.
+
+    `start_address_state` says what `start_address` is worth, and
+    `dump_flags_state` whether this thread's DumpFlags could be read at
+    all -- see those constants' own comments. A `start_address` of None
+    is `absent` (ThreadInfoListStream never covered this TID) or
+    `invalid` (it did, and its own DumpFlags disown every field but
+    ThreadId); neither is an address 0x0, and neither is evidence that
+    this thread starts outside every module. `flags` carries one tag per
+    DumpFlags bit actually set, so a combined value is reported in full;
+    an empty `flags` means "no flag set" only when `dump_flags_state` is
+    `resolved`."""
     tid:               "int | None"
     start_address:     "str | None"
+    ip:                "str | None"   # live RIP/EIP from this thread's own CONTEXT;
+                                        # None means no CONTEXT was captured/parsed for
+                                        # this thread -- an unknown current IP, never
+                                        # start_address wearing a different name
+    ip_reg:            "str | None"   # "RIP" or "EIP"; both-or-neither with `ip`
     backing_module:    "str | None"
     # None only when start_address is itself None (module context is moot
     # with no address to resolve). Otherwise one of MODULE_CONTEXT_* --
@@ -111,12 +226,36 @@ class ThreadRecord:
     suspend_count:     "int | None"
     priority:          "int | None"
     teb:               "str | None"
-    flags: list = field(default_factory=list)   # list[str], e.g. ["EXITED"]
+    flags: list = field(default_factory=list)   # list[str], one per DumpFlags bit
+                                                   # actually set, e.g. ["EXITED"]
+    ip_context_conflict: "bool | None" = False   # None: undeterminable -- see this
+                                                    # class's own docstring
+    start_address_state: str = START_ADDRESS_RECORDED   # see this class's own docstring
+    dump_flags_state:    str = DUMP_FLAGS_RESOLVED      # and the constants themselves
+
+    def __post_init__(self):
+        _require_optional_hex_address(self.ip, "ThreadRecord.ip")
+        _require_thread_info_states(self.start_address, self.start_address_state,
+                                     self.dump_flags_state, "ThreadRecord")
+        if self.ip_reg is not None and not isinstance(self.ip_reg, str):
+            raise ValueError("ThreadRecord.ip_reg must be None or a string")
+        if self.ip is not None and self.ip_reg is None:
+            raise ValueError("ThreadRecord.ip_reg is required when ip is set")
+        if self.ip is None and self.ip_reg is not None:
+            raise ValueError("ThreadRecord.ip_reg must be None when ip is None")
+        if self.ip_context_conflict is not None and not isinstance(self.ip_context_conflict, bool):
+            raise ValueError("ThreadRecord.ip_context_conflict must be None or a bool")
+        if self.ip is None and self.ip_context_conflict is not False:
+            raise ValueError(
+                "ThreadRecord.ip_context_conflict must be False when ip is None -- there is "
+                "no captured value to dispute regardless of ThreadInfoListStream coverage")
 
     def to_dict(self) -> dict:
         return {
             "tid":               self.tid,
             "start_address":     self.start_address,
+            "ip":                self.ip,
+            "ip_reg":            self.ip_reg,
             "backing_module":    self.backing_module,
             "module_context":    self.module_context,
             "flags":             list(self.flags),
@@ -128,6 +267,9 @@ class ThreadRecord:
             "suspend_count":     self.suspend_count,
             "priority":          self.priority,
             "teb":               self.teb,
+            "ip_context_conflict": self.ip_context_conflict,
+            "start_address_state": self.start_address_state,
+            "dump_flags_state":    self.dump_flags_state,
         }
 
 
@@ -718,10 +860,21 @@ class Artifact:
 # separately. --report-string's N hits become N TriageCardRecords in one
 # CommandResult.records list; tid/addr mode always produces exactly one.
 
-TRIAGE_ANCHOR_TID        = "tid"
-TRIAGE_ANCHOR_ADDRESS    = "address"
-TRIAGE_ANCHOR_STRING_HIT = "string_hit"
-_TRIAGE_ANCHOR_SOURCES = (TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT)
+TRIAGE_ANCHOR_TID            = "tid"
+TRIAGE_ANCHOR_ADDRESS        = "address"
+TRIAGE_ANCHOR_STRING_HIT     = "string_hit"
+# A --report-tid card for a thread with no established start address --
+# no ThreadInfoListStream entry at all, or an entry whose own DumpFlags
+# disown every field but ThreadId (the card's own thread.
+# start_address_state says which) -- which therefore anchors on that
+# thread's independently captured current IP instead. Distinct from
+# TRIAGE_ANCHOR_TID, which always means the anchor is the thread's
+# recorded start address. Keeps the fallback's own address and source
+# explicit on the wire rather than indistinguishable from an ordinary
+# start-address anchor.
+TRIAGE_ANCHOR_TID_CURRENT_IP = "tid_current_ip"
+_TRIAGE_ANCHOR_SOURCES = (TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
+                           TRIAGE_ANCHOR_TID_CURRENT_IP)
 
 # Mirrors dumpex.core.memory.VERDICT_CLEAN/_SUSPICIOUS/_LIKELY_MALICIOUS/
 # _HIGH_CONFIDENCE_MALICIOUS by convention (same four literal strings) --
@@ -737,6 +890,12 @@ _TRIAGE_VERDICTS = ("CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_
 # set is rejected at construction time, not just left undocumented.
 _TRIAGE_FINDING_KEYS = ("unbacked_thread", "rwx_private", "injected_pe", "ioc_strings")
 
+REGION_MEMBERSHIP_START           = "start"           # StartAddress falls inside the region
+REGION_MEMBERSHIP_CURRENT         = "current"         # only the captured current IP falls inside it
+REGION_MEMBERSHIP_START_AND_CURRENT = "start_and_current"
+_REGION_MEMBERSHIP_REASONS = (
+    REGION_MEMBERSHIP_START, REGION_MEMBERSHIP_CURRENT, REGION_MEMBERSHIP_START_AND_CURRENT)
+
 
 @dataclass
 class ReportThreadInfo:
@@ -746,9 +905,69 @@ class ReportThreadInfo:
     create_time/exit_time/exit_status/suspend_count/priority/teb/flags):
     report.py's own console output never surfaces those for either
     section, so this record does not either -- see ThreadRecord itself
-    for the full `--threads` shape."""
+    for the full `--threads` shape.
+
+    `start_address` (where this thread BEGAN) and `ip`/`ip_reg` (its live
+    RIP/EIP, from this thread's own captured CONTEXT) are independent --
+    see ThreadRecord's own docstring for why one is never substituted for
+    the other. `ip` is None when this thread's CONTEXT was not captured/
+    parsed, never defaulted to `start_address`.
+
+    `ip_context_conflict` is a tri-state join against this TID's own
+    ThreadInfoListStream record, computed by dumpex.core.memory.
+    ip_context_conflict_for (the same derivation ThreadRecord's identical
+    field uses, so `--threads` and `--report` cannot disagree about the
+    same TID): True exactly when `ip` is set (the base ThreadListStream's
+    own CONTEXT parsed a value) AND that record independently flags this
+    same context as invalid (DumpFlags == MINIDUMP_THREAD_INFO_INVALID_
+    CONTEXT, the same tag --threads renders as `[NO_CTX]`) -- a genuine
+    disagreement between the dump's two thread sources about one fact.
+    `ip` keeps the real, parsed value either way (it is not discarded or
+    nulled out just because a second source disputes it), but the
+    conflict travels with it on the wire so a consumer is never left
+    treating a disputed value as a confirmed one.
+
+    False when `ip` is set and that record is real and clean, OR
+    whenever `ip` itself is None: there is nothing to conflict about when
+    no value was parsed at all, regardless of ThreadInfoListStream
+    coverage. None when `ip` is set but no DumpFlags value could be
+    established to join it against -- this TID has no ThreadInfoListStream
+    record at all (a RawThreadInfo placeholder, or a base-only TID whose
+    current IP became the card's own anchor), or it has one whose flags
+    could not be read (see `dump_flags_state`). The join cannot be
+    performed either way, so the dispute is undeterminable and must never
+    render the same as a confirmed False: a MODULE_CONTEXT_UNREGISTERED-
+    vs-MODULE_CONTEXT_UNAVAILABLE distinction applied to this field.
+
+    `backing_module`/`module_context` always describe `start_address`
+    specifically, never `ip` -- there is no current-IP module lookup on
+    this record at all. `region_membership` (Section 3 only; always None
+    for Section 1's own anchor-thread entry, which is not "in" a region
+    the way a Section 3 member is -- enforced by the schema's own
+    triageCardRecord.thread/other_threads_in_region constraints, not just
+    this docstring) says which address actually placed this entry in
+    Section 3's list: `start` (StartAddress falls inside the region),
+    `current` (only the captured current IP falls inside it --
+    backing_module/module_context still describe StartAddress, which may
+    be unrelated to or entirely outside this region), or
+    `start_and_current` (both do). `region_membership` says WHICH address
+    admitted this entry, never whether that address is trustworthy: a
+    `current`-only or `start_and_current` entry can still be admitted by a
+    disputed value -- a consumer that needs to know whether the admitting
+    current IP is disputed must separately check `ip_context_conflict`
+    (ANDing the two fields); `region_membership` itself has no disputed
+    variant.
+
+    `start_address_state`/`dump_flags_state` carry the same facts, with
+    the same vocabulary and the same rules, as ThreadRecord's identical
+    pair. They also decide what a `start` or `start_and_current`
+    `region_membership` can rest on: only a `recorded` start address is
+    established evidence that this thread begins inside the region."""
     tid:               int
     start_address:     "str | None"
+    ip:                "str | None"   # live RIP/EIP; None means no CONTEXT
+                                        # was captured/parsed for this thread
+    ip_reg:            "str | None"   # "RIP" or "EIP"; both-or-neither with `ip`
     backing_module:    "str | None"
     module_context:    "str | None"   # None only when start_address is itself
                                         # None -- see ThreadRecord's identical rule
@@ -759,10 +978,30 @@ class ReportThreadInfo:
                                                  # Section 3's "other threads sharing this region"
                                                  # entries never fetch/print a range, so these stay
                                                  # None there even when module_context == resolved
+    region_membership: "str | None" = None   # Section 3 only -- see this class's own docstring
+    ip_context_conflict: "bool | None" = False   # None: undeterminable -- see this
+                                                    # class's own docstring
+    start_address_state: str = START_ADDRESS_RECORDED   # ThreadRecord's identical pair,
+    dump_flags_state:    str = DUMP_FLAGS_RESOLVED      # same constants, same rules
 
     def __post_init__(self):
         _require_nonneg_int(self.tid, "ReportThreadInfo.tid")
         _require_optional_hex_address(self.start_address, "ReportThreadInfo.start_address")
+        _require_thread_info_states(self.start_address, self.start_address_state,
+                                     self.dump_flags_state, "ReportThreadInfo")
+        _require_optional_hex_address(self.ip, "ReportThreadInfo.ip")
+        if self.ip_reg is not None and not isinstance(self.ip_reg, str):
+            raise ValueError("ReportThreadInfo.ip_reg must be None or a string")
+        if self.ip is not None and self.ip_reg is None:
+            raise ValueError("ReportThreadInfo.ip_reg is required when ip is set")
+        if self.ip is None and self.ip_reg is not None:
+            raise ValueError("ReportThreadInfo.ip_reg must be None when ip is None")
+        if self.ip_context_conflict is not None and not isinstance(self.ip_context_conflict, bool):
+            raise ValueError("ReportThreadInfo.ip_context_conflict must be None or a bool")
+        if self.ip is None and self.ip_context_conflict is not False:
+            raise ValueError(
+                "ReportThreadInfo.ip_context_conflict must be False when ip is None "
+                "-- there is nothing to conflict about when no value was parsed at all")
         _require_optional_diff_str(self.backing_module, "ReportThreadInfo.backing_module")
         if self.module_context is not None and self.module_context not in _MODULE_CONTEXTS:
             raise ValueError(
@@ -784,17 +1023,28 @@ class ReportThreadInfo:
             raise ValueError(
                 "ReportThreadInfo.backing_module_base/backing_module_end require "
                 "module_context == 'resolved'")
+        if (self.region_membership is not None
+                and self.region_membership not in _REGION_MEMBERSHIP_REASONS):
+            raise ValueError(
+                f"ReportThreadInfo.region_membership must be None or one of "
+                f"{_REGION_MEMBERSHIP_REASONS}, got {self.region_membership!r}")
 
     def to_dict(self) -> dict:
         return {
             "tid":                  self.tid,
             "start_address":        self.start_address,
+            "ip":                   self.ip,
+            "ip_reg":               self.ip_reg,
             "backing_module":       self.backing_module,
             "module_context":       self.module_context,
             "kernel_time_100ns":    self.kernel_time_100ns,
             "user_time_100ns":      self.user_time_100ns,
             "backing_module_base":  self.backing_module_base,
             "backing_module_end":   self.backing_module_end,
+            "region_membership":    self.region_membership,
+            "ip_context_conflict":  self.ip_context_conflict,
+            "start_address_state":  self.start_address_state,
+            "dump_flags_state":     self.dump_flags_state,
         }
 
 
@@ -2913,7 +3163,14 @@ class TriageCardRecord:
     produces N cards, one per private hit region, each with
     anchor_source="string_hit" and anchor_address set to that region's
     base -- report_tid is never forwarded into those, see
-    dumpex.commands.report's own note on why). `notable_strings` reuses
+    dumpex.commands.report's own note on why). A --report-tid card whose
+    thread has no recorded StartAddress at all gets
+    anchor_source="tid_current_ip" instead of the ordinary "tid" value,
+    with `anchor_address` set to that thread's own captured current IP --
+    the one case where the anchor examined is NOT the value `anchor_source`
+    would otherwise suggest, so it is labeled with its own distinct value
+    rather than left for a consumer to infer from `thread.start_address`
+    being null. `notable_strings` reuses
     StringRecord as-is (matched_grep always None -- --report has no
     --grep concept). `ioc_strings` is a list of ReportIocString, NOT
     StringRecord -- see that class's own docstring for why (an extra
@@ -2957,7 +3214,7 @@ class TriageCardRecord:
     only lists dimensions that DID fire."""
     anchor_tid:               "int | None"
     anchor_address:           "str | None"
-    anchor_source:            str          # TRIAGE_ANCHOR_TID / _ADDRESS / _STRING_HIT
+    anchor_source:            str          # TRIAGE_ANCHOR_TID / _ADDRESS / _STRING_HIT / _TID_CURRENT_IP
     thread:                   "ReportThreadInfo | None"
     region:                   "ReportRegionInfo | None"
     string_hit:               "dict | None"   # {"offset", "address", "encoding"} -- the exact
@@ -3458,11 +3715,32 @@ class HuntThreadRef:
     """A thread reference inside a hunter's `details` -- TID plus optional
     StartAddress / current instruction pointer, hex-formatted. Same
     non-reproducibility problem as HuntRegionRef above for the raw
-    ThreadInfo/Thread objects it replaces."""
+    ThreadInfo/Thread objects it replaces.
+
+    `start_address` is None whenever no start address was established
+    for this thread -- ThreadInfoListStream never covered this TID, or
+    the record it did carry disowns every field but ThreadId (see
+    dumpex.core.memory.recorded_start_address) -- and is never address
+    0x0 standing in for either.
+
+    `ip_context_conflict` is the same tri-state dumpex.core.memory.
+    ip_context_conflict_for result ReportThreadInfo/ThreadRecord publish
+    for the identical fact on the same TID: True (this TID's own
+    ThreadInfoListStream record flags its context as invalid despite the
+    parsed `ip`), False (`ip` is None, or a real record's readable flags
+    confirm no dispute), or None (`ip` is set but no DumpFlags value
+    could be established for this TID, whether because no
+    ThreadInfoListStream record exists or because that record's flags
+    could not be read -- undeterminable, never a confirmed False). A
+    hunter
+    that turns a disputed or undeterminable `ip` into a "currently
+    executing" claim must qualify it -- see e.g.
+    dumpex.hunt.injection.aggregate's own handling of rip_hits."""
     tid:            int
     start_address:  "str | None" = None
     ip:             "str | None" = None
     ip_reg:         "str | None" = None
+    ip_context_conflict: "bool | None" = False
 
     def __post_init__(self):
         _require_nonneg_int(self.tid, "HuntThreadRef.tid")
@@ -3474,10 +3752,17 @@ class HuntThreadRef:
             raise ValueError("HuntThreadRef.ip_reg is required when ip is set")
         if self.ip is None and self.ip_reg is not None:
             raise ValueError("HuntThreadRef.ip_reg must be None when ip is None")
+        if self.ip_context_conflict is not None and not isinstance(self.ip_context_conflict, bool):
+            raise ValueError("HuntThreadRef.ip_context_conflict must be None or a bool")
+        if self.ip is None and self.ip_context_conflict is not False:
+            raise ValueError(
+                "HuntThreadRef.ip_context_conflict must be False when ip is None -- there is "
+                "no captured value to dispute regardless of ThreadInfoListStream coverage")
 
     def to_dict(self) -> dict:
         return {"tid": self.tid, "start_address": self.start_address,
-                "ip": self.ip, "ip_reg": self.ip_reg}
+                "ip": self.ip, "ip_reg": self.ip_reg,
+                "ip_context_conflict": self.ip_context_conflict}
 
 
 @dataclass

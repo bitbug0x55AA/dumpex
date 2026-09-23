@@ -13,26 +13,38 @@ Display truncation of a verified change's differing byte ranges also
 happens here, in `build_verified_changes()`, deliberately AFTER the RIP
 scan has seen every range the diff produced -- see `rip_in_ranges()`.
 """
+from dumpex.hunt._finding import combine_conflicts
 from dumpex.hunt.stomping.config import MAX_DIFF_RANGES
 from dumpex.hunt.stomping.models import (
     RipCorrelatedLeadEvidence, ThreadHitRef, VerifiedChangeEvidence,
 )
 
 
-def rip_in_ranges(thread_contexts: list, va_start: int, ranges) -> bool:
+def rip_in_ranges(thread_contexts: list, va_start: int, ranges) -> "tuple[bool, tuple]":
+    """Returns (hit, conflicts): `hit` is True if any thread's current
+    RIP/EIP lands inside one of `ranges` (each an (offset, length) pair
+    relative to va_start); `conflicts` is the tuple of each such thread's
+    OWN tri-state `ip_context_conflict`, one entry per hitting thread, not
+    yet combined into one value -- collapsing to a single value belongs to
+    the caller, which also decides whether it still needs per-thread
+    detail (e.g. to build an accurate "N thread(s)" caveat via
+    `dumpex.hunt._finding.disputed_conflict_limitation`) or only the
+    combined fact (see `dumpex.hunt._finding.combine_conflicts`). Empty
+    when `hit` is False -- a bare bool `hit` cannot itself distinguish "no
+    hit" from "hit, but every contributing state was already discarded",
+    so the two are returned separately rather than folded into one
+    `bool | None`. Scans EVERY range passed in, not a display-truncated
+    subset — a hit in e.g. the 21st range must never be silently missed
+    just because only the first 20 are kept for display (see
+    dumpex/hunt/stomping/config.py's MAX_DIFF_RANGES vs
+    MAX_DIFF_RANGES_SCAN).
     """
-    True if any thread's current RIP/EIP lands inside one of `ranges`
-    (each an (offset, length) pair relative to va_start). Scans EVERY
-    range passed in, not a display-truncated subset — a hit in e.g. the
-    21st range must never be silently missed just because only the first
-    20 are kept for display (see dumpex/hunt/stomping/config.py's
-    MAX_DIFF_RANGES vs MAX_DIFF_RANGES_SCAN).
-    """
+    conflicts = []
     for off, length in ranges:
         change_va = va_start + off
-        if any(change_va <= tc["ip"] < change_va + length for tc in thread_contexts):
-            return True
-    return False
+        conflicts.extend(tc.get("ip_context_conflict") for tc in thread_contexts
+                          if change_va <= tc["ip"] < change_va + length)
+    return bool(conflicts), tuple(conflicts)
 
 
 def build_verified_changes(diffs, thread_contexts: list) -> tuple:
@@ -50,7 +62,8 @@ def build_verified_changes(diffs, thread_contexts: list) -> tuple:
     for diff in diffs:
         if not diff.all_ranges:
             continue
-        rip_in_changed = rip_in_ranges(thread_contexts, diff.va_start, diff.all_ranges)
+        rip_in_changed, rip_conflicts = rip_in_ranges(thread_contexts, diff.va_start,
+                                                        diff.all_ranges)
         changes.append(VerifiedChangeEvidence(
             module=diff.module, section=diff.section, va_start=diff.va_start,
             diff_ranges=diff.all_ranges[:MAX_DIFF_RANGES],
@@ -58,6 +71,8 @@ def build_verified_changes(diffs, thread_contexts: list) -> tuple:
                               or len(diff.all_ranges) > MAX_DIFF_RANGES),
             total_ranges=len(diff.all_ranges), compared_len=diff.compared_len,
             rip_in_changed_range=rip_in_changed,
+            rip_context_conflict=combine_conflicts(rip_conflicts) if rip_in_changed else False,
+            rip_conflicts=rip_conflicts,
             disk_sha256=diff.disk_sha256, mem_sha256=diff.mem_sha256,
             file_offset=diff.file_offset))
     return tuple(changes)

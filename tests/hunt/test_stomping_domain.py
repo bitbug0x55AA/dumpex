@@ -66,6 +66,7 @@ def _verified_change(rip=False, ranges=((0x0, 0x10),), **overrides):
     kwargs = dict(module=_module(), section=_section(), va_start=_SECTION_VA,
                    diff_ranges=ranges, ranges_truncated=False, total_ranges=len(ranges),
                    compared_len=0x2000, rip_in_changed_range=rip,
+                   rip_conflicts=(False,) if rip else (),
                    disk_sha256="a" * 64, mem_sha256="b" * 64)
     kwargs.update(overrides)
     return VerifiedChangeEvidence(**kwargs)
@@ -223,6 +224,33 @@ def test_verified_change_normalizes_diff_ranges_to_tuples_of_ints():
 def test_verified_change_rejects_malformed_diff_ranges(bad_ranges):
     with pytest.raises((TypeError, ValueError)):
         _verified_change(ranges=bad_ranges)
+
+
+def test_verified_change_rejects_rip_conflicts_when_no_rip_hit_at_all():
+    with pytest.raises(ValueError, match="rip_conflicts must be empty"):
+        _verified_change(rip=False, rip_conflicts=(True,))
+
+
+def test_verified_change_rejects_empty_rip_conflicts_when_rip_hit():
+    with pytest.raises(ValueError, match="rip_conflicts must be non-empty"):
+        _verified_change(rip=True, rip_conflicts=())
+
+
+def test_verified_change_rejects_rip_context_conflict_disagreeing_with_rip_conflicts():
+    with pytest.raises(ValueError, match="combine_conflicts\\(rip_conflicts\\)"):
+        _verified_change(rip=True, rip_conflicts=(False, False),
+                          rip_context_conflict=True)
+
+
+@pytest.mark.parametrize("conflicts, combined", [
+    ((True, True, None), True),
+    ((None, False), None),
+    ((False, False), False),
+])
+def test_verified_change_rip_context_conflict_must_equal_combine_conflicts(conflicts, combined):
+    change = _verified_change(rip=True, rip_conflicts=conflicts, rip_context_conflict=combined)
+    assert change.rip_conflicts == conflicts
+    assert change.rip_context_conflict == combined
 
 
 # ── 1. Recursive immutability ─────────────────────────────────────────────

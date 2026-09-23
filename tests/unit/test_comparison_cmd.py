@@ -4,9 +4,18 @@ collect_module_diff/collect_thread_diff/collect_memory_diff/
 collect_comparison() directly, the same way test_modules_cmd.py etc.
 test the six migrated recon commands' collect_*() functions.
 """
+import io
+
 import pytest
 
-from tests.fixtures.fakes import Module, ThreadInfo, Region, FakeStream, FakeMF
+from tests.fixtures.fakes import (
+    Module, ThreadInfo, Region, FakeStream, FakeMF, Thread, Ctx,
+    build_thread_info_stream, parsed_thread_info_stream, ThreadInfoStreamDirectory,
+    THREAD_INFO_ENTRY_SIZE,
+)
+from dumpex.core.memory import (
+    parse_thread_info_stream, truncated_thread_info_count, dump_flags_tags,
+)
 
 from dumpex.commands.comparison import (
     collect_module_diff, collect_thread_diff, collect_memory_diff, collect_comparison,
@@ -605,3 +614,82 @@ def test_combine_coverage_reports_rolls_a_failed_entity_into_overall_partial():
 
     combined = combine_coverage_reports([module_coverage, thread_coverage])
     assert combined.status == COVERAGE_PARTIAL
+
+
+# -- a truncated ThreadInfoListStream cannot settle which TIDs exist ----
+
+def _mf_with_thread_info(parsed, base_tids=()):
+    mf = FakeMF()
+    mf.thread_info = parsed
+    if base_tids:
+        mf.threads = FakeStream([Thread(tid, Ctx(0x1000)) for tid in base_tids], "threads")
+    return mf
+
+
+def test_a_cut_short_tail_record_is_not_reported_as_a_removed_thread():
+    # The stream declares two records and the second survives only as far
+    # as its ThreadId and DumpFlags. That thread exists -- the base
+    # ThreadListStream still lists it -- so dropping the partial record
+    # would report it as removed from a dump it is plainly still in.
+    full = parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}])
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 8)
+    cut = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+
+    records, coverage = collect_thread_diff(
+        _mf_with_thread_info(full, base_tids=(1, 2)),
+        _mf_with_thread_info(cut, base_tids=(1, 2)))
+    assert [r.change_type for r in records] == []
+    assert coverage.status == "complete"
+
+    # The fields the tail record DID carry survive with it.
+    tail = cut.infos[1]
+    assert dump_flags_tags(tail) == ["NO_CTX"]
+
+
+def test_a_record_that_never_arrived_stops_the_diff_claiming_completeness():
+    # Not even a whole ThreadId remains, so nothing about that thread was
+    # captured at all. The diff still reports what it has, but it can no
+    # longer present added/removed as a settled answer.
+    full = parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x0, "start_address": 0x500100}])
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x0, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 3)
+    cut = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert truncated_thread_info_count(cut) == 1
+
+    records, coverage = collect_thread_diff(
+        _mf_with_thread_info(full, base_tids=(1, 2)),
+        _mf_with_thread_info(cut, base_tids=(1, 2)))
+    assert coverage.status == "partial"
+    codes = [limitation.code.value for limitation in coverage.limitations]
+    assert "THREAD_INFO_STREAM_TRUNCATED" in codes
+    assert any("cannot settle which TIDs exist" in reason for reason in coverage.reasons)
+    # TID 2 is still reported as removed -- it genuinely is not in the
+    # target's delivered records -- but no longer as a complete result.
+    assert [(r.change_type, r.tid) for r in records] == [("removed", 2)]
+
+
+def test_threads_reports_an_undelivered_record_as_its_own_coverage_gap():
+    from dumpex.commands.threads import collect_threads
+
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x0, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x0, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 3)
+    cut = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+
+    result = collect_threads(_mf_with_thread_info(cut, base_tids=(1,)))
+    assert result.coverage.status == "partial"
+    codes = [limitation.code.value for limitation in result.coverage.limitations]
+    assert "THREAD_INFO_STREAM_TRUNCATED" in codes

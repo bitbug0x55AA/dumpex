@@ -259,7 +259,13 @@ from minidump.structures.peb import PEB
 # 115-189) exactly -- same stream types, same target attribute, same
 # parser -- just wrapped per-branch instead of left unguarded.
 # HandleDataStream deliberately does NOT use the library's
-# MinidumpHandleDataStream.parse: see §5.1.
+# MinidumpHandleDataStream.parse: see §5.1. ThreadInfoListStream likewise
+# does NOT use the library's MinidumpThreadInfoList.parse: that parse
+# reads DumpFlags through a single-member Enum lookup which cannot
+# represent 0x0 or any combined value, walks entries at its own hardcoded
+# 64-byte layout regardless of the stream's declared SizeOfEntry, and
+# turns a field the record never carried into a zero (see
+# dumpex/core/memory.py's own section comment).
 _STREAM_DISPATCH = {
     MINIDUMP_STREAM_TYPE.ThreadListStream:         ("threads", MinidumpThreadList.parse),
     MINIDUMP_STREAM_TYPE.ModuleListStream:         ("modules", MinidumpModuleList.parse),
@@ -274,7 +280,7 @@ _STREAM_DISPATCH = {
     MINIDUMP_STREAM_TYPE.UnloadedModuleListStream: ("unloaded_modules", MinidumpUnloadedModuleList.parse),
     MINIDUMP_STREAM_TYPE.MiscInfoStream:           ("misc_info", MinidumpMiscInfo.parse),
     MINIDUMP_STREAM_TYPE.MemoryInfoListStream:     ("memory_info", MinidumpMemoryInfoList.parse),
-    MINIDUMP_STREAM_TYPE.ThreadInfoListStream:     ("thread_info", MinidumpThreadInfoList.parse),
+    MINIDUMP_STREAM_TYPE.ThreadInfoListStream:     ("thread_info", parse_thread_info_stream),
 }
 
 

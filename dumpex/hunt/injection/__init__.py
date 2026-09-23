@@ -12,7 +12,9 @@ Scan budgets cover bytes, validations, and retained evidence; any incomplete
 search is reported as partial coverage rather than a clean result.
 """
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import get_memory_regions, read_region
+from dumpex.core.memory import (
+    get_memory_regions, read_region, truncated_thread_info_count,
+)
 from dumpex.hunt._runtime import HunterRuntime
 
 from dumpex.hunt.injection import memory_scan
@@ -54,6 +56,9 @@ def _build_injection_report(mf: MinidumpFile):
         mf, runtime.read_region, module_list_available=module_list_stream)
     validated_pe_hits, mz_only_hits = memory_scan.split_hidden_pe_hits(hidden_pe_scan)
     start_threads = thread_scan._hunt_unbacked_threads(mf, module_list_available=module_list_stream)
+    unestablished_starts = thread_scan.count_unestablished_start_addresses(mf)
+    thread_info_truncated = truncated_thread_info_count(mf.thread_info)
+    threads_without_a_record = thread_scan.count_threads_without_a_thread_info_record(mf)
     thread_contexts = thread_scan.resolve_thread_contexts(mf)   # tuple[ThreadContext, ...]
 
     # Explicit counts so a PARTIAL context gap is visible even when it
@@ -79,7 +84,9 @@ def _build_injection_report(mf: MinidumpFile):
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
         module_list_stream, thread_list_stream, threads_total, contexts_parsed,
         region_count=region_count, thread_info_count=thread_info_count,
-        module_count=module_count)
+        module_count=module_count, unestablished_starts=unestablished_starts,
+        thread_info_truncated=thread_info_truncated,
+        threads_without_a_record=threads_without_a_record)
 
 
 def _render_injection_console(report, verbose: bool = False) -> dict:

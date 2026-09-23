@@ -18,7 +18,7 @@ built the Evidence it reads.
 """
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH,
-    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
+    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, disputed_conflict_limitation)
 from dumpex.hunt.injection.config import (
     PE_SCAN_MAX_UNVALIDATED_EVIDENCE, PE_SCAN_MAX_VALIDATED_EVIDENCE, PE_VALIDATE_READ_MAX,
 )
@@ -52,6 +52,24 @@ def _evidence_cap_limitation(dropped: int, kind: str, cap: int) -> list:
         return []
     return [f"{dropped} further {kind} candidate(s) were found but not retained "
             f"(evidence cap: {cap}); the list above is not exhaustive."]
+
+
+def _disputed_rip_hit_limitation(hits: tuple) -> list:
+    """One sentence naming how many of these RipHitEvidence entries have a
+    disputed or undeterminable CONTEXT (ip_context_conflict is not
+    False) -- the "currently execute inside" inference above rests on a
+    captured value this dump's own ThreadInfoListStream record disputes
+    (True), or on a TID with no ThreadInfoListStream record at all to
+    check it against (None). `--threads`/`--report` already surface this
+    exact fact for the same TID (ReportThreadInfo/ThreadRecord.
+    ip_context_conflict) -- this keeps the claim from reading as more
+    confirmed here than it is there. Empty list when every hit's context
+    is confirmed undisputed, so it concatenates unconditionally. Thin
+    wrapper over dumpex.hunt._finding.disputed_conflict_limitation (the
+    shared wording/combine-priority every hunter reading a thread's
+    current RIP/EIP uses), extracting the plain tri-state values from the
+    typed RipHitEvidence objects this hunter's own evidence carries."""
+    return disputed_conflict_limitation([h.ip_context_conflict for h in hits])
 
 
 def _split_scoreable_pe_hits(validated_pe_hits: tuple, rwx_and_pe_alloc_bases: set,
@@ -92,7 +110,10 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                   module_list_stream: bool, thread_list_stream: bool,
                   threads_total: int, contexts_parsed: int,
                   *, region_count: "int | None" = None, thread_info_count: "int | None" = None,
-                  module_count: "int | None" = None) -> InjectionReport:
+                  module_count: "int | None" = None,
+                  unestablished_starts: int = 0,
+                  thread_info_truncated: int = 0,
+                  threads_without_a_record: int = 0) -> InjectionReport:
     """
     Turn already-collected Evidence + Correlation into the canonical
     `InjectionReport`. `validated_pe_hits`/`mz_only_hits` are
@@ -133,7 +154,9 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         pe_scan_not_started_groups=hidden_pe_scan.scan_not_started_groups,
         pe_evidence_capped=hidden_pe_scan.validated_dropped,
         region_count=region_count, thread_info_count=thread_info_count,
-        module_count=module_count,
+        module_count=module_count, starts_not_established=unestablished_starts,
+        thread_info_truncated=thread_info_truncated,
+        threads_without_a_record=threads_without_a_record,
     )
 
     rwx_and_pe_alloc_bases = correlation.rwx_and_pe_alloc_bases
@@ -294,6 +317,28 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
             tag=TAG_LEAD,
         ))
 
+    if coverage.starts_not_established:
+        results.append(CheckResult(
+            check="injection.start_address_not_established",
+            evidence=(),
+            inference=f"{coverage.starts_not_established} ThreadInfoListStream record(s) "
+                       f"carry no established start address — their own DumpFlags disown "
+                       f"every field but ThreadId, or could not be read, or the record "
+                       f"carried no StartAddress field at all.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A StartAddress field the producer never wrote, or that this record "
+                       "never carried at all, reads as 0x0 once substituted, which "
+                       "resolves through module lookup as a confirmed 'not in any module' "
+                       "answer — an unbacked-thread finding manufactured out of missing "
+                       "evidence. Those records are held back from this hunter's "
+                       "start-address evidence entirely, the same rule --threads/--report "
+                       "apply to the same TID.",
+            limitations=["These thread(s) contribute no start-address evidence and no score "
+                          "in this run: whether they begin inside unbacked memory is "
+                          "undeterminable, not a checked negative."],
+            tag=TAG_OBSERVATION,
+        ))
+
     if not coverage.thread_context:
         results.append(CheckResult(
             check="injection.rip_correlation_unavailable",
@@ -311,6 +356,7 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         ))
     elif evidence.correlation.rip_hits:
         conf = CONFIDENCE_HIGH if rip_full_correlation else CONFIDENCE_MEDIUM
+        relevant_rip_hits = rip_full_correlation if rip_full_correlation else rip_hits
         results.append(CheckResult(
             check="injection.allocation_correlation",
             evidence=evidence.correlation.rip_hits, evidence_limit=20,
@@ -331,7 +377,14 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                        "Live execution inside a flagged allocation is meaningful, but "
                        "only one structural signal (not both RWX and a validated PE) "
                        "was present in that allocation."),
-            limitations=["RIP is a single-point-in-time snapshot; a thread that executed "
+            # The disputed/undeterminable caveat goes FIRST when present:
+            # the console's own normal-mode "Caveat" line shows only
+            # limitations[0] (see render_why_this_verdict) -- whether the
+            # captured value is even a real execution location is a prior
+            # question to the always-true snapshot-timing caveat, so it
+            # must not be the one silently dropped from that single line.
+            limitations=_disputed_rip_hit_limitation(relevant_rip_hits) +
+                        ["RIP is a single-point-in-time snapshot; a thread that executed "
                          "there moments before or after the dump was captured would not "
                          "appear here."],
             tag=TAG_DETECTION if rip_full_correlation else TAG_LEAD,

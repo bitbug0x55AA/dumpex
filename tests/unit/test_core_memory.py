@@ -1,4 +1,6 @@
 """Unit tests for dumpex.core.memory's cross-platform path helpers."""
+import io
+import struct
 import types
 
 import pytest
@@ -9,12 +11,445 @@ from dumpex.core.memory import (
     va_range_captured_bytes, clamped_reader, read_region_clamped, read_region_spanning,
     has_stream_directory, handle_stream_evidence,
     HandleStreamContractError, declared_descriptor_count, truncated_descriptor_count,
+    ip_context_conflict_for, enriched_thread_contexts,
+    dump_flags_state, dump_flags_tags, dump_flags_value, recorded_start_address,
+    parse_thread_info_stream, ThreadInfoStreamFramingError, RawThreadInfo,
+    declared_thread_info_count, truncated_thread_info_count,
+    MAX_THREAD_INFO_RAW_BYTES,
+    DUMP_FLAGS_RESOLVED, DUMP_FLAGS_UNRESOLVED, DUMP_FLAGS_ABSENT,
+    START_ADDRESS_RECORDED, START_ADDRESS_INVALID, START_ADDRESS_UNVERIFIED,
+    START_ADDRESS_ABSENT,
 )
 from minidump.constants import MINIDUMP_STREAM_TYPE
+
+import dumpex.core.memory as core_memory_mod
 from tests.fixtures.fakes import (
     FakeMF, FakeStream, Handle, Region, Segment, mem_reader,
-    mf_with_handle_stream, parsed_handle_stream,
+    mf_with_handle_stream, parsed_handle_stream, ThreadInfo, Thread, Ctx,
+    parsed_thread_info_stream, build_thread_info_stream, ThreadInfoStreamDirectory,
+    THREAD_INFO_ENTRY_SIZE,
 )
+
+
+# ── ip_context_conflict_for: tri-state join of CONTEXT against DumpFlags ──
+
+def test_ip_context_conflict_for_is_false_when_ip_is_none_regardless_of_record():
+    # Nothing captured, nothing to dispute -- true whether or not
+    # ThreadInfoListStream covers this TID.
+    assert ip_context_conflict_for(None, ThreadInfo(1, 0x2000)) is False
+    assert ip_context_conflict_for(None, RawThreadInfo(1)) is False
+    assert ip_context_conflict_for(
+        None, ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")) is False
+
+
+def test_ip_context_conflict_for_is_none_when_no_thread_info_record_exists():
+    # ip was captured, but there is no ThreadInfoListStream record for
+    # this TID to join it against -- undeterminable, not a confirmed
+    # False the way a genuinely clean DumpFlags is.
+    assert ip_context_conflict_for(0x1000, None) is None
+    assert ip_context_conflict_for(0x1000, RawThreadInfo(1)) is None
+    assert ip_context_conflict_for(0, RawThreadInfo(1)) is None
+
+
+def test_ip_context_conflict_for_is_true_only_for_a_real_record_flagging_invalid_context():
+    ti = ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")
+    assert ip_context_conflict_for(0x1000, ti) is True
+    assert ip_context_conflict_for(0, ti) is True
+
+
+def test_ip_context_conflict_for_is_true_for_a_combined_value_including_invalid_context():
+    # INVALID_CONTEXT | EXITED_THREAD. The dispute is the same fact
+    # whether the producer set that bit alone or alongside others.
+    combined = ThreadInfo(1, 0x2000, dump_flags=0x14)
+    assert combined.DumpFlags is None          # unrepresentable upstream
+    assert ip_context_conflict_for(0x1000, combined) is True
+
+
+def test_ip_context_conflict_for_is_false_for_a_real_clean_record():
+    assert ip_context_conflict_for(0x1000, ThreadInfo(1, 0x2000)) is False
+
+
+def test_ip_context_conflict_for_is_none_when_the_records_flags_could_not_be_read():
+    # A record whose DumpFlags value could not be recovered disputes
+    # nothing AND clears nothing: reporting False here would publish an
+    # unreadable value as a confirmed absence of conflict.
+    unreadable = ThreadInfo(1, 0x2000, raw_dump_flags=None)
+    assert dump_flags_value(unreadable) is None
+    assert ip_context_conflict_for(0x1000, unreadable) is None
+    assert ip_context_conflict_for(None, unreadable) is False
+
+
+# -- DumpFlags: raw value, state, and tags --------------------------------
+
+def test_dump_flags_tags_reports_every_bit_of_a_combined_value():
+    assert dump_flags_tags(ThreadInfo(1, 0x2000, dump_flags=0x14)) == ["EXITED", "NO_CTX"]
+    assert dump_flags_tags(ThreadInfo(1, 0x2000, dump_flags=0x10)) == ["NO_CTX"]
+    assert dump_flags_tags(ThreadInfo(1, 0x2000)) == []
+
+
+def test_dump_flags_value_falls_back_to_a_library_style_enum_attribute():
+    # A record carrying only the library's own single-member DumpFlags
+    # enum -- no raw value -- still has an exactly-known value: that
+    # member's own `.value` IS what was on disk wherever the lookup
+    # succeeded at all.
+    ti = ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT",
+                    raw_dump_flags=None)
+    assert ti.RawDumpFlags is None and ti.DumpFlags is not None
+    assert dump_flags_value(ti) == 0x10
+    assert dump_flags_state(ti) == DUMP_FLAGS_RESOLVED
+
+
+def test_dump_flags_state_separates_a_flagless_thread_from_an_unreadable_one():
+    # An empty tag list means two different things, and only this field
+    # tells them apart.
+    assert dump_flags_state(ThreadInfo(1, 0x2000)) == DUMP_FLAGS_RESOLVED
+    unreadable = ThreadInfo(1, 0x2000, raw_dump_flags=None)
+    assert dump_flags_tags(unreadable) == []
+    assert dump_flags_state(unreadable) == DUMP_FLAGS_UNRESOLVED
+    assert dump_flags_state(RawThreadInfo(1)) == DUMP_FLAGS_ABSENT
+    assert dump_flags_state(None) == DUMP_FLAGS_ABSENT
+
+
+# -- recorded_start_address: what a StartAddress is actually worth --------
+
+def test_recorded_start_address_returns_a_clean_records_own_address():
+    assert recorded_start_address(ThreadInfo(1, 0x2000)) == (0x2000, START_ADDRESS_RECORDED)
+
+
+def test_recorded_start_address_drops_an_address_its_own_record_disowns():
+    # ERROR_THREAD: "no thread information exists beyond the thread
+    # identifier". The zeroed StartAddress field is missing evidence, so
+    # it is reported as unknown rather than as address 0x0.
+    for flag in ("MINIDUMP_THREAD_INFO_ERROR_THREAD", "MINIDUMP_THREAD_INFO_INVALID_INFO"):
+        assert recorded_start_address(ThreadInfo(1, 0, dump_flags=flag)) == (
+            None, START_ADDRESS_INVALID)
+    # Non-zero bytes in that field do not rescue it either.
+    assert recorded_start_address(
+        ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")) == (
+            None, START_ADDRESS_INVALID)
+
+
+def test_recorded_start_address_keeps_flags_that_say_nothing_about_the_start_address():
+    # EXITED/DUMPER/NO_CTX/NO_TEB describe the thread or its context, not
+    # the validity of this record's own fields.
+    for flag in ("MINIDUMP_THREAD_INFO_EXITED_THREAD", "MINIDUMP_THREAD_INFO_WRITING_THREAD",
+                 "MINIDUMP_THREAD_INFO_INVALID_CONTEXT", "MINIDUMP_THREAD_INFO_INVALID_TEB"):
+        assert recorded_start_address(ThreadInfo(1, 0x2000, dump_flags=flag)) == (
+            0x2000, START_ADDRESS_RECORDED)
+
+
+def test_recorded_start_address_is_invalid_for_a_combined_value_carrying_error_thread():
+    assert recorded_start_address(ThreadInfo(1, 0x2000, dump_flags=0x5)) == (
+        None, START_ADDRESS_INVALID)
+
+
+def test_recorded_start_address_keeps_but_does_not_vouch_for_an_unreadable_record():
+    assert recorded_start_address(ThreadInfo(1, 0x2000, raw_dump_flags=None)) == (
+        0x2000, START_ADDRESS_UNVERIFIED)
+
+
+def test_recorded_start_address_is_absent_without_a_record_and_never_zero():
+    assert recorded_start_address(RawThreadInfo(1)) == (None, START_ADDRESS_ABSENT)
+    assert recorded_start_address(None) == (None, START_ADDRESS_ABSENT)
+
+
+# -- parse_thread_info_stream: one validated layout, bounded ------------
+
+def test_parse_thread_info_stream_recovers_a_combined_value_the_library_drops():
+    # The installed library parses DumpFlags through a single-member Enum
+    # lookup: 0x14 is unrepresentable and comes back None, exactly like
+    # 0x0. Only the raw value tells the two apart.
+    parsed = parsed_thread_info_stream([
+        {"tid": 1, "dump_flags": 0x14, "start_address": 0x2000},
+        {"tid": 2, "dump_flags": 0x00, "start_address": 0x3000},
+    ])
+    combined, clean = parsed.infos
+    assert combined.DumpFlags is None and clean.DumpFlags is None
+    assert combined.RawDumpFlags == 0x14 and clean.RawDumpFlags == 0x00
+    assert dump_flags_tags(combined) == ["EXITED", "NO_CTX"]
+    assert dump_flags_tags(clean) == []
+    assert ip_context_conflict_for(0x1000, combined) is True
+    assert ip_context_conflict_for(0x1000, clean) is False
+
+
+def test_parse_thread_info_stream_keeps_a_single_member_value_the_library_does_parse():
+    parsed = parsed_thread_info_stream([{"tid": 1, "dump_flags": 0x10, "start_address": 0x2000}])
+    (info,) = parsed.infos
+    assert info.DumpFlags.value == 0x10
+    assert info.RawDumpFlags == 0x10
+
+
+def test_parse_thread_info_stream_reports_an_error_thread_start_as_unknown():
+    parsed = parsed_thread_info_stream([{"tid": 1, "dump_flags": 0x1, "start_address": 0}])
+    (info,) = parsed.infos
+    assert recorded_start_address(info) == (None, START_ADDRESS_INVALID)
+
+
+def test_parse_thread_info_stream_reads_every_field_from_the_declared_stride():
+    # A producer declaring a LONGER record than the 64-byte layout carries
+    # trailing fields dumpex does not read; every field it DOES read must
+    # still come from this entry, not from the previous one's padding.
+    # The padding here is crafted to hold the NEXT entry's own ThreadId,
+    # which a walk that confirms correspondence by ThreadId alone would
+    # accept while reading every later field from the wrong bytes.
+    parsed = parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}],
+        size_of_entry=72, entry_padding=struct.pack("<II", 2, 0))
+    first, second = parsed.infos
+    assert (first.ThreadId, first.StartAddress) == (1, 0x400100)
+    assert (second.ThreadId, second.StartAddress) == (2, 0x500100)
+    assert recorded_start_address(second) == (0x500100, START_ADDRESS_RECORDED)
+
+
+def test_parse_thread_info_stream_leaves_a_field_the_record_never_carried_unset():
+    # An 8-byte declared record holds ThreadId and DumpFlags and nothing
+    # else. Reading StartAddress from bytes that are not part of this
+    # record -- or from the empty read the library's fixed-layout parse
+    # turns into 0 -- would publish an address the producer never wrote.
+    parsed = parsed_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x500100}], size_of_entry=8)
+    (info,) = parsed.infos
+    assert info.ThreadId == 1
+    assert info.RawDumpFlags == 0x10        # readable flags
+    assert info.StartAddress is None        # ... say nothing about the address field
+    assert info.KernelTime is None
+    assert recorded_start_address(info) == (None, START_ADDRESS_ABSENT)
+    assert dump_flags_state(info) == DUMP_FLAGS_RESOLVED
+
+
+def test_readable_flags_never_promote_a_start_address_the_record_never_held():
+    # The two facts are independent: a record can have perfectly readable
+    # DumpFlags and still stop short of its own StartAddress field.
+    for size_of_entry in (8, 16, 32, 48):
+        parsed = parsed_thread_info_stream(
+            [{"tid": 1, "dump_flags": 0x10, "start_address": 0x500100}],
+            size_of_entry=size_of_entry)
+        (info,) = parsed.infos
+        assert recorded_start_address(info) == (None, START_ADDRESS_ABSENT), size_of_entry
+
+
+def test_a_record_the_stream_cuts_short_keeps_the_fields_it_did_carry():
+    # A standard 64-byte record the stream's own DataSize cuts off after
+    # ThreadId and DumpFlags is not a record with a zero StartAddress,
+    # and it is not a thread that does not exist either: its TID and its
+    # captured flags are real evidence, and dropping them would read
+    # downstream as a thread the dump never had.
+    body, _data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}])
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=12 + THREAD_INFO_ENTRY_SIZE + 8),
+        io.BytesIO(body))
+    assert [i.ThreadId for i in parsed.infos] == [1, 2]
+    tail = parsed.infos[1]
+    assert dump_flags_tags(tail) == ["NO_CTX"]
+    assert ip_context_conflict_for(0x1000, tail) is True
+    assert recorded_start_address(tail) == (None, START_ADDRESS_ABSENT)
+    assert truncated_thread_info_count(parsed) == 0
+
+
+def test_a_record_the_file_ends_partway_through_keeps_the_fields_it_did_carry():
+    # Same rule against the independent bound: the stream declares the
+    # entry, the file simply stops inside it.
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 8)
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert [i.ThreadId for i in parsed.infos] == [1, 2]
+    assert recorded_start_address(parsed.infos[1]) == (None, START_ADDRESS_ABSENT)
+    assert truncated_thread_info_count(parsed) == 0
+
+
+def test_a_record_reduced_to_its_thread_id_is_still_a_record():
+    # A whole ThreadId survives and nothing else does. That ThreadId is
+    # what attributes a record to a thread at all, so the record stays --
+    # dropping it is what makes that thread look absent from this stream
+    # -- with its DumpFlags reported as unreadable rather than as 0.
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 4)
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert [i.ThreadId for i in parsed.infos] == [1, 2]
+    tail = parsed.infos[1]
+    assert tail.RawDumpFlags is None
+    assert dump_flags_state(tail) == DUMP_FLAGS_UNRESOLVED
+    assert ip_context_conflict_for(0x1000, tail) is None
+    assert recorded_start_address(tail) == (None, START_ADDRESS_ABSENT)
+    assert truncated_thread_info_count(parsed) == 0
+
+
+def test_a_record_without_even_a_whole_thread_id_is_not_offered_but_is_counted():
+    # Fewer than a whole ThreadId remain: there is nothing to attribute
+    # to a thread at all. The record is not invented, and the shortfall
+    # stays recoverable so a consumer knows this stream cannot settle
+    # which TIDs exist.
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x400100},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x500100}],
+        body_bytes=12 + THREAD_INFO_ENTRY_SIZE + 3)
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert [i.ThreadId for i in parsed.infos] == [1]
+    assert parsed.header.NumberOfEntries == 2
+    assert truncated_thread_info_count(parsed) == 2 - 1
+
+
+def test_truncated_thread_info_count_claims_nothing_it_cannot_establish():
+    # No stream, a fixture with no header, and a stream that delivered
+    # everything it declared all report 0 -- a count nothing establishes
+    # must never read as a gap.
+    assert truncated_thread_info_count(None) == 0
+    assert truncated_thread_info_count(FakeStream([ThreadInfo(1, 0x2000)], "infos")) == 0
+    parsed = parsed_thread_info_stream([{"tid": 1, "dump_flags": 0x10, "start_address": 0x2000}])
+    assert truncated_thread_info_count(parsed) == 0
+    assert declared_thread_info_count(parsed) == 1
+
+
+def test_truncated_thread_info_count_reads_a_contradictory_header_as_no_gap():
+    # A stream that delivered MORE than it declared is a contradiction in
+    # the dump's own numbers, not a negative shortfall.
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x2000},
+         {"tid": 2, "dump_flags": 0x10, "start_address": 0x3000}], number_of_entries=1)
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert truncated_thread_info_count(parsed) == 0
+
+
+def test_parse_thread_info_stream_never_reads_past_the_stream_it_describes():
+    # The directory declares a 16-byte stream while the file holds a full
+    # 64-byte entry after it. Walking the entry array at its own stride
+    # would read bytes belonging to whatever follows this stream and
+    # publish them as this stream's own record.
+    body, _data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x14, "start_address": 0x2000}])
+    assert len(body) > 16                      # the out-of-stream bytes really are there
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=16), io.BytesIO(body))
+    # The 4 bytes the stream DOES declare are this record's ThreadId, and
+    # they are read. Everything after them lies outside the stream, so
+    # every later field stays unknown rather than taking its value from
+    # whatever follows.
+    (info,) = parsed.infos
+    assert info.ThreadId == 1
+    assert info.RawDumpFlags is None
+    assert info.StartAddress is None
+
+
+def test_parse_thread_info_stream_never_sizes_a_read_from_a_dump_controlled_stride():
+    # SizeOfEntry is a dump-controlled UINT32: 0xffffffff asks for a
+    # ~4 GiB read. The framing is rejected outright, before any entry
+    # read is attempted.
+    class _RecordingHandle:
+        def __init__(self, data):
+            self._buf = io.BytesIO(data)
+            self.reads = []
+
+        def seek(self, *args):
+            return self._buf.seek(*args)
+
+        def read(self, size=-1):
+            self.reads.append(size)
+            return self._buf.read(size)
+
+    handle = _RecordingHandle(struct.pack("<III", 12, 0xFFFFFFFF, 1) + bytes(64))
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(ThreadInfoStreamDirectory(rva=0, data_size=0xFFFFFFFF), handle)
+    assert all(size <= MAX_THREAD_INFO_RAW_BYTES for size in handle.reads)
+
+
+def test_parse_thread_info_stream_caps_a_declared_count_it_cannot_support():
+    # NumberOfEntries beyond what the stream's own extent supports is not
+    # an error -- it is capped, and the shortfall stays recoverable.
+    body, data_size = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x10, "start_address": 0x2000}], number_of_entries=4096)
+    parsed = parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+    assert [i.ThreadId for i in parsed.infos] == [1]
+    assert parsed.header.NumberOfEntries == 4096
+
+
+@pytest.mark.parametrize("size_of_header,data_size", [(8, None), (4096, 64)])
+def test_parse_thread_info_stream_rejects_an_out_of_bounds_size_of_header(size_of_header,
+                                                                          data_size):
+    body, declared = build_thread_info_stream(
+        [{"tid": 1, "dump_flags": 0x14, "start_address": 0x2000}],
+        size_of_header=size_of_header, declared_data_size=data_size)
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(
+            ThreadInfoStreamDirectory(rva=0, data_size=declared), io.BytesIO(body))
+
+
+@pytest.mark.parametrize("size_of_entry", [0, 2, 8192])
+def test_parse_thread_info_stream_rejects_an_unsupported_entry_size(size_of_entry):
+    body = struct.pack("<III", 12, size_of_entry, 1) + b"\x00" * 128
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(
+            ThreadInfoStreamDirectory(rva=0, data_size=len(body)), io.BytesIO(body))
+
+
+def test_parse_thread_info_stream_rejects_a_stream_too_small_for_its_own_header():
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(ThreadInfoStreamDirectory(rva=0, data_size=4),
+                                  io.BytesIO(b"\x00" * 64))
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(ThreadInfoStreamDirectory(rva=0, data_size=64),
+                                  io.BytesIO(b"\x00" * 4))
+
+
+def test_parse_thread_info_stream_rejects_a_non_integer_declared_stream_size():
+    with pytest.raises(ThreadInfoStreamFramingError):
+        parse_thread_info_stream(ThreadInfoStreamDirectory(rva=0, data_size=None),
+                                  io.BytesIO(b"\x00" * 128))
+
+
+# -- enriched_thread_contexts: the single join --threads/--report/every
+#    hunter reading a thread's current RIP/EIP now shares ----------------
+
+def test_enriched_thread_contexts_confirmed_clean():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x2000)], "infos")
+    out = enriched_thread_contexts(mf)
+    assert out == [{"ThreadId": 1, "ip": 0x1000, "ip_reg": "RIP", "is_wow64": False,
+                    "start_address": 0x2000, "start_address_state": START_ADDRESS_RECORDED,
+                    "ip_context_conflict": False}]
+
+
+def test_enriched_thread_contexts_confirmed_conflict():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")
+    mf.thread_info = FakeStream(
+        [ThreadInfo(1, 0x2000, dump_flags="MINIDUMP_THREAD_INFO_INVALID_CONTEXT")], "infos")
+    out = enriched_thread_contexts(mf)
+    assert out[0]["ip_context_conflict"] is True
+
+
+def test_enriched_thread_contexts_drops_a_start_address_its_record_disowns():
+    # The current IP is an independent capture from the base stream and
+    # survives untouched; only the start address its own record disowns
+    # goes away.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")
+    mf.thread_info = FakeStream(
+        [ThreadInfo(1, 0, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")], "infos")
+    (out,) = enriched_thread_contexts(mf)
+    assert out["start_address"] is None
+    assert out["start_address_state"] == START_ADDRESS_INVALID
+    assert out["ip"] == 0x1000
+
+
+def test_enriched_thread_contexts_undeterminable_when_no_thread_info_record():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")   # no thread_info at all
+    out = enriched_thread_contexts(mf)
+    assert out[0]["start_address"] is None
+    assert out[0]["ip_context_conflict"] is None
 
 
 def test_module_name_only_extracts_windows_backslash_path_basename():

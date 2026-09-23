@@ -118,8 +118,9 @@
         },
         "thread": {
           "ip": "0x00007ff700002000",
+          "ip_context_conflict": false,
           "ip_reg": "RIP",
-          "start_address": null,
+          "start_address": "0x00007ff700002000",
           "tid": 1
         }
       }
@@ -135,8 +136,9 @@
         },
         "thread": {
           "ip": "0x00007ff700002000",
+          "ip_context_conflict": false,
           "ip_reg": "RIP",
-          "start_address": null,
+          "start_address": "0x00007ff700002000",
           "tid": 1
         }
       }
@@ -164,6 +166,7 @@
         },
         "thread": {
           "ip": null,
+          "ip_context_conflict": false,
           "ip_reg": null,
           "start_address": "0x00007ff700002000",
           "tid": 1
@@ -194,14 +197,16 @@
     "thread_contexts": [
       {
         "ip": "0x00007ff700002000",
+        "ip_context_conflict": false,
         "ip_reg": "RIP",
-        "start_address": null,
+        "start_address": "0x00007ff700002000",
         "tid": 1
       }
     ],
     "threads": [
       {
         "ip": null,
+        "ip_context_conflict": false,
         "ip_reg": null,
         "start_address": "0x00007ff700002000",
         "tid": 1

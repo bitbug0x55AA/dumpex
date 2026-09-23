@@ -238,6 +238,8 @@ def test_injection_aggregate_receives_only_typed_evidence_and_scalars():
         "memory_info_stream", "thread_info_stream", "module_list_stream",
         "thread_list_stream", "threads_total", "contexts_parsed",
         "region_count", "thread_info_count", "module_count",
+        "unestablished_starts", "thread_info_truncated",
+        "threads_without_a_record",
     }
     parameter_names = set(inspect.signature(injection_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed

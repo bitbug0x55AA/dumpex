@@ -56,7 +56,8 @@ def correlate(rwx: tuple, validated_pe_hits: tuple, thread_contexts: tuple,
         r = _region_for_addr(tc.ip, regions)
         if r is not None and r.allocation_base in suspicious_alloc_bases:
             rip_hits.append(RipHitEvidence(
-                thread_id=tc.thread_id, ip=tc.ip, ip_reg=tc.ip_reg, region=r))
+                thread_id=tc.thread_id, ip=tc.ip, ip_reg=tc.ip_reg, region=r,
+                start_address=tc.start_address, ip_context_conflict=tc.ip_context_conflict))
     rip_full_correlation = [hit for hit in rip_hits
                              if hit.region.allocation_base in rwx_and_pe_alloc_bases]
 

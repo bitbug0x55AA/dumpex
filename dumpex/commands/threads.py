@@ -1,8 +1,14 @@
 """--threads command."""
 import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
-from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
-from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
+from dumpex.core.memory import (
+    get_modules, get_thread_infos, enriched_thread_contexts, addr_to_module, RawThreadInfo,
+    dump_flags_state, dump_flags_tags, recorded_start_address,
+    truncated_thread_info_count,
+    DUMP_FLAGS_ABSENT, START_ADDRESS_INVALID, START_ADDRESS_RECORDED,
+    START_ADDRESS_UNVERIFIED,
+)
+from dumpex.core.pe_utils import _filetime_to_str, _duration_100ns_to_str
 from dumpex.output.records import (
     ThreadRecord, hex_address,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
@@ -18,9 +24,20 @@ from dumpex.output.command_result import CommandResult
 # ThreadListStream provides. Shared between the "whole stream absent"
 # (SourceRequirement) and "TID present in one stream but not the other"
 # (SOURCE_KEY_MISMATCH) cases below, since both describe the same
-# underlying field-availability split.
-_THREAD_INFO_ONLY_FIELDS = ("StartAddress", "CreateTime", "ExitTime", "KernelTime", "UserTime")
-_THREAD_BASE_ONLY_FIELDS = ("SuspendCount", "Priority", "TEB")
+# underlying field-availability split. CurrentIP (ip/ip_reg) belongs in
+# the BASE-only group, not the ThreadInfoListStream-only one: it comes
+# from this thread's own CONTEXT on the base ThreadListStream (see
+# get_thread_contexts), so a TID missing from the base stream loses it
+# exactly like SuspendCount/Priority/TEB, and a TID missing only from
+# ThreadInfoListStream keeps it. DumpFlags belongs in the
+# ThreadInfoListStream-only group -- it doesn't exist on the raw
+# MINIDUMP_THREAD structure (see RawThreadInfo) -- so a TID missing that
+# record loses not just `flags` but the ability to check `ip` against it
+# at all: ip_context_conflict_for() reports that as None (undeterminable),
+# never a confirmed False, and this is the fact that tells a consumer why.
+_THREAD_INFO_ONLY_FIELDS = ("StartAddress", "CreateTime", "ExitTime", "KernelTime", "UserTime",
+                             "DumpFlags")
+_THREAD_BASE_ONLY_FIELDS = ("SuspendCount", "Priority", "TEB", "CurrentIP")
 
 # Exact text render_limitation() produces for the degraded (ThreadInfoListStream
 # absent) case -- kept here only so render_threads_console can recognize and
@@ -31,28 +48,6 @@ _DEGRADED_REASON = (
     f"ThreadInfoListStream not present; {'/'.join(_THREAD_INFO_ONLY_FIELDS)} "
     f"unavailable (TID/{'/'.join(_THREAD_BASE_ONLY_FIELDS)} only)"
 )
-
-
-class _RawThreadInfo:
-    """
-    Stand-in for a MINIDUMP_THREAD_INFO record, built from the base
-    ThreadListStream when the optional ThreadInfoListStream isn't present
-    in the dump. StartAddress/CreateTime/ExitTime/KernelTime/UserTime/
-    ExitStatus/DumpFlags don't exist on the raw MINIDUMP_THREAD structure,
-    so they stay None here rather than being guessed at.
-    """
-    __slots__ = ("ThreadId", "StartAddress", "CreateTime", "ExitTime",
-                 "KernelTime", "UserTime", "ExitStatus", "DumpFlags")
-
-    def __init__(self, tid):
-        self.ThreadId     = tid
-        self.StartAddress = None
-        self.CreateTime    = None
-        self.ExitTime      = None
-        self.KernelTime    = None
-        self.UserTime      = None
-        self.ExitStatus    = None
-        self.DumpFlags     = None
 
 
 def thread_info_is_degraded(coverage) -> bool:
@@ -79,6 +74,17 @@ def thread_records_have_times(records) -> bool:
     return any(rec.create_time is not None for rec in records)
 
 
+def thread_records_have_context(records) -> bool:
+    """True if any built record carries a live current IP. Same
+    recompute-from-records shape as thread_records_have_times() above --
+    unlike has_times, CurrentIP is never gated per-record on
+    is_placeholder in collect_threads(): a TID's own CONTEXT comes from
+    the base ThreadListStream and is available independent of whether
+    ThreadInfoListStream covers that TID (see collect_threads' own note
+    on why has_context there is NOT gated the way has_times is)."""
+    return any(rec.ip is not None for rec in records)
+
+
 def collect_threads(mf) -> CommandResult:
     """Collect thread records and evidence coverage without rendering.
 
@@ -95,6 +101,11 @@ def collect_threads(mf) -> CommandResult:
     threads_by_tid = {t.ThreadId: t for t in (mf.threads.threads if mf.threads else [])}
     real_infos_by_tid = {ti.ThreadId: ti for ti in get_thread_infos(mf)}
     modules = get_modules(mf)
+    # Per-thread live RIP/EIP, independent of ThreadInfoListStream --
+    # "TID not in this map" is get_thread_contexts' own "no CONTEXT
+    # captured/parsed for this thread" contract, never treated as "current
+    # IP is 0" nor backfilled from that same thread's own StartAddress.
+    contexts_by_tid = {c["ThreadId"]: c for c in enriched_thread_contexts(mf)}
 
     threads_source      = observe_source("threads", present=base_threads_present,
                                           items=list(threads_by_tid.values()))
@@ -125,7 +136,7 @@ def collect_threads(mf) -> CommandResult:
 
     missing_from_info = 0   # TID in ThreadListStream, absent from ThreadInfoListStream
     missing_from_base = 0   # TID in ThreadInfoListStream, absent from ThreadListStream
-    # (ti, is_placeholder) pairs -- is_placeholder marks a _RawThreadInfo
+    # (ti, is_placeholder) pairs -- is_placeholder marks a RawThreadInfo
     # synthesized because this specific TID has no ThreadInfoListStream
     # entry (whether because the whole stream is absent, or just this
     # one TID is missing from an otherwise-present stream). Tracked
@@ -144,7 +155,7 @@ def collect_threads(mf) -> CommandResult:
                 # 'degraded' reason instead when the stream is absent
                 # altogether.
                 missing_from_info += 1
-            ti = _RawThreadInfo(tid)
+            ti = RawThreadInfo(tid)
             entries.append((ti, True))
             continue
         if tid not in threads_by_tid and info_stream_present:
@@ -161,9 +172,33 @@ def collect_threads(mf) -> CommandResult:
     has_times = any(getattr(ti, "CreateTime", None) for ti, is_placeholder in entries
                      if not is_placeholder)
 
+    # CONTEXT comes from the base ThreadListStream itself (see
+    # get_thread_contexts), entirely independent of ThreadInfoListStream --
+    # so the per-record lookup below is NOT gated on is_placeholder the
+    # way has_times is: a TID with no ThreadInfoListStream entry
+    # (StartAddress/CreateTime/etc all unknown) can still have a
+    # perfectly real, independently-sourced CONTEXT, and gating it on the
+    # same placeholder flag would make CurrentIP wrongly inherit
+    # StartAddress's own "unknown" state. The dump-wide has_context fact
+    # render_threads_console needs is recomputed from the built records
+    # via thread_records_have_context() below, not tracked here.
+
     records = []
     for ti, is_placeholder in entries:
-        sa  = ti.StartAddress   # may be None in degraded mode — do not coerce to 0
+        # A record's StartAddress counts only where that record stands
+        # behind it: None both for a TID ThreadInfoListStream never
+        # covered and for one whose own DumpFlags mark its thread
+        # information invalid, never coerced to 0 in either case. See
+        # recorded_start_address.
+        sa, start_address_state = recorded_start_address(ti)
+        # ERROR_THREAD/INVALID_INFO invalidate every ThreadInfoListStream
+        # field except ThreadId and DumpFlags themselves, so this record's
+        # timings and exit status are unwritten fields too -- reported as
+        # unknown rather than as the zeros they were left at.
+        info_invalid = start_address_state == START_ADDRESS_INVALID
+        ctx = contexts_by_tid.get(ti.ThreadId)
+        ip     = ctx["ip"]     if ctx is not None else None
+        ip_reg = ctx["ip_reg"] if ctx is not None else None
 
         module_context = None   # start address itself unknown -- module context is moot
         mod = None
@@ -188,36 +223,57 @@ def collect_threads(mf) -> CommandResult:
         priority      = getattr(raw, "Priority", None) if raw else None
         teb           = getattr(raw, "Teb", None) if raw else None
 
-        flag_tag    = _dumpflags_str(getattr(ti, "DumpFlags", None))
-        exit_status = getattr(ti, "ExitStatus", None)
-        exited      = flag_tag == "[EXITED]"
+        # One tag per DumpFlags bit actually set, so a combined value
+        # (e.g. INVALID_CONTEXT | EXITED_THREAD) is reported in full
+        # rather than collapsing to a single name or to nothing at all --
+        # see dump_flags_tags, and dump_flags_state for what an empty
+        # list means for this record.
+        flag_tags   = dump_flags_tags(ti)
+        exit_status = None if info_invalid else getattr(ti, "ExitStatus", None)
+        exited      = "EXITED" in flag_tags
+        # Tri-state: undeterminable (None), not just False, whenever no
+        # DumpFlags value could be established to join `ip` against --
+        # no real ThreadInfoListStream record for this TID, or one whose
+        # flags could not be read. See ip_context_conflict_for's own
+        # docstring and ThreadRecord.ip_context_conflict's identical rule
+        # (the same derivation dumpex.commands.report uses for
+        # ReportThreadInfo.ip_context_conflict). False, never None, when
+        # this TID has no captured CONTEXT at all (ctx is None): there is
+        # no `ip` to dispute either way.
+        ip_context_conflict = ctx["ip_context_conflict"] if ctx is not None else False
 
         # A placeholder never gets a create_time/exit_time value, no
         # matter what has_times says about the rest of the result -- it
         # has no real ThreadInfoListStream entry at all, which is not
         # the same claim as "this stream reports no timestamp."
         create_time = (_filetime_to_str(getattr(ti, "CreateTime", 0) or 0)
-                       if (has_times and not is_placeholder) else None)
+                       if (has_times and not is_placeholder and not info_invalid) else None)
         exit_time   = (_filetime_to_str(getattr(ti, "ExitTime", 0) or 0)
-                       if (has_times and not is_placeholder and exited) else None)
+                       if (has_times and not is_placeholder and not info_invalid and exited)
+                       else None)
 
         records.append(ThreadRecord(
             tid=ti.ThreadId,
             start_address=hex_address(sa) if sa is not None else None,
+            ip=hex_address(ip) if ip is not None else None,
+            ip_reg=ip_reg,
             # ntpath.basename, not os.path.basename -- module paths are
             # Windows paths regardless of the host OS this tool runs on
             # (see dumpex.hunt.stomping.memory_scan._module_basename).
             backing_module=ntpath.basename(mod.name) if mod else None,
             module_context=module_context,
-            flags=[flag_tag.strip("[]")] if flag_tag else [],
+            flags=flag_tags,
             create_time=create_time,
             exit_time=exit_time,
             exit_status=exit_status,
-            kernel_time_100ns=getattr(ti, "KernelTime", None),
-            user_time_100ns=getattr(ti, "UserTime", None),
+            kernel_time_100ns=None if info_invalid else getattr(ti, "KernelTime", None),
+            user_time_100ns=None if info_invalid else getattr(ti, "UserTime", None),
             suspend_count=suspend_count,
             priority=priority,
             teb=hex_address(teb) if teb else None,
+            ip_context_conflict=ip_context_conflict,
+            start_address_state=start_address_state,
+            dump_flags_state=dump_flags_state(ti),
         ))
 
     # Ordered exactly like the reasons this command has always shipped:
@@ -247,6 +303,26 @@ def collect_threads(mf) -> CommandResult:
                            unavailable_fields=_THREAD_INFO_ONLY_FIELDS,
                            available_fields=("TID",) + _THREAD_BASE_ONLY_FIELDS),
     ]
+    # Records the stream declared but never delivered. Reported before
+    # any TID-mismatch reason below, because it is the reason a mismatch
+    # may not be one: a TID this stream is missing because its record
+    # never arrived is a capture gap, not two sources disagreeing.
+    undelivered = truncated_thread_info_count(mf.thread_info)
+    if undelivered:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_INFO_STREAM_TRUNCATED, source="thread_info",
+            affected_count=undelivered))
+    # Records that DID arrive but establish no start address. StartAddress
+    # is one of the fields this command reports, so a record that carries
+    # none is a field this run could not fill -- the same class of gap as
+    # a record that never arrived, one level finer.
+    no_start = sum(1 for rec in records
+                   if rec.dump_flags_state != DUMP_FLAGS_ABSENT
+                   and rec.start_address_state != START_ADDRESS_RECORDED)
+    if no_start:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_START_ADDRESS_UNAVAILABLE, source="thread_info",
+            affected_count=no_start))
     if missing_from_info:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SOURCE_KEY_MISMATCH, source="thread_info",
@@ -281,14 +357,17 @@ def render_threads_console(records, coverage) -> None:
     contract."""
     degraded = thread_info_is_degraded(coverage)
     has_times = thread_records_have_times(records)
+    has_context = thread_records_have_context(records)
     coverage_reasons = coverage.reasons
 
     if degraded:
         print(YELLOW(
             "  [~] ThreadInfoListStream not present in this dump — falling back to the\n"
             "      base ThreadListStream. StartAddress / CreateTime / ExitTime / Kernel-\n"
-            "      UserTime are NOT available in this mode (only TID / SuspendCount /\n"
-            "      Priority / TEB, from the raw thread record).\n"))
+            "      UserTime / DumpFlags are NOT available in this mode (only TID /\n"
+            "      SuspendCount / Priority / TEB / CurrentIP, from the raw thread record\n"
+            "      and its own captured CONTEXT) -- ip_context_conflict is unconfirmable\n"
+            "      (not a confirmed False) for every thread shown.\n"))
 
     # Every OTHER coverage gap (a per-TID mismatch between the two thread
     # streams, or a missing ModuleListStream) gets a plain warning line --
@@ -300,11 +379,14 @@ def render_threads_console(records, coverage) -> None:
         print(YELLOW(f"  [~] {reason}\n"))
 
     for rec in records:
-        flag_tag = f"[{rec.flags[0]}]" if rec.flags else ""
+        # One bracketed tag per DumpFlags bit set, in the record's own
+        # order, so a combined value is never rendered as if it carried
+        # only its first flag.
+        flag_tag = "".join(f"[{tag}]" for tag in rec.flags)
         exited   = "EXITED" in rec.flags
 
         tid_str = f"0x{rec.tid:x}"
-        if flag_tag == "[DUMPER]":
+        if "DUMPER" in rec.flags:
             tid_str = CYAN(tid_str) + f" {CYAN(flag_tag)}"
         elif exited:
             tid_str = DIM(tid_str) + f" {DIM(flag_tag)}"
@@ -313,9 +395,22 @@ def render_threads_console(records, coverage) -> None:
 
         print(f"\n  {BOLD('TID')}              {tid_str}")
         if rec.start_address is None:
-            backed = DIM("(unknown — requires ThreadInfoListStream)")
+            # Why there is no address decides how it reads, and there are
+            # three different answers: no record for this TID at all (a
+            # capture gap), a record that disowns every field but its
+            # ThreadId, or a record that simply did not carry the
+            # StartAddress field. None of them is address 0x0.
+            if rec.start_address_state == START_ADDRESS_INVALID:
+                backed = YELLOW("(dump reports this thread's own record as invalid — "
+                                "only its TID is meaningful)")
+            elif rec.dump_flags_state == DUMP_FLAGS_ABSENT:
+                backed = DIM("(unknown — requires ThreadInfoListStream)")
+            else:
+                backed = YELLOW("(this thread's ThreadInfoListStream record carried no "
+                                "StartAddress field)")
             print(f"  {'StartAddress':<16} {DIM('unavailable')}  ← {backed}")
         else:
+            unverified = rec.start_address_state == START_ADDRESS_UNVERIFIED
             if rec.module_context == MODULE_CONTEXT_RESOLVED:
                 # ntpath.basename() of a ModuleListStream name -- a dump
                 # string, so escaped before the colour helper. The other
@@ -324,12 +419,76 @@ def render_threads_console(records, coverage) -> None:
             elif rec.module_context == MODULE_CONTEXT_UNREGISTERED:
                 # Confirmed: ModuleListStream was available and this
                 # address genuinely isn't backed by any known module.
-                backed = RED("⚠  NOT IN ANY MODULE")
+                # Only an address its own record stands behind can carry
+                # that claim -- an `unverified` start classifies the same
+                # way but establishes nothing.
+                backed = (YELLOW("not in any module, but this thread's own DumpFlags could "
+                                 "not be read — unverified") if unverified
+                          else RED("⚠  NOT IN ANY MODULE"))
             else:
                 # MODULE_CONTEXT_UNAVAILABLE -- ModuleListStream itself
                 # missing; must not read as the confirmed anomaly above.
                 backed = YELLOW("(module data unavailable — ModuleListStream missing)")
+            if unverified and rec.module_context != MODULE_CONTEXT_UNREGISTERED:
+                # The classification itself still holds; what nothing
+                # establishes is the address it was made about.
+                backed = f"{backed} {YELLOW('(address unverified — DumpFlags unreadable)')}"
             print(f"  {'StartAddress':<16} {rec.start_address}  ← {backed}")
+        # CurrentIP is this thread's OWN captured CONTEXT, independent of
+        # StartAddress above -- never inferred from it and never printed
+        # as if the two were the same fact under two names.
+        if rec.ip is None:
+            unavailable = DIM("(no CONTEXT captured/parsed for this thread)")
+            print(f"  {'CurrentIP':<16} {DIM('unavailable')}  ← {unavailable}")
+        else:
+            ip_val = int(rec.ip, 16)
+            zero_note = ("zero — not treated as a confirmed execution address"
+                         if ip_val == 0 else None)
+            if rec.ip_context_conflict is None:
+                # This TID has no ThreadInfoListStream record at all to
+                # join `ip` against (see ip_context_conflict_for) -- the
+                # dispute status is undeterminable, never a confirmed
+                # "not disputed" the way a genuinely clean DumpFlags is.
+                undeterminable = (
+                    "cannot confirm whether this context is disputed — no ThreadInfoListStream "
+                    "record for this thread"
+                    if rec.dump_flags_state == DUMP_FLAGS_ABSENT else
+                    "cannot confirm whether this context is disputed — this thread's own "
+                    "DumpFlags could not be read")
+                note = DIM(f" ({zero_note}; {undeterminable})" if zero_note
+                           else f" ({undeterminable})")
+            elif zero_note and rec.ip_context_conflict:
+                # Both facts are real and neither one explains the other
+                # away: the value is genuinely captured as 0x0 (see
+                # get_thread_contexts), AND this TID's own
+                # ThreadInfoListStream record independently flags this
+                # same context as invalid -- a conflicted value must not
+                # be reported as merely zero.
+                note = DIM(" (dump reports this thread's context as invalid — not confirmed; "
+                           "captured value is 0x0)")
+            elif zero_note:
+                # A genuinely-zero CONTEXT is real captured data (see
+                # get_thread_contexts) but is not treated as a usable
+                # execution address anywhere else in this tool either
+                # (the instruction-anchor candidate filter requires
+                # addr > 0) -- never annotated as if it were a confirmed
+                # divergent execution location.
+                note = DIM(f" ({zero_note})")
+            elif rec.ip_context_conflict:
+                # The dump producer's own ThreadInfoListStream record
+                # says this thread's context could not be retrieved --
+                # a parsed base-ThreadListStream CONTEXT existing anyway
+                # is a genuine disagreement between the two sources, not
+                # a confirmed divergent execution location. Fires for
+                # any DumpFlags value carrying INVALID_CONTEXT, alone or
+                # combined with other bits (see dumpex.core.memory.
+                # dump_flags_value, which reads the raw UINT32 rather
+                # than the upstream single-member Enum lookup).
+                note = DIM(" (dump reports this thread's context as invalid — not confirmed)")
+            else:
+                diverges = (rec.start_address is not None and rec.ip != rec.start_address)
+                note = DIM(" (differs from StartAddress)") if diverges else ""
+            print(f"  {'CurrentIP':<16} {rec.ip}  ({rec.ip_reg}){note}")
         if rec.suspend_count is not None:
             # SuspendCount > 0 has legitimate benign explanations (thread
             # pool management, a debugger attach, a thread not yet resumed
@@ -373,6 +532,14 @@ def render_threads_console(records, coverage) -> None:
         # both cases, whereas naming ThreadInfoListStream specifically
         # would be wrong for the "stream present, empty timestamps" one.
         print(f"\n  {DIM('[~] CreateTime/ExitTime not available in the captured ThreadInfo data.')}")
+
+    if not has_context and records:
+        # No thread's CONTEXT was captured/parsed at all -- every
+        # CurrentIP line above already reads "unavailable" per-thread;
+        # this is the same dump-wide neutral note has_times prints for
+        # CreateTime/ExitTime, never a claim that these threads are
+        # somehow clean or unexecuting.
+        print(f"\n  {DIM('[~] CurrentIP not available -- no thread CONTEXT was captured/parsed.')}")
 
     print(f"\n{GREEN(f'[+] {len(records)} thread(s).')}")
 

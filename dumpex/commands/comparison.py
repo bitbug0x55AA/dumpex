@@ -9,7 +9,8 @@ import ntpath
 
 from dumpex.core.memory import (
     get_modules, get_thread_infos, get_memory_regions, addr_to_module,
-    module_name_only, prot_str,
+    module_name_only, prot_str, recorded_start_address,
+    truncated_thread_info_count,
 )
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.records import (
@@ -21,7 +22,7 @@ from dumpex.output.records import (
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, combine_coverage_reports,
     EvaluationRequirement, SourceRequirement, COVERAGE_NOT_EVALUATED,
-    SourceObservation, SourceState,
+    SourceObservation, SourceState, CoverageLimitation, LimitationCode,
 )
 from dumpex.output.command_result import CommandResult
 
@@ -157,13 +158,18 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
 
     Unlike diff_threads' own console rendering (`sa = ti.StartAddress or
     0`, which folds "unknown" and "genuinely 0" into the same printed
-    "0x0"), a missing StartAddress is never coerced to 0 here: doing so
-    would feed a fabricated address into addr_to_module() and could
-    produce MODULE_CONTEXT_UNREGISTERED -- a real, confirmed "this thread
-    is not backed by any known module" DFIR signal -- for a thread whose
-    address was simply never known at all. start_address_*/
-    backing_module_after/backing_module_context all stay null when
-    StartAddress itself is null, mirroring ThreadRecord's own module_context
+    "0x0"), a start address is read through
+    dumpex.core.memory.recorded_start_address here -- the single rule
+    every command and hunter shares -- and is null whenever no address
+    was established for that thread: no ThreadInfoListStream record, a
+    record whose own DumpFlags disown every field but ThreadId, or one
+    whose declared size stopped short of the StartAddress field. It is
+    never coerced to 0: doing so would feed a fabricated address into
+    addr_to_module() and could produce MODULE_CONTEXT_UNREGISTERED -- a
+    real, confirmed "this thread is not backed by any known module" DFIR
+    signal -- for a thread whose address was simply never known at all.
+    start_address_*/backing_module_after/backing_module_context all stay
+    null in that case, mirroring ThreadRecord's own module_context
     convention (see records.py).
 
     target.modules is only read, and only registered as a coverage
@@ -182,6 +188,23 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         "target.thread_info", mf_target, "thread_info", get_thread_infos)
     sources = {"baseline.thread_info": baseline_obs, "target.thread_info": target_obs}
     completeness_checks = ["baseline.thread_info", "target.thread_info"]
+    # A side whose ThreadInfoListStream declared records it never
+    # delivered cannot settle which TIDs exist on that side, so the
+    # added/removed sets it produces are not a closed answer: a TID
+    # "removed" may simply be one whose record never arrived. The
+    # records are still real and still reported -- what is corrected is
+    # the claim that the comparison is complete.
+    for name, obs, mf in (("baseline.thread_info", baseline_obs, mf_baseline),
+                           ("target.thread_info", target_obs, mf_target)):
+        # A side whose stream already FAILED to read is reported as
+        # failed, not as truncated -- _observe_or_failed absorbed the
+        # raise, and re-reading the attribute here would let it escape.
+        undelivered = (0 if obs.state == SourceState.FAILED
+                       else truncated_thread_info_count(getattr(mf, "thread_info", None)))
+        if undelivered:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.THREAD_INFO_STREAM_TRUNCATED, source=name,
+                affected_count=undelivered))
 
     ta = {ti.ThreadId: ti for ti in raw_baseline}
     tb = {ti.ThreadId: ti for ti in raw_target}
@@ -198,7 +221,8 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     thread_info_failed = (baseline_obs.state == SourceState.FAILED
                            or target_obs.state == SourceState.FAILED)
     needs_target_modules = (not thread_info_failed
-                             and any(tb[tid].StartAddress is not None for tid in added))
+                             and any(recorded_start_address(tb[tid])[0] is not None
+                                      for tid in added))
 
     modules_target_available = None
     modules_target = None
@@ -262,7 +286,7 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
 
     records = []
     for tid in sorted(added):
-        sa = tb[tid].StartAddress
+        sa, _state = recorded_start_address(tb[tid])
         if sa is None:
             backing_module_after = None
             backing_module_context = None
@@ -290,7 +314,7 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
             backing_module_after=backing_module_after,
             backing_module_context=backing_module_context))
     for tid in sorted(removed):
-        sa = ta[tid].StartAddress
+        sa, _state = recorded_start_address(ta[tid])
         records.append(ThreadDiffRecord(
             change_type=THREAD_DIFF_REMOVED, tid=tid,
             start_address_before=hex_address(sa), start_address_after=None))

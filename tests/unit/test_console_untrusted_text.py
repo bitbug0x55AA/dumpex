@@ -172,7 +172,8 @@ _THREADS_FIELDS = ("backing_module",)
 
 def _case_threads():
     record = hostile_record(records_module.ThreadRecord, dict(
-        tid=1, start_address="0x0000000000001000", backing_module="ntdll.dll",
+        tid=1, start_address="0x0000000000001000", ip=None, ip_reg=None,
+        backing_module="ntdll.dll",
         # `backing_module` is printed ONLY on the resolved branch -- the
         # per-field reachability check below is what caught this fixture
         # silently exercising the "not in any module" branch instead.
@@ -457,6 +458,8 @@ def _case_report():
     thread = records_module.ReportThreadInfo(
         tid=1,
         start_address="0x0000000000001000",
+        ip=None,
+        ip_reg=None,
         backing_module=hostile_text_for("thread_backing_module"),
         module_context=records_module.MODULE_CONTEXT_RESOLVED,
         kernel_time_100ns=0,

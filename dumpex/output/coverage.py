@@ -1033,6 +1033,32 @@ class LimitationCode(str, Enum):
     # record: the descriptor is reported in full with that one name null
     # and its own *_status field set to "unreadable". source fixed to
     # "handles"; caller_buildable.
+    THREAD_START_ADDRESS_UNAVAILABLE = "THREAD_START_ADDRESS_UNAVAILABLE"
+    # ^ ThreadInfoListStream records that DID arrive, but for which no
+    # start address could be established: the record disowns every field
+    # but its ThreadId, its DumpFlags could not be read, or it carried no
+    # StartAddress field at all (see dumpex.core.memory.
+    # recorded_start_address). A checked-and-excluded thread is not a
+    # checked negative -- whether it begins inside unbacked memory is
+    # undeterminable -- so this counts against completeness rather than
+    # leaving a start-address-driven result reporting COMPLETE over
+    # threads it could not examine. `affected_count` is how many such
+    # records there are. source is "thread_info"; caller_buildable.
+    THREAD_INFO_STREAM_TRUNCATED = "THREAD_INFO_STREAM_TRUNCATED"
+    # ^ ThreadInfoListStream declares more records than dumpex read --
+    # because MAX_THREAD_INFO_ENTRIES capped it, because Location.DataSize
+    # could not hold them, or because the file itself ended early. A
+    # record cut short mid-way is still delivered for the fields it did
+    # carry (see dumpex.core.memory.parse_thread_info_stream), so this
+    # counts only records no part of which could be attributed to a
+    # thread at all. That matters to any consumer deciding which TIDs
+    # exist: a thread missing from this stream and present in another is
+    # a real cross-source mismatch, but a thread missing because its
+    # record never arrived is a capture gap, and only this count tells
+    # them apart. `affected_count` is header.NumberOfEntries -
+    # len(infos), read off the parser's own returned object. source is
+    # "thread_info", or a --diff side's own "baseline.thread_info"/
+    # "target.thread_info"; caller_buildable.
     HANDLE_STREAM_TRUNCATED = "HANDLE_STREAM_TRUNCATED"
     # ^ §5.1.1 rules 4-5: the stream declares more descriptors than
     # dumpex read -- because MAX_HANDLE_DESCRIPTORS capped it, because
@@ -3220,6 +3246,19 @@ def _render_handle_stream_truncated(limitation: "CoverageLimitation") -> str:
             f"{limitation.affected_count} descriptor(s) were not read")
 
 
+def _render_thread_start_address_unavailable(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} ThreadInfoListStream record(s) establish no start "
+            f"address (the record disowns its own fields, its DumpFlags could not be read, "
+            f"or it carried no StartAddress field); whether those threads begin inside "
+            f"unbacked memory is undeterminable, not a checked negative")
+
+
+def _render_thread_info_stream_truncated(limitation: "CoverageLimitation") -> str:
+    return (f"ThreadInfoListStream declares {limitation.affected_count} more thread "
+            f"record(s) than this dump delivered; which threads they describe is unknown, "
+            f"so this stream cannot settle which TIDs exist")
+
+
 def _render_profile_stream_state_ambiguous(limitation: "CoverageLimitation") -> str:
     is_plural = limitation.affected_count != 1
     noun = "stream types" if is_plural else "stream type"
@@ -3301,6 +3340,14 @@ def _summary_source_group_absent(limitation: "CoverageLimitation") -> str:
 
 def _summary_handle_stream_truncated(limitation: "CoverageLimitation") -> str:
     return f"{limitation.affected_count} handle descriptor(s) unread"
+
+
+def _summary_thread_start_address_unavailable(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} thread(s) without an established start address"
+
+
+def _summary_thread_info_stream_truncated(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} thread record(s) undelivered"
 
 
 def _summary_thread_context_partial(limitation: "CoverageLimitation") -> str:
@@ -4083,6 +4130,24 @@ _CODE_SPECS = {
     LimitationCode.HANDLE_STRING_READ_FAILED: _CodeSpec(
         render=_render_handle_string_read_failed, fixed_source="handles", caller_buildable=True,
         validate_fields=_require_positive_affected_count("HANDLE_STRING_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.THREAD_START_ADDRESS_UNAVAILABLE: _CodeSpec(
+        render=_render_thread_start_address_unavailable,
+        summary=_summary_thread_start_address_unavailable,
+        fixed_source="thread_info", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("THREAD_START_ADDRESS_UNAVAILABLE"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.THREAD_INFO_STREAM_TRUNCATED: _CodeSpec(
+        render=_render_thread_info_stream_truncated,
+        summary=_summary_thread_info_stream_truncated,
+        fixed_source="thread_info",
+        # --diff reports the same truncated stream per side, under the
+        # side-qualified source names it uses for every thread source.
+        # The sentence names "ThreadInfoListStream" literally and
+        # interpolates no source, so it reads identically either way.
+        alternate_sources=frozenset({"baseline.thread_info", "target.thread_info"}),
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("THREAD_INFO_STREAM_TRUNCATED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.HANDLE_STREAM_TRUNCATED: _CodeSpec(
         render=_render_handle_stream_truncated, summary=_summary_handle_stream_truncated,

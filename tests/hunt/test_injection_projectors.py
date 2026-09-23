@@ -189,6 +189,63 @@ def test_hunter_record_details_shape():
     assert record.findings and all(isinstance(f, dict) for f in record.findings)
 
 
+def test_rip_hit_thread_ref_carries_start_address_and_conflict_status():
+    # AC1's own requirement (retain both addresses with their own source)
+    # and AC3 (reproducible across projections) both apply here: a rip
+    # hit's HuntThreadRef must not drop the thread's own recorded start
+    # address, and must carry the same ip_context_conflict tri-state
+    # ReportThreadInfo/ThreadRecord publish for the identical fact.
+    rwx_ev = _rwx(_ALLOC)
+    rip_hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x100, ip_reg="RIP",
+                              region=rwx_ev.region, start_address=_ALLOC + 0x9000,
+                              ip_context_conflict=True)
+    thread_ctx = ThreadContext(thread_id=0x1, ip=_ALLOC + 0x100, ip_reg="RIP", is_wow64=False,
+                                start_address=_ALLOC + 0x9000, ip_context_conflict=True)
+    correlation = Correlation(
+        rwx_by_alloc={_ALLOC: [rwx_ev.region]}, pe_by_alloc={},
+        rwx_and_pe_alloc_bases=set(), suspicious_alloc_bases={_ALLOC},
+        rip_hits=[rip_hit], rip_full_correlation=[], start_hits=[])
+    evidence = InjectionEvidence(
+        rwx=[rwx_ev], validated_pe_hits=[], mz_only_hits=[], suspicious_pe_hits=[],
+        informational_pe_hits=[], start_threads=[], thread_contexts=[thread_ctx],
+        correlated_allocations=[], correlation=correlation)
+    report = InjectionReport(
+        score=2, coverage=_coverage(), evidence=evidence,
+        results=(_check(check="injection.allocation_correlation", tag=TAG_LEAD,
+                        confidence=CONFIDENCE_MEDIUM, evidence=evidence.correlation.rip_hits,
+                        evidence_limit=20),))
+    record = project_hunter_record(report)
+    thread = record.details.rip_hits[0].thread
+    assert thread.start_address == "0x00007ffe30009000"
+    assert thread.ip_context_conflict is True
+
+
+def test_rip_hit_thread_ref_undeterminable_conflict_survives_projection():
+    rwx_ev = _rwx(_ALLOC)
+    rip_hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x100, ip_reg="RIP",
+                              region=rwx_ev.region, start_address=None,
+                              ip_context_conflict=None)
+    thread_ctx = ThreadContext(thread_id=0x1, ip=_ALLOC + 0x100, ip_reg="RIP", is_wow64=False,
+                                start_address=None, ip_context_conflict=None)
+    correlation = Correlation(
+        rwx_by_alloc={_ALLOC: [rwx_ev.region]}, pe_by_alloc={},
+        rwx_and_pe_alloc_bases=set(), suspicious_alloc_bases={_ALLOC},
+        rip_hits=[rip_hit], rip_full_correlation=[], start_hits=[])
+    evidence = InjectionEvidence(
+        rwx=[rwx_ev], validated_pe_hits=[], mz_only_hits=[], suspicious_pe_hits=[],
+        informational_pe_hits=[], start_threads=[], thread_contexts=[thread_ctx],
+        correlated_allocations=[], correlation=correlation)
+    report = InjectionReport(
+        score=2, coverage=_coverage(), evidence=evidence,
+        results=(_check(check="injection.allocation_correlation", tag=TAG_LEAD,
+                        confidence=CONFIDENCE_MEDIUM, evidence=evidence.correlation.rip_hits,
+                        evidence_limit=20),))
+    record = project_hunter_record(report)
+    thread = record.details.rip_hits[0].thread
+    assert thread.start_address is None
+    assert thread.ip_context_conflict is None
+
+
 def test_console_lines_contain_expected_sections():
     lines = render_console_lines(_full_report(), verbose=False)
     text = "\n".join(lines)

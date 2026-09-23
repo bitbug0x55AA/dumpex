@@ -7,7 +7,7 @@ C2-context limitations.
 """
 from dataclasses import dataclass, field
 
-from dumpex.core.memory import prot_str
+from dumpex.core.memory import prot_str, recorded_start_address
 from dumpex.hunt._domain import as_tuple, require_recursively_immutable
 from dumpex.output.coverage import ScanTarget
 
@@ -130,11 +130,12 @@ def region_ref(region) -> "RegionRef":
 
 
 def thread_hit_ref(context: dict) -> "ThreadHitRef":
-    """One `dumpex.core.memory.get_thread_contexts()` dict -> its typed
-    equivalent, so a raw thread-context dict never survives past
+    """One `dumpex.core.memory.enriched_thread_contexts()` dict -> its
+    typed equivalent, so a raw thread-context dict never survives past
     correlation.py into the Report."""
     return ThreadHitRef(thread_id=context["ThreadId"], ip=context["ip"],
-                         ip_reg=context.get("ip_reg", "RIP"))
+                         ip_reg=context.get("ip_reg", "RIP"),
+                         ip_context_conflict=context.get("ip_context_conflict"))
 
 
 def thread_start_ref(info) -> "ThreadStartRef":
@@ -143,8 +144,14 @@ def thread_start_ref(info) -> "ThreadStartRef":
     thread BEGAN, a live RIP/EIP records where it is executing NOW, and
     this hunter scores only the latter (see
     `pipe.start_address_proximity_lead`). Two names for the two facts means
-    no projector can quietly render one as the other."""
-    return ThreadStartRef(thread_id=info.ThreadId, start_address=info.StartAddress)
+    no projector can quietly render one as the other.
+
+    The address goes through `dumpex.core.memory.recorded_start_address`,
+    so a record that disowns its own fields, or one whose DumpFlags could
+    not be read, yields `start_address=None` here rather than the zero
+    bytes its unwritten field holds."""
+    start_address, _state = recorded_start_address(info)
+    return ThreadStartRef(thread_id=info.ThreadId, start_address=start_address)
 
 
 def framework_attribution(match) -> "FrameworkAttribution | None":
@@ -218,16 +225,28 @@ class RegionRef:
 @dataclass(frozen=True)
 class ThreadHitRef:
     """One thread's CURRENT instruction pointer, as
-    `dumpex.core.memory.get_thread_contexts()` read it out of
-    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT."""
+    `dumpex.core.memory.enriched_thread_contexts()` read it out of
+    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT (joined against
+    this same TID's own ThreadInfoListStream record).
+
+    `ip_context_conflict` is the tri-state dumpex.core.memory.
+    ip_context_conflict_for result for this TID: True/False are
+    confirmed; None means this TID has no ThreadInfoListStream record at
+    all -- undeterminable, never a confirmed False. A caller that turns a
+    hit carrying this ref into a "currently executing" claim (see
+    `pipe.corroboration`'s `full_corroboration`) must qualify it when
+    this field is not False."""
     thread_id: int
     ip:        int
     ip_reg:    str    # "RIP" (native x64) or "EIP" (WOW64 32-on-64)
+    ip_context_conflict: "bool | None" = None
 
     def __post_init__(self):
         _require_count(self.thread_id, "ThreadHitRef.thread_id")
         _require_count(self.ip, "ThreadHitRef.ip")
         _require_str(self.ip_reg, "ThreadHitRef.ip_reg")
+        if self.ip_context_conflict is not None and not isinstance(self.ip_context_conflict, bool):
+            raise ValueError("ThreadHitRef.ip_context_conflict must be None or a bool")
 
 
 @dataclass(frozen=True)

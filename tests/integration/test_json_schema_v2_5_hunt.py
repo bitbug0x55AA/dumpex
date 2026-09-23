@@ -136,6 +136,15 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
         for hit in d["details"][pe_list]:
             for key in ("va", "region_offset", "file_offset"):
                 del hit[key]
+    # ip_context_conflict (huntThreadRef, added the same unreleased round
+    # as the tri-state derivation itself) -- strip from every bare thread
+    # ref and every thread ref nested inside a region hit.
+    for thread_list in ("threads", "thread_contexts"):
+        for t in d["details"][thread_list]:
+            del t["ip_context_conflict"]
+    for hit_list in ("rip_hits", "rip_full_correlation", "start_hits"):
+        for hit in d["details"][hit_list]:
+            del hit["thread"]["ip_context_conflict"]
     del d["coverage"]["missed_bytes"]
     errors = list(hunter_record_validator_v2_4.iter_errors(d))
     assert errors == []

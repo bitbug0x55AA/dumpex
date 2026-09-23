@@ -180,6 +180,16 @@ def test_hunter_record_details_shape_is_the_v2_wire_shape():
     assert record.findings and all(isinstance(f, dict) for f in record.findings)
 
 
+@pytest.mark.parametrize("conflict", [True, None, False])
+def test_verified_change_rip_context_conflict_round_trips_in_v2_wire_shape(conflict):
+    change = _verified_change(rip=True, rip_context_conflict=conflict, rip_conflicts=(conflict,))
+    evidence = StompingEvidence(verified_changes=(change,))
+    report = StompingReport(score=2, coverage=_coverage(), results=(), evidence=evidence)
+    d = project_hunter_record(report).details.verified_changes[0]
+    assert d["rip_in_changed_range"] is True
+    assert d["rip_context_conflict"] == conflict
+
+
 def test_console_lines_contain_expected_sections():
     lines = render_console_lines(_all_checks_report(), verbose=False)
     text = "\n".join(lines)

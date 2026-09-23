@@ -1389,21 +1389,3 @@ def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
         bounds_exceeded=bounds_exceeded,
         truncation=truncation,
     )
-
-
-def _dumpflags_str(flags) -> str:
-    """Return a compact label for MINIDUMP_THREAD_INFO DumpFlags."""
-    if flags is None:
-        return ""
-    name = flags.name if hasattr(flags, "name") else str(flags)
-    # Map verbose enum names to short tags
-    TAG = {
-        "MINIDUMP_THREAD_INFO_EXITED_THREAD":   "[EXITED]",
-        "MINIDUMP_THREAD_INFO_WRITING_THREAD":  "[DUMPER]",
-        "MINIDUMP_THREAD_INFO_ERROR_THREAD":    "[ERROR]",
-        "MINIDUMP_THREAD_INFO_INVALID_CONTEXT": "[NO_CTX]",
-        "MINIDUMP_THREAD_INFO_INVALID_INFO":    "[NO_INFO]",
-        "MINIDUMP_THREAD_INFO_INVALID_TEB":     "[NO_TEB]",
-    }
-    return TAG.get(name, f"[{name}]") if name else ""
-

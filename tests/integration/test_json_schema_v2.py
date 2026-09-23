@@ -733,10 +733,12 @@ def _minimal_module_record():
 
 
 def _minimal_thread_record():
-    return {"tid": 1, "start_address": None, "backing_module": None, "module_context": None,
+    return {"tid": 1, "start_address": None, "ip": None, "ip_reg": None,
+            "backing_module": None, "module_context": None,
             "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
             "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-            "priority": None, "teb": None}
+            "priority": None, "teb": None, "ip_context_conflict": False,
+            "start_address_state": "absent", "dump_flags_state": "absent"}
 
 
 def _minimal_process_record():
@@ -3199,9 +3201,12 @@ def test_report_thread_info_resolved_without_range_is_still_valid(validator):
     # module_context == "resolved" (see the next test).
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["thread"] = {
-        "tid": 1, "start_address": "0x0000000000001000", "backing_module": "ntdll.dll",
+        "tid": 1, "start_address": "0x0000000000001000", "ip": None, "ip_reg": None,
+        "backing_module": "ntdll.dll",
         "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
         "backing_module_base": None, "backing_module_end": None,
+        "region_membership": None, "ip_context_conflict": False,
+        "start_address_state": "recorded", "dump_flags_state": "resolved",
     }
     assert validator.is_valid(doc)
 
@@ -3219,11 +3224,156 @@ def test_report_thread_info_unregistered_with_module_range_is_rejected(validator
 def test_report_thread_info_valid_resolved_passes(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["thread"] = {
-        "tid": 1, "start_address": "0x0000000000001000", "backing_module": "ntdll.dll",
+        "tid": 1, "start_address": "0x0000000000001000", "ip": None, "ip_reg": None,
+        "backing_module": "ntdll.dll",
         "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
         "backing_module_base": "0x0000000000001000", "backing_module_end": "0x0000000000002000",
+        "region_membership": None, "ip_context_conflict": False,
+        "start_address_state": "recorded", "dump_flags_state": "resolved",
     }
     assert validator.is_valid(doc)
+
+
+def _full_thread_info(**overrides):
+    d = {"tid": 1, "start_address": "0x0000000000001000", "ip": None, "ip_reg": None,
+         "backing_module": None, "module_context": None, "kernel_time_100ns": 0,
+         "user_time_100ns": 0, "backing_module_base": None, "backing_module_end": None,
+         "region_membership": None, "ip_context_conflict": False,
+         "start_address_state": "recorded", "dump_flags_state": "resolved"}
+    d.update(overrides)
+    return d
+
+
+def test_report_thread_info_rejects_non_bool_ip_context_conflict(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(ip_context_conflict=1)
+    assert not validator.is_valid(doc)
+
+
+def test_report_thread_info_rejects_ip_context_conflict_true_when_ip_is_null(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        ip=None, ip_context_conflict=True)
+    assert not validator.is_valid(doc)
+
+
+def test_report_thread_info_accepts_ip_context_conflict_true_when_ip_is_set(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        ip="0x0000000000009000", ip_reg="RIP", ip_context_conflict=True)
+    assert validator.is_valid(doc)
+
+
+def test_report_thread_info_rejects_null_ip_context_conflict_when_ip_is_null(validator):
+    # null (undeterminable) still requires SOMETHING captured to be
+    # undeterminable about -- with ip itself null, the schema keeps
+    # forcing the confirmed False the both-fields-null case always had.
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        ip=None, ip_context_conflict=None)
+    assert not validator.is_valid(doc)
+
+
+def test_report_thread_info_accepts_null_ip_context_conflict_when_ip_is_set(validator):
+    # This TID has no ThreadInfoListStream record to join ip against --
+    # undeterminable, not a confirmed value either way.
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        ip="0x0000000000009000", ip_reg="RIP", ip_context_conflict=None)
+    assert validator.is_valid(doc)
+
+
+def test_report_thread_info_rejects_region_membership_outside_closed_vocabulary(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        region_membership="everywhere")
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_section1_thread_rejects_non_null_region_membership(validator):
+    # Section 1's own anchor-thread entry is not "in" a region the way a
+    # Section 3 member is -- region_membership must stay null there,
+    # enforced bidirectionally by the schema, not just documented.
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = _full_thread_info(
+        region_membership="start")
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_other_threads_in_region_rejects_null_region_membership(validator):
+    # Every Section 3 "other threads sharing this region" entry MUST say
+    # which address admitted it -- unlike Section 1's own thread entry,
+    # null is never valid here.
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["other_threads_in_region"] = [
+        _full_thread_info(tid=2, region_membership=None)]
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_other_threads_in_region_accepts_every_closed_membership_value(validator):
+    doc = _minimal_valid_report_doc()
+    for value in ("start", "current", "start_and_current"):
+        doc["result"]["data"]["records"][0]["other_threads_in_region"] = [
+            _full_thread_info(tid=2, region_membership=value)]
+        assert validator.is_valid(doc), value
+
+
+def test_triage_card_accepts_tid_current_ip_anchor_source(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["anchor_tid"] = 7
+    doc["result"]["data"]["records"][0]["anchor_source"] = "tid_current_ip"
+    doc["result"]["data"]["records"][0]["anchor_address"] = "0x0000000000900010"
+    assert validator.is_valid(doc)
+
+
+def test_triage_card_rejects_an_anchor_source_outside_the_closed_vocabulary(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["anchor_source"] = "guessed"
+    assert not validator.is_valid(doc)
+
+
+def test_thread_record_rejects_non_bool_ip_context_conflict(validator):
+    thread_doc = _minimal_valid_doc(kind="threads")
+    rec = _minimal_thread_record()
+    rec["ip_context_conflict"] = 1
+    thread_doc["result"]["data"]["records"] = [rec]
+    assert not validator.is_valid(thread_doc)
+
+
+def test_thread_record_rejects_ip_context_conflict_true_when_ip_is_null(validator):
+    thread_doc = _minimal_valid_doc(kind="threads")
+    rec = _minimal_thread_record()
+    rec["ip_context_conflict"] = True
+    thread_doc["result"]["data"]["records"] = [rec]
+    assert not validator.is_valid(thread_doc)
+
+
+def test_thread_record_accepts_ip_context_conflict_true_when_ip_is_set(validator):
+    thread_doc = _minimal_valid_doc(kind="threads")
+    rec = _minimal_thread_record()
+    rec["ip"] = "0x0000000000009000"
+    rec["ip_reg"] = "RIP"
+    rec["ip_context_conflict"] = True
+    thread_doc["result"]["data"]["records"] = [rec]
+    assert validator.is_valid(thread_doc)
+
+
+def test_thread_record_rejects_null_ip_context_conflict_when_ip_is_null(validator):
+    thread_doc = _minimal_valid_doc(kind="threads")
+    rec = _minimal_thread_record()
+    rec["ip_context_conflict"] = None
+    thread_doc["result"]["data"]["records"] = [rec]
+    assert not validator.is_valid(thread_doc)
+
+
+def test_thread_record_accepts_null_ip_context_conflict_when_ip_is_set(validator):
+    thread_doc = _minimal_valid_doc(kind="threads")
+    rec = _minimal_thread_record()
+    rec["ip"] = "0x0000000000009000"
+    rec["ip_reg"] = "RIP"
+    rec["ip_context_conflict"] = None
+    thread_doc["result"]["data"]["records"] = [rec]
+    assert validator.is_valid(thread_doc)
 
 
 def test_triage_card_ioc_string_missing_is_network_pattern_is_rejected(validator):

@@ -113,10 +113,10 @@ def test_module_record_anomaly_flags_is_defensively_copied():
 # ── ThreadRecord ───────────────────────────────────────────────────────
 
 def test_thread_record_tid_and_durations_are_plain_ints():
-    rec = ThreadRecord(tid=4660, start_address=None, backing_module=None, module_context=None,
+    rec = ThreadRecord(tid=4660, start_address=None, ip=None, ip_reg=None, backing_module=None, module_context=None,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=100, user_time_100ns=200,
-                        suspend_count=0, priority=8, teb=None)
+                        suspend_count=0, priority=8, teb=None, start_address_state="absent", dump_flags_state="absent")
     d = rec.to_dict()
     assert isinstance(d["tid"], int) and d["tid"] == 4660
     assert isinstance(d["kernel_time_100ns"], int)
@@ -125,7 +125,7 @@ def test_thread_record_tid_and_durations_are_plain_ints():
 
 
 def test_thread_record_addresses_are_hex_strings():
-    rec = ThreadRecord(tid=1, start_address=hex_address(0x1000), backing_module=None,
+    rec = ThreadRecord(tid=1, start_address=hex_address(0x1000), ip=None, ip_reg=None, backing_module=None,
                         module_context=MODULE_CONTEXT_RESOLVED,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=None, user_time_100ns=None,
@@ -136,10 +136,10 @@ def test_thread_record_addresses_are_hex_strings():
 
 
 def test_thread_record_flags_defaults_to_empty_list():
-    rec = ThreadRecord(tid=1, start_address=None, backing_module=None, module_context=None,
+    rec = ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None, module_context=None,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=None, user_time_100ns=None,
-                        suspend_count=None, priority=None, teb=None)
+                        suspend_count=None, priority=None, teb=None, start_address_state="absent", dump_flags_state="absent")
     assert rec.to_dict()["flags"] == []
 
 
@@ -147,18 +147,63 @@ def test_thread_record_module_context_distinguishes_confirmed_from_unavailable()
     # The whole point of this field: a confirmed "not in any module"
     # finding must never be indistinguishable from "we simply have no
     # module data to check against."
-    confirmed = ThreadRecord(tid=1, start_address=hex_address(0x1000), backing_module=None,
+    confirmed = ThreadRecord(tid=1, start_address=hex_address(0x1000), ip=None, ip_reg=None, backing_module=None,
                               module_context=MODULE_CONTEXT_UNREGISTERED,
                               create_time=None, exit_time=None, exit_status=None,
                               kernel_time_100ns=None, user_time_100ns=None,
                               suspend_count=None, priority=None, teb=None)
-    unavailable = ThreadRecord(tid=2, start_address=hex_address(0x1000), backing_module=None,
+    unavailable = ThreadRecord(tid=2, start_address=hex_address(0x1000), ip=None, ip_reg=None, backing_module=None,
                                 module_context=MODULE_CONTEXT_UNAVAILABLE,
                                 create_time=None, exit_time=None, exit_status=None,
                                 kernel_time_100ns=None, user_time_100ns=None,
                                 suspend_count=None, priority=None, teb=None)
     assert confirmed.to_dict()["module_context"] != unavailable.to_dict()["module_context"]
     assert confirmed.to_dict()["backing_module"] == unavailable.to_dict()["backing_module"] is None
+
+
+def test_thread_record_ip_context_conflict_defaults_to_false():
+    rec = ThreadRecord(tid=1, start_address=None, ip=hex_address(0x1000), ip_reg="RIP",
+                        backing_module=None, module_context=None,
+                        create_time=None, exit_time=None, exit_status=None,
+                        kernel_time_100ns=None, user_time_100ns=None,
+                        suspend_count=None, priority=None, teb=None, start_address_state="absent", dump_flags_state="absent")
+    assert rec.to_dict()["ip_context_conflict"] is False
+
+
+def test_thread_record_rejects_ip_context_conflict_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None,
+                     module_context=None, create_time=None, exit_time=None, exit_status=None,
+                     kernel_time_100ns=None, user_time_100ns=None, suspend_count=None,
+                     priority=None, teb=None, ip_context_conflict=True, start_address_state="absent", dump_flags_state="absent")
+
+
+def test_thread_record_rejects_non_bool_ip_context_conflict():
+    with pytest.raises(ValueError, match="ip_context_conflict must be None or a bool"):
+        ThreadRecord(tid=1, start_address=None, ip=hex_address(0x1000), ip_reg="RIP",
+                     backing_module=None, module_context=None, create_time=None,
+                     exit_time=None, exit_status=None, kernel_time_100ns=None,
+                     user_time_100ns=None, suspend_count=None, priority=None, teb=None,
+                     ip_context_conflict=1, start_address_state="absent", dump_flags_state="absent")
+
+
+def test_thread_record_accepts_none_ip_context_conflict_when_undeterminable():
+    # None means the disputing source (ThreadInfoListStream) could not be
+    # checked for this TID -- distinct from a confirmed False.
+    rec = ThreadRecord(tid=1, start_address=None, ip=hex_address(0x1000), ip_reg="RIP",
+                        backing_module=None, module_context=None, create_time=None,
+                        exit_time=None, exit_status=None, kernel_time_100ns=None,
+                        user_time_100ns=None, suspend_count=None, priority=None, teb=None,
+                        ip_context_conflict=None, start_address_state="absent", dump_flags_state="absent")
+    assert rec.to_dict()["ip_context_conflict"] is None
+
+
+def test_thread_record_rejects_none_ip_context_conflict_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None,
+                     module_context=None, create_time=None, exit_time=None, exit_status=None,
+                     kernel_time_100ns=None, user_time_100ns=None, suspend_count=None,
+                     priority=None, teb=None, ip_context_conflict=None, start_address_state="absent", dump_flags_state="absent")
 
 
 # ── SysInfoRecord ──────────────────────────────────────────────────────
@@ -880,7 +925,8 @@ def test_report_ioc_string_accepts_hit_offset_at_last_valid_index():
 # ── ReportThreadInfo negative-branch coverage ─────────────────────────────
 
 def _valid_thread_info(**overrides):
-    kwargs = dict(tid=1, start_address=hex_address(0x1000), backing_module=None,
+    kwargs = dict(tid=1, start_address=hex_address(0x1000), ip=None, ip_reg=None,
+                  backing_module=None,
                   module_context=None, kernel_time_100ns=None, user_time_100ns=None,
                   backing_module_base=None, backing_module_end=None)
     kwargs.update(overrides)
@@ -907,6 +953,69 @@ def test_report_thread_info_rejects_backing_module_range_without_resolved_contex
         _valid_thread_info(module_context=MODULE_CONTEXT_UNREGISTERED,
                            backing_module_base=hex_address(0x2000),
                            backing_module_end=hex_address(0x3000))
+
+
+def test_report_thread_info_rejects_ip_without_ip_reg():
+    with pytest.raises(ValueError, match="ip_reg is required"):
+        _valid_thread_info(ip=hex_address(0x7000), ip_reg=None)
+
+
+def test_report_thread_info_rejects_ip_reg_without_ip():
+    with pytest.raises(ValueError, match="ip_reg must be None"):
+        _valid_thread_info(ip=None, ip_reg="RIP")
+
+
+def test_report_thread_info_rejects_non_bool_ip_context_conflict():
+    with pytest.raises(ValueError, match="ip_context_conflict must be None or a bool"):
+        _valid_thread_info(ip=hex_address(0x9000), ip_reg="RIP", ip_context_conflict=1)
+
+
+def test_report_thread_info_accepts_none_ip_context_conflict_when_undeterminable():
+    rec = _valid_thread_info(ip=hex_address(0x9000), ip_reg="RIP", ip_context_conflict=None)
+    assert rec.to_dict()["ip_context_conflict"] is None
+
+
+def test_report_thread_info_rejects_none_ip_context_conflict_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        _valid_thread_info(ip=None, ip_reg=None, ip_context_conflict=None)
+
+
+def test_report_thread_info_rejects_ip_context_conflict_when_ip_is_none():
+    with pytest.raises(ValueError, match="ip_context_conflict must be False when ip is None"):
+        _valid_thread_info(ip=None, ip_reg=None, ip_context_conflict=True)
+
+
+def test_report_thread_info_rejects_region_membership_outside_the_closed_vocabulary():
+    with pytest.raises(ValueError, match="region_membership must be None or one of"):
+        _valid_thread_info(region_membership="everywhere")
+
+
+def test_report_thread_info_accepts_every_closed_region_membership_value():
+    for value in ("start", "current", "start_and_current"):
+        rec = _valid_thread_info(region_membership=value)
+        assert rec.to_dict()["region_membership"] == value
+
+
+def test_report_thread_info_keeps_start_address_and_ip_independent():
+    # The whole point of this issue's fix: a thread's recorded start and
+    # its captured current IP are two independent facts, retained
+    # together -- neither one is derived from or overwrites the other.
+    rec = _valid_thread_info(start_address=hex_address(0x1000),
+                              ip=hex_address(0x9000), ip_reg="RIP")
+    d = rec.to_dict()
+    assert d["start_address"] == hex_address(0x1000)
+    assert d["ip"] == hex_address(0x9000)
+    assert d["ip_reg"] == "RIP"
+
+
+def test_report_thread_info_missing_context_gives_unknown_ip_not_start_address():
+    # Missing CONTEXT must produce an unknown current IP, never a silent
+    # fallback where start_address masquerades as the current one.
+    rec = _valid_thread_info(start_address=hex_address(0x1000), ip=None, ip_reg=None)
+    d = rec.to_dict()
+    assert d["start_address"] == hex_address(0x1000)
+    assert d["ip"] is None
+    assert d["ip_reg"] is None
 
 
 # ── ReportRegionInfo negative-branch coverage ─────────────────────────────
@@ -1567,8 +1676,10 @@ def test_handle_record_rejects_a_status_outside_the_vocabulary():
 # written twice. These drive the record half.
 
 def _thread_info(**overrides):
-    kwargs = dict(tid=4321, start_address=None, backing_module=None, module_context=None,
-                   kernel_time_100ns=None, user_time_100ns=None)
+    kwargs = dict(tid=4321, start_address=None, ip=None, ip_reg=None, backing_module=None,
+                   module_context=None,
+                   kernel_time_100ns=None, user_time_100ns=None,
+                   start_address_state="absent", dump_flags_state="absent")
     kwargs.update(overrides)
     return ReportThreadInfo(**kwargs)
 
