@@ -156,3 +156,34 @@ The public queue fields, ordering, and follow-up workflow are documented in
 
 Private-corpus handling is governed by `tests/corpus/README.md`; this ADR does
 not duplicate that policy.
+
+## Memory-type and thread-evidence boundaries
+
+The hollowing image-base check fires for any non-MEM_IMAGE region.
+`hollowingDetails.mem_private_at_base` retains that historical meaning;
+`region_type` carries the observed MemoryInfo type and is null exactly when
+`mem_private_at_base` is null (no image-base region found). Facts, inference,
+rationale, verdict, and score text must name the observed type, including
+MEM_MAPPED, rather than asserting MEM_PRIVATE for every anomaly.
+
+YARA's `PE_In_Private_Memory` requires confirmed MEM_PRIVATE. A rule match
+without that fact remains recorded as `context_unverified` rather than a
+confirmed detection. The broader `private_or_unbacked` rules, including
+`Shellcode_Bootstrap_x64`, retain their distinct scope; module-list absence
+alone never proves a region is private. YARA's common score fields remain
+null as described above.
+
+Thread-aware hunters consume the shared acquisition, start-address validity,
+context-conflict join, and caveat reducers defined in the
+[Thread evidence contract](thread_evidence_contract.md). They must not infer
+an established start from missing bytes or silently treat a disputed captured
+IP as confirmed execution.
+
+## Optional-dependency tests
+
+Tests that actually compile YARA rules use `pytest.importorskip("yara")` when
+the optional engine is not installed. Tests of engine-independent behavior
+remain runnable without it. Keep dependency availability separate from a
+failed detection or parser assertion; the synthetic default suite has no
+external corpus requirement. See [Contributing](../../CONTRIBUTING.md) for
+setup and test commands.

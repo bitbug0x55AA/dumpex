@@ -410,7 +410,9 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
   owns it. `classification` is `headers`, `code`, `data`, `import_iat`,
   `relocation`, `unmapped`, or `outside_image` inside the owning module;
   `module` when the module's profile was not available to place it finer; and
-  `private` or `unresolved` when no module owns it. The section's declared
+  the confirmed memory/registration classification described under
+  [Memory type and PE validation](#memory-type-and-pe-validation) when no
+  module owns it. The section's declared
   R/W/X against the live region protection is an observation.
 - `collect_instruction_context` reads a bounded window at the highest-priority
   approved anchor source and decodes it through the isolated
@@ -1167,3 +1169,70 @@ classification and reason sanitization are covered by
 `tests/unit/test_release_packaging_gates.py`.
 Schema compatibility is covered by `tests/integration/test_json_schema_v2.py`
 and `tests/integration/test_report_compat_freeze.py`.
+
+## Memory type and PE validation
+
+Module registration and MemoryInfo type are independent captured facts.
+`resolve_va_location` treats a present empty ModuleListStream as a checked
+negative (`unregistered`), not unavailable registration evidence. A missing
+module list cannot establish that a MEM_IMAGE region is unregistered.
+
+Without an owning module, `anchor_pe_context.classification` uses:
+
+| Evidence | Classification |
+|---|---|
+| Confirmed MEM_PRIVATE | `private` |
+| Confirmed MEM_MAPPED | `mapped` |
+| MEM_IMAGE and a module list confirms no owner | `unregistered_image` |
+| MEM_IMAGE without a module list to check ownership | `image_registration_unavailable` |
+| Covering region with null/unrecognized type | `region_type_unavailable` |
+| Neither a module nor a region places the anchor | `unresolved` |
+
+An unregistered image is a registration fact, not proof of manual mapping or
+stomping. Unknown region types must not fall through to private or mapped.
+`summary.hits_private` remains the historical grouping/actionability bucket
+for hits not attributed to resolved image modules, not a literal type count.
+Its `hits_mapped`, `hits_unregistered_image`,
+`hits_image_registration_unavailable`, and `hits_region_type_unavailable`
+breakdowns follow the table. Subtracting all four yields confirmed private
+hits. They are integer counts in report-string mode and null otherwise;
+existing card/sharing/budget accounting stays unchanged.
+
+Report and extract injected-PE claims require a structurally valid DOS, COFF,
+optional header, and section table at a confirmed unregistered address in
+MEM_PRIVATE or live executable memory. A bare MZ prefix and a read-only,
+non-executable mapped PE do not qualify. Weaker MZ evidence remains visible,
+with a specific reason: module ownership, no covering MemoryInfo region,
+invalid structure, incomplete capture, or non-private/non-executable mapping.
+
+`reportRegionInfo.pe_header_state` is `ok`, `pe_invalid`, or `short_read` when
+MZ was detected and registration is confirmed unregistered; otherwise null.
+`extractRecord.pe_header_state` uses the same vocabulary when parsing was
+attempted, additionally requiring a covering MemoryInfo region. In report
+records, short_read forces `has_injected_pe` to null; ok requires it to equal
+(private or executable). Python and schema conditionals enforce both directions.
+
+Incomplete structural validation produces
+`REPORT_PE_HEADER_VALIDATION_INCOMPLETE` or
+`EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE`, making coverage partial and allowing
+exit code 3 instead of 0. This is independent of raw-read truncation:
+`REGION_READ_TRUNCATED` can coexist, and neither limitation claims that the
+region was read in full. A fully read region whose declared header offsets
+extend beyond it still has an unresolved structural question.
+
+Extraction requires the modules source only for MZ-prefixed bytes. Missing
+ModuleListStream then produces `EXTRACT_MODULE_CONTEXT_UNAVAILABLE`. The
+memory_info source is required only when module ownership has not already
+settled the question; its absence produces `EXTRACT_MEMORY_INFO_UNAVAILABLE`.
+A known module does not require MemoryInfo to disprove an unregistered PE.
+A present MemoryInfo stream with no covering descriptor is diagnostic-only,
+matching report's `REPORT_REGION_NOT_FOUND` boundary; it does not itself
+change coverage or exit status. Required-source and validation gaps do.
+`EXTRACT_INJECTED_PE_DETECTED` names the strong claim;
+`EXTRACT_MZ_HEADER_DETECTED` carries the weaker diagnostic.
+
+These corrections can remove unsupported injected-PE findings; they do not
+promote maliciousness. The separate current-IP anchor fallback can examine
+previously unexamined content and change a verdict in either direction. See
+[Thread evidence contract](thread_evidence_contract.md) for thread anchoring,
+region membership, shared context derivations, and coverage requirements.
