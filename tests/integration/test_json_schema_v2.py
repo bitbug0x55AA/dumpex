@@ -737,7 +737,8 @@ def _minimal_thread_record():
             "backing_module": None, "module_context": None,
             "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
             "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-            "priority": None, "teb": None, "ip_context_conflict": False}
+            "priority": None, "teb": None, "ip_context_conflict": False,
+            "start_address_state": "absent", "dump_flags_state": "absent"}
 
 
 def _minimal_process_record():
@@ -3205,6 +3206,7 @@ def test_report_thread_info_resolved_without_range_is_still_valid(validator):
         "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
         "backing_module_base": None, "backing_module_end": None,
         "region_membership": None, "ip_context_conflict": False,
+        "start_address_state": "recorded", "dump_flags_state": "resolved",
     }
     assert validator.is_valid(doc)
 
@@ -3227,6 +3229,7 @@ def test_report_thread_info_valid_resolved_passes(validator):
         "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
         "backing_module_base": "0x0000000000001000", "backing_module_end": "0x0000000000002000",
         "region_membership": None, "ip_context_conflict": False,
+        "start_address_state": "recorded", "dump_flags_state": "resolved",
     }
     assert validator.is_valid(doc)
 
@@ -3235,7 +3238,8 @@ def _full_thread_info(**overrides):
     d = {"tid": 1, "start_address": "0x0000000000001000", "ip": None, "ip_reg": None,
          "backing_module": None, "module_context": None, "kernel_time_100ns": 0,
          "user_time_100ns": 0, "backing_module_base": None, "backing_module_end": None,
-         "region_membership": None, "ip_context_conflict": False}
+         "region_membership": None, "ip_context_conflict": False,
+         "start_address_state": "recorded", "dump_flags_state": "resolved"}
     d.update(overrides)
     return d
 

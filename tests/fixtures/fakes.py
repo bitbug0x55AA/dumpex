@@ -14,10 +14,11 @@ import io
 import struct
 
 from minidump.constants import MINIDUMP_STREAM_TYPE
+from minidump.streams.ThreadInfoListStream import DumpFlags
 from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 from minidump.structures.peb import PEB_OFFSETS
 
-from dumpex.core.memory import parse_handle_stream
+from dumpex.core.memory import parse_handle_stream, parse_thread_info_stream
 
 
 class Prot:
@@ -46,15 +47,35 @@ class Module:
         self.name         = name
 
 
+# The "caller said nothing" sentinel shared by every fixture below whose
+# parameter has a meaningful None of its own -- a FakeStream
+# `declared=None` deliberately models a header whose NumberOfDescriptors
+# really is None, and a ThreadInfo `raw_dump_flags=None` an entry whose
+# raw value could not be recovered.
+_KEEP = object()
+
+
 class ThreadInfo:
     """Stand-in for MinidumpThreadInfo (ThreadInfoListStream entry).
-    CreateTime/ExitTime/KernelTime/UserTime/ExitStatus/DumpFlags are all
-    optional (default None, matching "not read off this fixture at all"
-    via dumpex.commands.threads' getattr(..., default) calls) -- pass
+    CreateTime/ExitTime/KernelTime/UserTime/ExitStatus are all optional
+    (default None, matching "not read off this fixture at all" via
+    dumpex.commands.threads' getattr(..., default) calls) -- pass
     create_time explicitly to build a "real" entry with actual timing
-    data, e.g. for a mixed real+placeholder ThreadRecord test."""
+    data, e.g. for a mixed real+placeholder ThreadRecord test.
+
+    `dump_flags` accepts a DumpFlags member, its enum name, or a raw
+    integer bit mask, and populates BOTH attributes a real entry carries
+    the way the real parse does (see dumpex.core.memory.
+    parse_thread_info_stream): `RawDumpFlags` is always the exact value,
+    while `DumpFlags` is the library's single-member Enum lookup, which
+    is None for 0x0 and for any combination. `dump_flags=None` therefore
+    models an ordinary thread with no flag set -- a KNOWN 0x0, not an
+    unknown. Pass `raw_dump_flags=None` explicitly for the one state
+    that fixture cannot otherwise reach: an entry whose raw value could
+    not be recovered at all."""
     def __init__(self, tid, start_address, *, create_time=None, exit_time=None,
-                 kernel_time=None, user_time=None, exit_status=None, dump_flags=None):
+                 kernel_time=None, user_time=None, exit_status=None, dump_flags=None,
+                 raw_dump_flags=_KEEP):
         self.ThreadId     = tid
         self.StartAddress = start_address
         self.CreateTime   = create_time
@@ -62,7 +83,25 @@ class ThreadInfo:
         self.KernelTime   = kernel_time
         self.UserTime     = user_time
         self.ExitStatus   = exit_status
-        self.DumpFlags    = dump_flags
+        value = _dump_flags_value(dump_flags)
+        self.RawDumpFlags = value if raw_dump_flags is _KEEP else raw_dump_flags
+        try:
+            self.DumpFlags = DumpFlags(value)
+        except ValueError:
+            self.DumpFlags = None
+
+
+def _dump_flags_value(dump_flags) -> int:
+    """The raw UINT32 a `ThreadInfo(dump_flags=...)` fixture means, from a
+    DumpFlags member, an enum name, or an already-raw bit mask. Absent
+    flags are 0x0 -- the value a producer writes for a healthy thread."""
+    if dump_flags is None:
+        return 0
+    if isinstance(dump_flags, DumpFlags):
+        return dump_flags.value
+    if isinstance(dump_flags, str):
+        return DumpFlags[dump_flags].value
+    return int(dump_flags)
 
 
 class Ctx:
@@ -87,12 +126,6 @@ class Handle:
         self.GrantedAccess  = access
         self.HandleCount    = 1
         self.PointerCount   = 1
-
-
-# FakeStream's own "caller said nothing" sentinel, distinct from a
-# `declared=None` that deliberately models a header whose
-# NumberOfDescriptors really is None.
-_KEEP = object()
 
 
 class HandleDataStreamHeader:
@@ -717,4 +750,90 @@ def mf_with_handle_stream(*, parsed=None, failure=None, has_directory=None):
     if has_directory is None:
         has_directory = parsed is not None or failure is not None
     mf.directories = [HandleStreamDirectory(0, 16)] if has_directory else []
+    return mf
+
+
+class ThreadInfoStreamLocation:
+    def __init__(self, rva, data_size):
+        self.Rva = rva
+        self.DataSize = data_size
+
+
+class ThreadInfoStreamDirectory:
+    def __init__(self, rva, data_size, stream_type=None):
+        self.Location = ThreadInfoStreamLocation(rva, data_size)
+        self.StreamType = (MINIDUMP_STREAM_TYPE.ThreadInfoListStream
+                            if stream_type is None else stream_type)
+
+
+THREAD_INFO_ENTRY_SIZE = 64   # MINIDUMP_THREAD_INFO, on disk
+
+
+def build_thread_info_stream(entries, *, size_of_header=12,
+                              size_of_entry=THREAD_INFO_ENTRY_SIZE,
+                              declared_data_size=None, number_of_entries=None,
+                              body_bytes=None, entry_padding=b""):
+    """Raw ThreadInfoListStream bytes (12-byte header + fixed-size entry
+    array) plus the (rva=0, data_size) framing.
+
+    Each entry is a dict of the MINIDUMP_THREAD_INFO fields a test cares
+    about -- `tid`, `dump_flags` (a raw UINT32, written verbatim so a
+    COMBINED value the library's single-member Enum cannot represent is
+    reachable), `start_address`, `kernel_time`, `user_time`,
+    `exit_status` -- everything else zero.
+
+    `size_of_entry` smaller than the 64-byte record truncates each entry
+    to that declared size, modelling a producer whose records genuinely
+    stop short of a field; larger pads each with `entry_padding` (or
+    zeros), modelling a longer declared stride. `body_bytes` cuts the
+    finished body to that many bytes, modelling a file that ends before
+    the declared stream does, and `number_of_entries` lets the header
+    declare more entries than the body carries."""
+    declared_entries = len(entries) if number_of_entries is None else number_of_entries
+    header = struct.pack("<III", size_of_header, size_of_entry, declared_entries)
+    body = bytearray(header)
+    body += b"\x00" * max(0, size_of_header - len(header))
+    for e in entries:
+        fixed = struct.pack(
+            "<IIIIQQQQQQ",
+            e["tid"], e.get("dump_flags", 0), e.get("dump_error", 0),
+            e.get("exit_status", 0), e.get("create_time", 0), e.get("exit_time", 0),
+            e.get("kernel_time", 0), e.get("user_time", 0),
+            e.get("start_address", 0), e.get("affinity", 0))
+        entry = fixed[:size_of_entry]
+        if len(entry) < size_of_entry:
+            entry = entry + entry_padding[:size_of_entry - len(entry)]
+        body += entry.ljust(size_of_entry, b"\x00")
+    data_size = (declared_data_size if declared_data_size is not None
+                 else size_of_header + len(entries) * size_of_entry)
+    out = bytes(body)
+    if body_bytes is not None:
+        out = out[:body_bytes]
+    return out, data_size
+
+
+def parsed_thread_info_stream(entries, **kwargs):
+    """`entries` through the REAL `dumpex.core.memory.
+    parse_thread_info_stream`.
+
+    The only fixture that can reach the states a hand-built ThreadInfo
+    cannot describe on its own: a combined DumpFlags value the installed
+    library's own single-member Enum lookup silently drops, a record
+    whose declared size stops short of a field, and a stride that is not
+    the 64-byte layout."""
+    body, data_size = build_thread_info_stream(entries, **kwargs)
+    return parse_thread_info_stream(
+        ThreadInfoStreamDirectory(rva=0, data_size=data_size), io.BytesIO(body))
+
+
+def mf_with_thread_info_stream(entries, *, threads=(), modules=(), **kwargs):
+    """A FakeMF whose `thread_info` came through the real parser (see
+    `parsed_thread_info_stream`), optionally alongside base-stream
+    threads and modules."""
+    mf = FakeMF()
+    mf.thread_info = parsed_thread_info_stream(entries, **kwargs)
+    if threads:
+        mf.threads = FakeStream(list(threads), "threads")
+    if modules:
+        mf.modules = FakeStream(list(modules), "modules")
     return mf

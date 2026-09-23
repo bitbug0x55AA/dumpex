@@ -452,7 +452,9 @@ SCENARIOS = [
                                 "exit_time": None, "exit_status": None,
                                 "kernel_time_100ns": None, "user_time_100ns": None,
                                 "suspend_count": None, "priority": None, "teb": None,
-                                "ip_context_conflict": None}]}},
+                                "ip_context_conflict": None,
+                                "start_address_state": "absent",
+                                "dump_flags_state": "absent"}]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,partial,ThreadInfoListStream not present; StartAddress/CreateTime/'
         'ExitTime/KernelTime/UserTime unavailable (TID/SuspendCount/Priority/TEB only); '
@@ -487,7 +489,9 @@ SCENARIOS = [
                                 "exit_status": None, "kernel_time_100ns": None,
                                 "user_time_100ns": None, "suspend_count": None,
                                 "priority": None, "teb": None,
-                                "ip_context_conflict": False}]}},
+                                "ip_context_conflict": False,
+                                "start_address_state": "recorded",
+                                "dump_flags_state": "resolved"}]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,complete,,1\n\n'
         '## threads / records\ntid,start_address,backing_module,module_context,flags,create_time,'
@@ -531,25 +535,29 @@ SCENARIOS = [
               "module_context": "unregistered", "flags": [], "create_time": None,
               "exit_time": None, "exit_status": None, "kernel_time_100ns": None,
               "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None,
-              "ip_context_conflict": False},
+              "ip_context_conflict": False, "start_address_state": "recorded",
+              "dump_flags_state": "resolved"},
              {"tid": 2, "start_address": None,
               "ip": "0x0000000000000000", "ip_reg": "RIP",
               "backing_module": None, "module_context": None,
               "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
               "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-              "priority": None, "teb": None, "ip_context_conflict": None},
+              "priority": None, "teb": None, "ip_context_conflict": None,
+              "start_address_state": "absent", "dump_flags_state": "absent"},
              {"tid": 3, "start_address": None,
               "ip": "0x0000000000000000", "ip_reg": "RIP",
               "backing_module": None, "module_context": None,
               "flags": [], "create_time": None, "exit_time": None, "exit_status": None,
               "kernel_time_100ns": None, "user_time_100ns": None, "suspend_count": None,
-              "priority": None, "teb": None, "ip_context_conflict": None},
+              "priority": None, "teb": None, "ip_context_conflict": None,
+              "start_address_state": "absent", "dump_flags_state": "absent"},
              {"tid": 4, "start_address": "0x000000007fff0000",
               "ip": None, "ip_reg": None, "backing_module": None,
               "module_context": "unregistered", "flags": [], "create_time": None,
               "exit_time": None, "exit_status": None, "kernel_time_100ns": None,
               "user_time_100ns": None, "suspend_count": None, "priority": None, "teb": None,
-              "ip_context_conflict": False},
+              "ip_context_conflict": False, "start_address_state": "recorded",
+              "dump_flags_state": "resolved"},
          ]}},
         '## threads / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'threads,completed,partial,2 thread(s) present in ThreadListStream but missing from '

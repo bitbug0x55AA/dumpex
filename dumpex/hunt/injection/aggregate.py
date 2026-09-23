@@ -110,7 +110,10 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                   module_list_stream: bool, thread_list_stream: bool,
                   threads_total: int, contexts_parsed: int,
                   *, region_count: "int | None" = None, thread_info_count: "int | None" = None,
-                  module_count: "int | None" = None) -> InjectionReport:
+                  module_count: "int | None" = None,
+                  unestablished_starts: int = 0,
+                  thread_info_truncated: int = 0,
+                  threads_without_a_record: int = 0) -> InjectionReport:
     """
     Turn already-collected Evidence + Correlation into the canonical
     `InjectionReport`. `validated_pe_hits`/`mz_only_hits` are
@@ -151,7 +154,9 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         pe_scan_not_started_groups=hidden_pe_scan.scan_not_started_groups,
         pe_evidence_capped=hidden_pe_scan.validated_dropped,
         region_count=region_count, thread_info_count=thread_info_count,
-        module_count=module_count,
+        module_count=module_count, starts_not_established=unestablished_starts,
+        thread_info_truncated=thread_info_truncated,
+        threads_without_a_record=threads_without_a_record,
     )
 
     rwx_and_pe_alloc_bases = correlation.rwx_and_pe_alloc_bases
@@ -310,6 +315,28 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                        "signal for what a thread is actually doing.",
             limitations=[],
             tag=TAG_LEAD,
+        ))
+
+    if coverage.starts_not_established:
+        results.append(CheckResult(
+            check="injection.start_address_not_established",
+            evidence=(),
+            inference=f"{coverage.starts_not_established} ThreadInfoListStream record(s) "
+                       f"carry no established start address — their own DumpFlags disown "
+                       f"every field but ThreadId, or could not be read, or the record "
+                       f"carried no StartAddress field at all.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A StartAddress field the producer never wrote, or that this record "
+                       "never carried at all, reads as 0x0 once substituted, which "
+                       "resolves through module lookup as a confirmed 'not in any module' "
+                       "answer — an unbacked-thread finding manufactured out of missing "
+                       "evidence. Those records are held back from this hunter's "
+                       "start-address evidence entirely, the same rule --threads/--report "
+                       "apply to the same TID.",
+            limitations=["These thread(s) contribute no start-address evidence and no score "
+                          "in this run: whether they begin inside unbacked memory is "
+                          "undeterminable, not a checked negative."],
+            tag=TAG_OBSERVATION,
         ))
 
     if not coverage.thread_context:

@@ -116,7 +116,7 @@ def test_thread_record_tid_and_durations_are_plain_ints():
     rec = ThreadRecord(tid=4660, start_address=None, ip=None, ip_reg=None, backing_module=None, module_context=None,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=100, user_time_100ns=200,
-                        suspend_count=0, priority=8, teb=None)
+                        suspend_count=0, priority=8, teb=None, start_address_state="absent", dump_flags_state="absent")
     d = rec.to_dict()
     assert isinstance(d["tid"], int) and d["tid"] == 4660
     assert isinstance(d["kernel_time_100ns"], int)
@@ -139,7 +139,7 @@ def test_thread_record_flags_defaults_to_empty_list():
     rec = ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None, module_context=None,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=None, user_time_100ns=None,
-                        suspend_count=None, priority=None, teb=None)
+                        suspend_count=None, priority=None, teb=None, start_address_state="absent", dump_flags_state="absent")
     assert rec.to_dict()["flags"] == []
 
 
@@ -166,7 +166,7 @@ def test_thread_record_ip_context_conflict_defaults_to_false():
                         backing_module=None, module_context=None,
                         create_time=None, exit_time=None, exit_status=None,
                         kernel_time_100ns=None, user_time_100ns=None,
-                        suspend_count=None, priority=None, teb=None)
+                        suspend_count=None, priority=None, teb=None, start_address_state="absent", dump_flags_state="absent")
     assert rec.to_dict()["ip_context_conflict"] is False
 
 
@@ -175,7 +175,7 @@ def test_thread_record_rejects_ip_context_conflict_when_ip_is_none():
         ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None,
                      module_context=None, create_time=None, exit_time=None, exit_status=None,
                      kernel_time_100ns=None, user_time_100ns=None, suspend_count=None,
-                     priority=None, teb=None, ip_context_conflict=True)
+                     priority=None, teb=None, ip_context_conflict=True, start_address_state="absent", dump_flags_state="absent")
 
 
 def test_thread_record_rejects_non_bool_ip_context_conflict():
@@ -184,7 +184,7 @@ def test_thread_record_rejects_non_bool_ip_context_conflict():
                      backing_module=None, module_context=None, create_time=None,
                      exit_time=None, exit_status=None, kernel_time_100ns=None,
                      user_time_100ns=None, suspend_count=None, priority=None, teb=None,
-                     ip_context_conflict=1)
+                     ip_context_conflict=1, start_address_state="absent", dump_flags_state="absent")
 
 
 def test_thread_record_accepts_none_ip_context_conflict_when_undeterminable():
@@ -194,7 +194,7 @@ def test_thread_record_accepts_none_ip_context_conflict_when_undeterminable():
                         backing_module=None, module_context=None, create_time=None,
                         exit_time=None, exit_status=None, kernel_time_100ns=None,
                         user_time_100ns=None, suspend_count=None, priority=None, teb=None,
-                        ip_context_conflict=None)
+                        ip_context_conflict=None, start_address_state="absent", dump_flags_state="absent")
     assert rec.to_dict()["ip_context_conflict"] is None
 
 
@@ -203,7 +203,7 @@ def test_thread_record_rejects_none_ip_context_conflict_when_ip_is_none():
         ThreadRecord(tid=1, start_address=None, ip=None, ip_reg=None, backing_module=None,
                      module_context=None, create_time=None, exit_time=None, exit_status=None,
                      kernel_time_100ns=None, user_time_100ns=None, suspend_count=None,
-                     priority=None, teb=None, ip_context_conflict=None)
+                     priority=None, teb=None, ip_context_conflict=None, start_address_state="absent", dump_flags_state="absent")
 
 
 # ── SysInfoRecord ──────────────────────────────────────────────────────
@@ -1678,7 +1678,8 @@ def test_handle_record_rejects_a_status_outside_the_vocabulary():
 def _thread_info(**overrides):
     kwargs = dict(tid=4321, start_address=None, ip=None, ip_reg=None, backing_module=None,
                    module_context=None,
-                   kernel_time_100ns=None, user_time_100ns=None)
+                   kernel_time_100ns=None, user_time_100ns=None,
+                   start_address_state="absent", dump_flags_state="absent")
     kwargs.update(overrides)
     return ReportThreadInfo(**kwargs)
 

@@ -7,7 +7,7 @@ C2-context limitations.
 """
 from dataclasses import dataclass, field
 
-from dumpex.core.memory import prot_str
+from dumpex.core.memory import prot_str, recorded_start_address
 from dumpex.hunt._domain import as_tuple, require_recursively_immutable
 from dumpex.output.coverage import ScanTarget
 
@@ -144,8 +144,14 @@ def thread_start_ref(info) -> "ThreadStartRef":
     thread BEGAN, a live RIP/EIP records where it is executing NOW, and
     this hunter scores only the latter (see
     `pipe.start_address_proximity_lead`). Two names for the two facts means
-    no projector can quietly render one as the other."""
-    return ThreadStartRef(thread_id=info.ThreadId, start_address=info.StartAddress)
+    no projector can quietly render one as the other.
+
+    The address goes through `dumpex.core.memory.recorded_start_address`,
+    so a record that disowns its own fields, or one whose DumpFlags could
+    not be read, yields `start_address=None` here rather than the zero
+    bytes its unwritten field holds."""
+    start_address, _state = recorded_start_address(info)
+    return ThreadStartRef(thread_id=info.ThreadId, start_address=start_address)
 
 
 def framework_attribution(match) -> "FrameworkAttribution | None":

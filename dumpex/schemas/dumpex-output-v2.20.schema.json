@@ -486,7 +486,7 @@
       }
     },
     "threadRecord": {
-      "description": "Matches dumpex.output.records.ThreadRecord.to_dict(). `start_address` (where this thread BEGAN, from ThreadInfoListStream) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent facts from independent sources -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed, never defaulted to `start_address` or to 0. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record: true when `ip` is set AND that record independently flags this same context as invalid (the same fact `flags` already carries as `NO_CTX`); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null (nothing to dispute regardless of ThreadInfoListStream coverage); null when `ip` is set but this TID has no ThreadInfoListStream record at all to check it against -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case. Mirrors `reportThreadInfo.ip_context_conflict` (same dumpex.core.memory.ip_context_conflict_for derivation) so `--threads` and `--report` publish this fact in the same schema-validated shape for the same TID.",
+      "description": "Matches dumpex.output.records.ThreadRecord.to_dict(). `start_address` (where this thread BEGAN, from ThreadInfoListStream) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent facts from independent sources -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed, never defaulted to `start_address` or to 0. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record: true when `ip` is set AND that record independently flags this same context as invalid (the same fact `flags` already carries as `NO_CTX`); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null (nothing to dispute regardless of ThreadInfoListStream coverage); null when `ip` is set but no DumpFlags value could be established for this TID (no ThreadInfoListStream record at all, or a record whose flags could not be read -- see `dump_flags_state`) -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case. Mirrors `reportThreadInfo.ip_context_conflict` (same dumpex.core.memory.ip_context_conflict_for derivation) so `--threads` and `--report` publish this fact in the same schema-validated shape for the same TID.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -505,7 +505,9 @@
         "suspend_count",
         "priority",
         "teb",
-        "ip_context_conflict"
+        "ip_context_conflict",
+        "start_address_state",
+        "dump_flags_state"
       ],
       "properties": {
         "tid": {
@@ -594,6 +596,23 @@
         },
         "ip_context_conflict": {
           "type": ["boolean", "null"]
+        },
+        "start_address_state": {
+          "description": "What this thread's `start_address` is worth. `recorded`: a real ThreadInfoListStream entry whose own DumpFlags are known and carry neither MINIDUMP_THREAD_INFO_ERROR_THREAD nor MINIDUMP_THREAD_INFO_INVALID_INFO -- the address is evidence. `invalid`: that entry's own DumpFlags say only ThreadId is valid, so `start_address` is null -- a field the producer never wrote, NOT address 0x0, and NOT evidence that this thread starts outside every module. `unverified`: a real entry whose DumpFlags value could not be established at all, so `start_address` keeps its recorded value but nothing establishes it as evidence -- it never feeds a confirmed finding on its own. `absent`: no start address was recorded for this thread at all -- no ThreadInfoListStream entry for this TID, or an entry whose own declared record size stopped short of the StartAddress field -- so `start_address` is null. Readable DumpFlags say nothing about whether the address field was captured, so they never promote this case: a record can be `resolved` on `dump_flags_state` and still be `absent` here. `recorded` and `unverified` always carry a non-null `start_address`; `invalid` and `absent` never do. `recorded`/`invalid` require a `dump_flags_state` of `resolved` and `unverified` requires `unresolved`, and a `dump_flags_state` of `absent` forces this field to `absent` too.",
+          "enum": [
+            "recorded",
+            "invalid",
+            "unverified",
+            "absent"
+          ]
+        },
+        "dump_flags_state": {
+          "description": "Whether this thread's DumpFlags value could be established, which is what decides the meaning of an empty flag list. `resolved`: the value is known, so an empty list means no flag is set. `unresolved`: a ThreadInfoListStream entry exists but its DumpFlags value could not be read, so an empty list means nothing is known -- a combined value the upstream single-member Enum parse cannot represent lands here, and is never reported as a confirmed absence of flags. `absent`: no ThreadInfoListStream entry for this TID at all.",
+          "enum": [
+            "resolved",
+            "unresolved",
+            "absent"
+          ]
         }
       },
       "allOf": [
@@ -630,6 +649,88 @@
             "properties": {
               "ip_reg": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "invalid"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "resolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "const": "unverified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "unresolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "absent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_state": {
+                "const": "absent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["invalid", "absent"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "unverified"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "not": {
+                  "const": null
+                }
               }
             }
           }
@@ -4819,7 +4920,7 @@
       }
     },
     "reportThreadInfo": {
-      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring). `start_address` (where this thread BEGAN) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed. `backing_module`/`module_context` always describe `start_address` specifically, never `ip`. `region_membership` (Section 3 only, enforced null on Section 1's own thread entry and non-null on every other_threads_in_region entry by this document's own triageCardRecord constraints) says which address actually placed this entry in Section 3's list: `start`, `current`, or `start_and_current` -- for a `current`-only entry, `backing_module`/`module_context` still describe `start_address`, which may be unrelated to or entirely outside the region this entry is listed for. `region_membership` names WHICH address admitted the entry, not whether that address is disputed -- a consumer must separately check `ip_context_conflict` for that. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record (dumpex.core.memory.ip_context_conflict_for, the same derivation `threadRecord.ip_context_conflict` uses): true when `ip` is set AND that record independently flags this same context as invalid (a genuine disagreement between the dump's two thread sources); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null; null when `ip` is set but this TID has no ThreadInfoListStream record at all -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case.",
+      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring). `start_address` (where this thread BEGAN) and `ip`/`ip_reg` (where it IS captured executing right now, from this thread's own CONTEXT/WOW64_CONTEXT) are independent -- one is never derived from or substituted for the other. `ip`/`ip_reg` are both-or-neither, same shape as `huntThreadRef`: null together whenever this thread's CONTEXT was not captured or could not be parsed. `backing_module`/`module_context` always describe `start_address` specifically, never `ip`. `region_membership` (Section 3 only, enforced null on Section 1's own thread entry and non-null on every other_threads_in_region entry by this document's own triageCardRecord constraints) says which address actually placed this entry in Section 3's list: `start`, `current`, or `start_and_current` -- for a `current`-only entry, `backing_module`/`module_context` still describe `start_address`, which may be unrelated to or entirely outside the region this entry is listed for. `region_membership` names WHICH address admitted the entry, not whether that address is disputed -- a consumer must separately check `ip_context_conflict` for that. `ip_context_conflict` is a tri-state join against this TID's own ThreadInfoListStream record (dumpex.core.memory.ip_context_conflict_for, the same derivation `threadRecord.ip_context_conflict` uses): true when `ip` is set AND that record independently flags this same context as invalid (a genuine disagreement between the dump's two thread sources); false when `ip` is set and that record is real and clean, or whenever `ip` itself is null; null when `ip` is set but no DumpFlags value could be established for this TID (no ThreadInfoListStream record at all, or a record whose flags could not be read -- see `dump_flags_state`) -- the dispute is then undeterminable, never a confirmed false. `ip` still carries the real, parsed value in every case.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -4834,7 +4935,9 @@
         "backing_module_base",
         "backing_module_end",
         "region_membership",
-        "ip_context_conflict"
+        "ip_context_conflict",
+        "start_address_state",
+        "dump_flags_state"
       ],
       "properties": {
         "tid": {
@@ -4895,6 +4998,23 @@
         },
         "ip_context_conflict": {
           "type": ["boolean", "null"]
+        },
+        "start_address_state": {
+          "description": "What this thread's `start_address` is worth. `recorded`: a real ThreadInfoListStream entry whose own DumpFlags are known and carry neither MINIDUMP_THREAD_INFO_ERROR_THREAD nor MINIDUMP_THREAD_INFO_INVALID_INFO -- the address is evidence. `invalid`: that entry's own DumpFlags say only ThreadId is valid, so `start_address` is null -- a field the producer never wrote, NOT address 0x0, and NOT evidence that this thread starts outside every module. `unverified`: a real entry whose DumpFlags value could not be established at all, so `start_address` keeps its recorded value but nothing establishes it as evidence -- it never feeds a confirmed finding on its own. `absent`: no start address was recorded for this thread at all -- no ThreadInfoListStream entry for this TID, or an entry whose own declared record size stopped short of the StartAddress field -- so `start_address` is null. Readable DumpFlags say nothing about whether the address field was captured, so they never promote this case: a record can be `resolved` on `dump_flags_state` and still be `absent` here. `recorded` and `unverified` always carry a non-null `start_address`; `invalid` and `absent` never do. `recorded`/`invalid` require a `dump_flags_state` of `resolved` and `unverified` requires `unresolved`, and a `dump_flags_state` of `absent` forces this field to `absent` too.",
+          "enum": [
+            "recorded",
+            "invalid",
+            "unverified",
+            "absent"
+          ]
+        },
+        "dump_flags_state": {
+          "description": "Whether this thread's DumpFlags value could be established, which is what decides the meaning of an empty flag list. `resolved`: the value is known, so an empty list means no flag is set. `unresolved`: a ThreadInfoListStream entry exists but its DumpFlags value could not be read, so an empty list means nothing is known -- a combined value the upstream single-member Enum parse cannot represent lands here, and is never reported as a confirmed absence of flags. `absent`: no ThreadInfoListStream entry for this TID at all.",
+          "enum": [
+            "resolved",
+            "unresolved",
+            "absent"
+          ]
         }
       },
       "allOf": [
@@ -4999,6 +5119,88 @@
             "properties": {
               "ip_reg": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "invalid"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "resolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "const": "unverified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "unresolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dump_flags_state": {
+                "const": "absent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_state": {
+                "const": "absent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["invalid", "absent"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "start_address_state": {
+                "enum": ["recorded", "unverified"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address": {
+                "not": {
+                  "const": null
+                }
               }
             }
           }
@@ -12572,7 +12774,7 @@
       }
     },
     "huntThreadRef": {
-      "description": "Matches dumpex.output.records.HuntThreadRef.to_dict() -- a TID plus optional StartAddress/current-instruction-pointer, hex-formatted. `ip`/`ip_reg` are both-or-neither: a thread reference either carries no live register snapshot (both null) or a real one (both set) -- there is no case where the register name is known but its value isn't, or vice versa. `ip_context_conflict` is the tri-state dumpex.core.memory.ip_context_conflict_for result (the same fact reportThreadInfo/threadRecord publish for the identical TID): true when this TID's own ThreadInfoListStream record flags its context as invalid despite the parsed `ip`; false when `ip` is null, or a real record confirms no dispute; null when `ip` is set but this TID has no ThreadInfoListStream record at all -- undeterminable, never a confirmed false.",
+      "description": "Matches dumpex.output.records.HuntThreadRef.to_dict() -- a TID plus optional StartAddress/current-instruction-pointer, hex-formatted. `ip`/`ip_reg` are both-or-neither: a thread reference either carries no live register snapshot (both null) or a real one (both set) -- there is no case where the register name is known but its value isn't, or vice versa. `ip_context_conflict` is the tri-state dumpex.core.memory.ip_context_conflict_for result (the same fact reportThreadInfo/threadRecord publish for the identical TID): true when this TID's own ThreadInfoListStream record flags its context as invalid despite the parsed `ip`; false when `ip` is null, or a real record confirms no dispute; null when `ip` is set but no DumpFlags value could be established for this TID, whether because no ThreadInfoListStream record exists or because that record's flags could not be read -- undeterminable, never a confirmed false. `start_address` is likewise null whenever no start address was established for this thread, including a record whose own DumpFlags disown every field but ThreadId -- never address 0x0.",
       "type": "object",
       "additionalProperties": false,
       "required": [

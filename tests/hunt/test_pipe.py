@@ -630,7 +630,7 @@ def test_corroboration_caveat_counts_distinct_threads_across_multiple_handles_ea
     caveat = corr["limitations"][0]
     # Four corroborated handles, but only two distinct threads behind them.
     assert "1 thread(s) whose captured CONTEXT" in caveat
-    assert "1 thread(s) with no ThreadInfoListStream record" in caveat
+    assert "1 thread(s) for which no DumpFlags value could be established" in caveat
     assert "2 thread(s)" not in caveat
 
 
@@ -756,3 +756,56 @@ def test_verbose_lists_every_handle_beyond_the_facts_cap(capsys):
     for i in range(25):
         assert rf"\Device\NamedPipe\test_{i}" in verbose_out, \
             f"handle {i} (beyond the 20-item Finding.facts cap) missing from --verbose output"
+
+
+# -- a start address its own record disowns places a thread nowhere ------
+# The pipe hunter's StartAddress proximity lead and its unbacked-thread
+# list read the same field --threads/--report and the injection hunter
+# read, so all four answer "is this address established" the same way.
+
+_PIPE_REGION_BASE = 0x1230000
+_PIPE_NAME_OFFSET = 0x100
+_PIPE_START_ADDRESS = _PIPE_REGION_BASE + _PIPE_NAME_OFFSET + 0x10
+
+
+def _pipe_start_proximity_report(thread_infos):
+    """A handle-confirmed pipe whose name sits in an executable region,
+    with no thread CONTEXT at all -- so the only thing that can place a
+    thread near it is a recorded StartAddress."""
+    data = (b"A" * _PIPE_NAME_OFFSET + rb"\\.\pipe\chan_x" + b"\x00" + b"B" * 0x200)
+    regions = [Region(_PIPE_REGION_BASE, _PIPE_REGION_BASE, 0x1000, "MEM_COMMIT",
+                      "PAGE_EXECUTE_READ", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        handles        = FakeStream([Handle(0x88, "File", r"\Device\NamedPipe\chan_x")],
+                                    "handles")
+    pipemod.read_region = mem_reader({_PIPE_REGION_BASE: data})
+    return pipemod._build_pipe_report(MF())
+
+
+def test_pipe_start_address_lead_fires_for_an_established_start():
+    report = _pipe_start_proximity_report([ThreadInfo(0x999, _PIPE_START_ADDRESS)])
+    assert "pipe.start_address_proximity_lead" in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads
+
+
+def test_pipe_start_address_lead_ignores_a_record_that_disowns_its_own_start():
+    # Same address bytes, same distance, same region -- only the record's
+    # own DumpFlags differ. A record documented as carrying nothing
+    # beyond its ThreadId establishes no location, so it can produce
+    # neither a proximity lead nor an unbacked-thread record.
+    report = _pipe_start_proximity_report(
+        [ThreadInfo(0x999, _PIPE_START_ADDRESS,
+                    dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")])
+    assert "pipe.start_address_proximity_lead" not in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads == ()
+
+
+def test_pipe_start_address_lead_ignores_a_record_whose_flags_are_unreadable():
+    report = _pipe_start_proximity_report(
+        [ThreadInfo(0x999, _PIPE_START_ADDRESS, raw_dump_flags=None)])
+    assert "pipe.start_address_proximity_lead" not in {r.check for r in report.results}
+    assert report.evidence.unbacked_threads == ()

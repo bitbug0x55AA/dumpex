@@ -88,6 +88,79 @@ MODULE_CONTEXT_UNAVAILABLE  = "unavailable"     # ModuleListStream itself missin
                                                  # tell either way, NOT a confirmed anomaly
 
 
+# What standing a thread's `start_address` has, and whether its record's
+# DumpFlags could be read at all. Mirrors dumpex.core.memory's own
+# START_ADDRESS_*/DUMP_FLAGS_* by convention (same literal strings), the
+# same way _TRIAGE_VERDICTS below mirrors that module's verdict constants
+# rather than importing them -- the dependency direction stays
+# command/domain model -> output layer, never the reverse.
+START_ADDRESS_RECORDED   = "recorded"     # the record stands behind this address
+START_ADDRESS_INVALID    = "invalid"      # its own DumpFlags disown every field but
+                                            # ThreadId; start_address is null
+START_ADDRESS_UNVERIFIED = "unverified"   # address present, DumpFlags unreadable, so
+                                            # nothing establishes it as evidence
+START_ADDRESS_ABSENT     = "absent"       # no address was recorded for this thread at
+                                            # all; start_address is null
+_START_ADDRESS_STATES = (START_ADDRESS_RECORDED, START_ADDRESS_INVALID,
+                          START_ADDRESS_UNVERIFIED, START_ADDRESS_ABSENT)
+
+DUMP_FLAGS_RESOLVED   = "resolved"     # value known; an empty `flags` means no flag set
+DUMP_FLAGS_UNRESOLVED = "unresolved"   # record present, value unreadable; an empty
+                                        # `flags` means nothing is known
+DUMP_FLAGS_ABSENT     = "absent"       # no ThreadInfoListStream record at all
+_DUMP_FLAGS_STATES = (DUMP_FLAGS_RESOLVED, DUMP_FLAGS_UNRESOLVED, DUMP_FLAGS_ABSENT)
+
+# The `dump_flags_state` each start-address state requires, for the three
+# states that are decided BY the flags. `absent` is deliberately absent
+# from this table: whether an address was captured at all is independent
+# of whether the flags were readable, so a record with perfectly readable
+# flags can still have stopped short of its own StartAddress field.
+_START_ADDRESS_STATE_FLAGS_STATE = {
+    START_ADDRESS_RECORDED:   DUMP_FLAGS_RESOLVED,
+    START_ADDRESS_INVALID:    DUMP_FLAGS_RESOLVED,
+    START_ADDRESS_UNVERIFIED: DUMP_FLAGS_UNRESOLVED,
+}
+
+# The states that describe an address this record actually carries, and
+# the states that describe the absence of one. Enforced against
+# `start_address` itself, so a null can never be published as an address
+# the record stood behind, nor an address as one it never held.
+_START_ADDRESS_STATES_WITH_ADDRESS = (START_ADDRESS_RECORDED, START_ADDRESS_UNVERIFIED)
+_START_ADDRESS_STATES_WITHOUT_ADDRESS = (START_ADDRESS_INVALID, START_ADDRESS_ABSENT)
+
+
+def _require_thread_info_states(start_address, start_address_state, dump_flags_state, where):
+    """Shared validation of the two thread-record fields that say what a
+    `start_address` is worth. Used by every record carrying them, so the
+    rules cannot drift between `--threads` and `--report`."""
+    if start_address_state not in _START_ADDRESS_STATES:
+        raise ValueError(
+            f"{where}.start_address_state must be one of {_START_ADDRESS_STATES}, "
+            f"got {start_address_state!r}")
+    if dump_flags_state not in _DUMP_FLAGS_STATES:
+        raise ValueError(
+            f"{where}.dump_flags_state must be one of {_DUMP_FLAGS_STATES}, "
+            f"got {dump_flags_state!r}")
+    expected = _START_ADDRESS_STATE_FLAGS_STATE.get(start_address_state)
+    if expected is not None and dump_flags_state != expected:
+        raise ValueError(
+            f"{where}.start_address_state {start_address_state!r} requires "
+            f"dump_flags_state {expected!r}, got {dump_flags_state!r}")
+    if dump_flags_state == DUMP_FLAGS_ABSENT and start_address_state != START_ADDRESS_ABSENT:
+        raise ValueError(
+            f"{where}.start_address_state must be {START_ADDRESS_ABSENT!r} when "
+            f"dump_flags_state is {DUMP_FLAGS_ABSENT!r} -- a thread with no "
+            f"ThreadInfoListStream record has no recorded start address either")
+    if start_address is None and start_address_state in _START_ADDRESS_STATES_WITH_ADDRESS:
+        raise ValueError(
+            f"{where}.start_address_state {start_address_state!r} describes an address this "
+            f"record carries, but start_address is None")
+    if start_address is not None and start_address_state in _START_ADDRESS_STATES_WITHOUT_ADDRESS:
+        raise ValueError(
+            f"{where}.start_address must be None when start_address_state is "
+            f"{start_address_state!r} -- no address was established for this thread")
+
+
 @dataclass
 class ThreadRecord:
     """One thread, as reported by `--threads`.
@@ -111,10 +184,23 @@ class ThreadRecord:
     tag `flags` already carries); False when `ip` is set and that record
     is real and clean, OR whenever `ip` itself is None (nothing to
     dispute, regardless of ThreadInfoListStream coverage); None when `ip`
-    is set but this TID has no ThreadInfoListStream record at all to
-    check it against (see RawThreadInfo) -- the dispute is then
-    undeterminable, never a confirmed False the way a genuinely clean
-    DumpFlags is. `ip` keeps the real, parsed value in every case."""
+    is set but no DumpFlags value could be established to check it
+    against -- no ThreadInfoListStream record for this TID at all (see
+    RawThreadInfo), or one whose flags could not be read (see
+    `dump_flags_state`). The dispute is then undeterminable, never a
+    confirmed False the way genuinely clean, readable DumpFlags are.
+    `ip` keeps the real, parsed value in every case.
+
+    `start_address_state` says what `start_address` is worth, and
+    `dump_flags_state` whether this thread's DumpFlags could be read at
+    all -- see those constants' own comments. A `start_address` of None
+    is `absent` (ThreadInfoListStream never covered this TID) or
+    `invalid` (it did, and its own DumpFlags disown every field but
+    ThreadId); neither is an address 0x0, and neither is evidence that
+    this thread starts outside every module. `flags` carries one tag per
+    DumpFlags bit actually set, so a combined value is reported in full;
+    an empty `flags` means "no flag set" only when `dump_flags_state` is
+    `resolved`."""
     tid:               "int | None"
     start_address:     "str | None"
     ip:                "str | None"   # live RIP/EIP from this thread's own CONTEXT;
@@ -140,12 +226,17 @@ class ThreadRecord:
     suspend_count:     "int | None"
     priority:          "int | None"
     teb:               "str | None"
-    flags: list = field(default_factory=list)   # list[str], e.g. ["EXITED"]
+    flags: list = field(default_factory=list)   # list[str], one per DumpFlags bit
+                                                   # actually set, e.g. ["EXITED"]
     ip_context_conflict: "bool | None" = False   # None: undeterminable -- see this
                                                     # class's own docstring
+    start_address_state: str = START_ADDRESS_RECORDED   # see this class's own docstring
+    dump_flags_state:    str = DUMP_FLAGS_RESOLVED      # and the constants themselves
 
     def __post_init__(self):
         _require_optional_hex_address(self.ip, "ThreadRecord.ip")
+        _require_thread_info_states(self.start_address, self.start_address_state,
+                                     self.dump_flags_state, "ThreadRecord")
         if self.ip_reg is not None and not isinstance(self.ip_reg, str):
             raise ValueError("ThreadRecord.ip_reg must be None or a string")
         if self.ip is not None and self.ip_reg is None:
@@ -177,6 +268,8 @@ class ThreadRecord:
             "priority":          self.priority,
             "teb":               self.teb,
             "ip_context_conflict": self.ip_context_conflict,
+            "start_address_state": self.start_address_state,
+            "dump_flags_state":    self.dump_flags_state,
         }
 
 
@@ -770,12 +863,15 @@ class Artifact:
 TRIAGE_ANCHOR_TID            = "tid"
 TRIAGE_ANCHOR_ADDRESS        = "address"
 TRIAGE_ANCHOR_STRING_HIT     = "string_hit"
-# A --report-tid card whose thread has no recorded StartAddress (no
-# ThreadInfoListStream entry at all) and so anchors on that thread's own
-# captured current IP instead -- distinct from TRIAGE_ANCHOR_TID, which
-# always means the anchor is the thread's recorded start address. Keeps
-# the fallback's own address and source explicit on the wire rather than
-# indistinguishable from an ordinary start-address anchor.
+# A --report-tid card for a thread with no established start address --
+# no ThreadInfoListStream entry at all, or an entry whose own DumpFlags
+# disown every field but ThreadId (the card's own thread.
+# start_address_state says which) -- which therefore anchors on that
+# thread's independently captured current IP instead. Distinct from
+# TRIAGE_ANCHOR_TID, which always means the anchor is the thread's
+# recorded start address. Keeps the fallback's own address and source
+# explicit on the wire rather than indistinguishable from an ordinary
+# start-address anchor.
 TRIAGE_ANCHOR_TID_CURRENT_IP = "tid_current_ip"
 _TRIAGE_ANCHOR_SOURCES = (TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
                            TRIAGE_ANCHOR_TID_CURRENT_IP)
@@ -834,12 +930,14 @@ class ReportThreadInfo:
     False when `ip` is set and that record is real and clean, OR
     whenever `ip` itself is None: there is nothing to conflict about when
     no value was parsed at all, regardless of ThreadInfoListStream
-    coverage. None when `ip` is set but this TID has no ThreadInfoListStream
+    coverage. None when `ip` is set but no DumpFlags value could be
+    established to join it against -- this TID has no ThreadInfoListStream
     record at all (a RawThreadInfo placeholder, or a base-only TID whose
-    current IP became the card's own anchor) -- the join cannot be
-    performed, so the dispute is undeterminable and must never render the
-    same as a confirmed False: a MODULE_CONTEXT_UNREGISTERED-vs-
-    MODULE_CONTEXT_UNAVAILABLE distinction applied to this field.
+    current IP became the card's own anchor), or it has one whose flags
+    could not be read (see `dump_flags_state`). The join cannot be
+    performed either way, so the dispute is undeterminable and must never
+    render the same as a confirmed False: a MODULE_CONTEXT_UNREGISTERED-
+    vs-MODULE_CONTEXT_UNAVAILABLE distinction applied to this field.
 
     `backing_module`/`module_context` always describe `start_address`
     specifically, never `ip` -- there is no current-IP module lookup on
@@ -858,7 +956,13 @@ class ReportThreadInfo:
     disputed value -- a consumer that needs to know whether the admitting
     current IP is disputed must separately check `ip_context_conflict`
     (ANDing the two fields); `region_membership` itself has no disputed
-    variant."""
+    variant.
+
+    `start_address_state`/`dump_flags_state` carry the same facts, with
+    the same vocabulary and the same rules, as ThreadRecord's identical
+    pair. They also decide what a `start` or `start_and_current`
+    `region_membership` can rest on: only a `recorded` start address is
+    established evidence that this thread begins inside the region."""
     tid:               int
     start_address:     "str | None"
     ip:                "str | None"   # live RIP/EIP; None means no CONTEXT
@@ -877,10 +981,14 @@ class ReportThreadInfo:
     region_membership: "str | None" = None   # Section 3 only -- see this class's own docstring
     ip_context_conflict: "bool | None" = False   # None: undeterminable -- see this
                                                     # class's own docstring
+    start_address_state: str = START_ADDRESS_RECORDED   # ThreadRecord's identical pair,
+    dump_flags_state:    str = DUMP_FLAGS_RESOLVED      # same constants, same rules
 
     def __post_init__(self):
         _require_nonneg_int(self.tid, "ReportThreadInfo.tid")
         _require_optional_hex_address(self.start_address, "ReportThreadInfo.start_address")
+        _require_thread_info_states(self.start_address, self.start_address_state,
+                                     self.dump_flags_state, "ReportThreadInfo")
         _require_optional_hex_address(self.ip, "ReportThreadInfo.ip")
         if self.ip_reg is not None and not isinstance(self.ip_reg, str):
             raise ValueError("ReportThreadInfo.ip_reg must be None or a string")
@@ -935,6 +1043,8 @@ class ReportThreadInfo:
             "backing_module_end":   self.backing_module_end,
             "region_membership":    self.region_membership,
             "ip_context_conflict":  self.ip_context_conflict,
+            "start_address_state":  self.start_address_state,
+            "dump_flags_state":     self.dump_flags_state,
         }
 
 
@@ -3607,13 +3717,22 @@ class HuntThreadRef:
     non-reproducibility problem as HuntRegionRef above for the raw
     ThreadInfo/Thread objects it replaces.
 
+    `start_address` is None whenever no start address was established
+    for this thread -- ThreadInfoListStream never covered this TID, or
+    the record it did carry disowns every field but ThreadId (see
+    dumpex.core.memory.recorded_start_address) -- and is never address
+    0x0 standing in for either.
+
     `ip_context_conflict` is the same tri-state dumpex.core.memory.
     ip_context_conflict_for result ReportThreadInfo/ThreadRecord publish
     for the identical fact on the same TID: True (this TID's own
     ThreadInfoListStream record flags its context as invalid despite the
-    parsed `ip`), False (`ip` is None, or a real record confirms no
-    dispute), or None (`ip` is set but this TID has no ThreadInfoListStream
-    record at all -- undeterminable, never a confirmed False). A hunter
+    parsed `ip`), False (`ip` is None, or a real record's readable flags
+    confirm no dispute), or None (`ip` is set but no DumpFlags value
+    could be established for this TID, whether because no
+    ThreadInfoListStream record exists or because that record's flags
+    could not be read -- undeterminable, never a confirmed False). A
+    hunter
     that turns a disputed or undeterminable `ip` into a "currently
     executing" claim must qualify it -- see e.g.
     dumpex.hunt.injection.aggregate's own handling of rip_hits."""

@@ -5,6 +5,9 @@ from tests.fixtures.fakes import (Region, Module, ThreadInfo, Ctx, Thread, FakeS
 
 import dumpex.hunt.injection as injection
 import dumpex.hunt.injection.report_legacy as injection_report_legacy
+from dumpex.hunt.injection.thread_scan import (
+    _hunt_unbacked_threads, count_unestablished_start_addresses, resolve_thread_contexts,
+)
 
 
 # ── embedded PE inside a loaded module's own range -> NOT hidden PE ───────
@@ -1339,3 +1342,100 @@ def test_byte_budget_partial_data_is_still_scanned_before_stopping(monkeypatch):
 
     assert hits == [3], "bytes returned before the budget ran out must still be scanned"
     assert gaps.truncated
+
+
+# -- an invalid ThreadInfoListStream record is not an unbacked thread ----
+
+def _unbacked_scan_mf(thread_infos):
+    class MF(FakeMF):
+        memory_info = FakeStream([], "infos")
+        modules      = FakeStream([Module(0x7ffe00000000, 0x10000,
+                                          r"C:\Windows\System32\ntdll.dll")], "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        threads        = FakeStream([], "threads")
+    return MF()
+
+
+def test_unbacked_thread_scan_skips_a_record_that_disowns_its_own_fields():
+    # ERROR_THREAD means the entry carries nothing beyond its ThreadId, so
+    # its zeroed StartAddress is a field the producer never wrote. Looking
+    # it up as address 0x0 finds no module and would report a CONFIRMED
+    # unbacked thread built entirely out of that absence.
+    mf = _unbacked_scan_mf([ThreadInfo(0x1, 0, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD"),
+                            ThreadInfo(0x2, 0, dump_flags="MINIDUMP_THREAD_INFO_INVALID_INFO")])
+    assert _hunt_unbacked_threads(mf) == ()
+
+
+def test_unbacked_thread_scan_still_reports_a_genuinely_unbacked_start():
+    # The same scan, on a record that does stand behind its address.
+    mf = _unbacked_scan_mf([ThreadInfo(0x3, 0x900000)])
+    (hit,) = _hunt_unbacked_threads(mf)
+    assert hit.thread_id == 0x3
+    assert hit.start_address == 0x900000
+
+
+def test_unbacked_thread_scan_keeps_flags_that_say_nothing_about_the_start_address():
+    mf = _unbacked_scan_mf([ThreadInfo(0x4, 0x900000,
+                                        dump_flags="MINIDUMP_THREAD_INFO_EXITED_THREAD")])
+    (hit,) = _hunt_unbacked_threads(mf)
+    assert hit.start_address == 0x900000
+
+
+def test_resolved_thread_contexts_drop_a_start_address_its_record_disowns():
+    # The shared collection boundary every hunter reads through: the
+    # independently captured current IP survives, the disowned start
+    # address does not.
+    class MF(FakeMF):
+        thread_info = FakeStream(
+            [ThreadInfo(0x1, 0, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD")], "infos")
+        threads = FakeStream([Thread(0x1, Ctx(0x7ffe00001000))], "threads")
+    (ctx,) = resolve_thread_contexts(MF())
+    assert ctx.start_address is None
+    assert ctx.ip == 0x7ffe00001000
+
+
+# -- one validity rule across --report and every hunter that reads a start --
+
+def _unverified_only_mf():
+    """A dump whose single ThreadInfoListStream record holds an address
+    outside every module, but whose own DumpFlags could not be read."""
+    class MF(FakeMF):
+        memory_info = FakeStream([], "infos")
+        modules      = FakeStream([Module(0x7ffe00000000, 0x10000,
+                                          r"C:\Windows\System32\ntdll.dll")], "modules")
+        thread_info   = FakeStream([ThreadInfo(0x1, 0x900000, raw_dump_flags=None)], "infos")
+        threads        = FakeStream([], "threads")
+    return MF()
+
+
+def test_unbacked_thread_scan_skips_a_start_its_record_cannot_vouch_for():
+    # `unverified` is excluded for the same reason `invalid` is: an
+    # address nothing establishes cannot confirm an unbacked thread, and
+    # --report already excludes it from its own verdict for this TID.
+    assert _hunt_unbacked_threads(_unverified_only_mf()) == ()
+
+
+def test_unestablished_starts_are_counted_rather_than_silently_dropped():
+    class MF(FakeMF):
+        thread_info = FakeStream([
+            ThreadInfo(0x1, 0x900000, raw_dump_flags=None),
+            ThreadInfo(0x2, 0, dump_flags="MINIDUMP_THREAD_INFO_ERROR_THREAD"),
+            ThreadInfo(0x3, 0x900000),
+        ], "infos")
+    assert count_unestablished_start_addresses(MF()) == 2
+
+
+def test_an_unverified_start_produces_no_injection_finding_and_no_score(capsys):
+    f = injection._hunt_injection(_unverified_only_mf(), verbose=False)
+    assert f["score"] == 0
+    capsys.readouterr()
+
+
+def test_an_excluded_start_is_named_in_the_report_rather_than_left_silent():
+    report = injection._build_injection_report(_unverified_only_mf())
+    checks = {r.check: r for r in report.results}
+    assert "injection.unbacked_thread_startaddress" not in checks
+    excluded = checks["injection.start_address_not_established"]
+    assert excluded.evidence == ()
+    assert "1 ThreadInfoListStream record(s)" in excluded.inference
+    assert excluded.limitations

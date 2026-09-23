@@ -95,7 +95,8 @@ def disputed_conflict_limitation(conflicts: list) -> list:
     """One CheckResult.limitations sentence naming how many of a set of
     tri-state `ip_context_conflict` values (see dumpex.core.memory.
     ip_context_conflict_for) are a confirmed dispute (True) or
-    undeterminable (None) -- shared by every hunter that turns a thread's
+    undeterminable (None -- either cause: no ThreadInfoListStream record
+    for that TID, or one whose DumpFlags could not be read) -- shared by every hunter that turns a thread's
     captured current RIP/EIP into a "currently executing" claim
     (injection, stomping, pipe), so the wording and combine-priority
     cannot drift between them. Returns [] when every value is a confirmed
@@ -116,8 +117,9 @@ def disputed_conflict_limitation(conflicts: list) -> list:
         parts.append(f"{disputed} thread(s) whose captured CONTEXT this dump's own "
                      f"ThreadInfoListStream record flags as invalid")
     if unknown:
-        parts.append(f"{unknown} thread(s) with no ThreadInfoListStream record at all to "
-                     f"check their CONTEXT against")
+        parts.append(f"{unknown} thread(s) for which no DumpFlags value could be established "
+                     f"to check their CONTEXT against — no ThreadInfoListStream record at all, "
+                     f"or a record whose flags could not be read")
     return [f"This claim is not fully confirmed for {' and '.join(parts)} -- their captured "
             f"RIP/EIP is not treated as a confirmed execution location, regardless of region "
             f"containment (matching --threads/--report's identical qualification for the "

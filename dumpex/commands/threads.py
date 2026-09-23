@@ -3,8 +3,12 @@ import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import (
     get_modules, get_thread_infos, enriched_thread_contexts, addr_to_module, RawThreadInfo,
+    dump_flags_state, dump_flags_tags, recorded_start_address,
+    truncated_thread_info_count,
+    DUMP_FLAGS_ABSENT, START_ADDRESS_INVALID, START_ADDRESS_RECORDED,
+    START_ADDRESS_UNVERIFIED,
 )
-from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
+from dumpex.core.pe_utils import _filetime_to_str, _duration_100ns_to_str
 from dumpex.output.records import (
     ThreadRecord, hex_address,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
@@ -181,7 +185,17 @@ def collect_threads(mf) -> CommandResult:
 
     records = []
     for ti, is_placeholder in entries:
-        sa  = ti.StartAddress   # may be None in degraded mode — do not coerce to 0
+        # A record's StartAddress counts only where that record stands
+        # behind it: None both for a TID ThreadInfoListStream never
+        # covered and for one whose own DumpFlags mark its thread
+        # information invalid, never coerced to 0 in either case. See
+        # recorded_start_address.
+        sa, start_address_state = recorded_start_address(ti)
+        # ERROR_THREAD/INVALID_INFO invalidate every ThreadInfoListStream
+        # field except ThreadId and DumpFlags themselves, so this record's
+        # timings and exit status are unwritten fields too -- reported as
+        # unknown rather than as the zeros they were left at.
+        info_invalid = start_address_state == START_ADDRESS_INVALID
         ctx = contexts_by_tid.get(ti.ThreadId)
         ip     = ctx["ip"]     if ctx is not None else None
         ip_reg = ctx["ip_reg"] if ctx is not None else None
@@ -209,16 +223,23 @@ def collect_threads(mf) -> CommandResult:
         priority      = getattr(raw, "Priority", None) if raw else None
         teb           = getattr(raw, "Teb", None) if raw else None
 
-        flag_tag    = _dumpflags_str(getattr(ti, "DumpFlags", None))
-        exit_status = getattr(ti, "ExitStatus", None)
-        exited      = flag_tag == "[EXITED]"
-        # Tri-state: undeterminable (None), not just False, when this TID
-        # has no real ThreadInfoListStream record to join `ip` against --
-        # see ip_context_conflict_for's own docstring and ThreadRecord.
-        # ip_context_conflict's identical rule (the same derivation
-        # dumpex.commands.report uses for ReportThreadInfo.ip_context_conflict).
-        # False, never None, when this TID has no captured CONTEXT at all
-        # (ctx is None): there is no `ip` to dispute either way.
+        # One tag per DumpFlags bit actually set, so a combined value
+        # (e.g. INVALID_CONTEXT | EXITED_THREAD) is reported in full
+        # rather than collapsing to a single name or to nothing at all --
+        # see dump_flags_tags, and dump_flags_state for what an empty
+        # list means for this record.
+        flag_tags   = dump_flags_tags(ti)
+        exit_status = None if info_invalid else getattr(ti, "ExitStatus", None)
+        exited      = "EXITED" in flag_tags
+        # Tri-state: undeterminable (None), not just False, whenever no
+        # DumpFlags value could be established to join `ip` against --
+        # no real ThreadInfoListStream record for this TID, or one whose
+        # flags could not be read. See ip_context_conflict_for's own
+        # docstring and ThreadRecord.ip_context_conflict's identical rule
+        # (the same derivation dumpex.commands.report uses for
+        # ReportThreadInfo.ip_context_conflict). False, never None, when
+        # this TID has no captured CONTEXT at all (ctx is None): there is
+        # no `ip` to dispute either way.
         ip_context_conflict = ctx["ip_context_conflict"] if ctx is not None else False
 
         # A placeholder never gets a create_time/exit_time value, no
@@ -226,9 +247,10 @@ def collect_threads(mf) -> CommandResult:
         # has no real ThreadInfoListStream entry at all, which is not
         # the same claim as "this stream reports no timestamp."
         create_time = (_filetime_to_str(getattr(ti, "CreateTime", 0) or 0)
-                       if (has_times and not is_placeholder) else None)
+                       if (has_times and not is_placeholder and not info_invalid) else None)
         exit_time   = (_filetime_to_str(getattr(ti, "ExitTime", 0) or 0)
-                       if (has_times and not is_placeholder and exited) else None)
+                       if (has_times and not is_placeholder and not info_invalid and exited)
+                       else None)
 
         records.append(ThreadRecord(
             tid=ti.ThreadId,
@@ -240,16 +262,18 @@ def collect_threads(mf) -> CommandResult:
             # (see dumpex.hunt.stomping.memory_scan._module_basename).
             backing_module=ntpath.basename(mod.name) if mod else None,
             module_context=module_context,
-            flags=[flag_tag.strip("[]")] if flag_tag else [],
+            flags=flag_tags,
             create_time=create_time,
             exit_time=exit_time,
             exit_status=exit_status,
-            kernel_time_100ns=getattr(ti, "KernelTime", None),
-            user_time_100ns=getattr(ti, "UserTime", None),
+            kernel_time_100ns=None if info_invalid else getattr(ti, "KernelTime", None),
+            user_time_100ns=None if info_invalid else getattr(ti, "UserTime", None),
             suspend_count=suspend_count,
             priority=priority,
             teb=hex_address(teb) if teb else None,
             ip_context_conflict=ip_context_conflict,
+            start_address_state=start_address_state,
+            dump_flags_state=dump_flags_state(ti),
         ))
 
     # Ordered exactly like the reasons this command has always shipped:
@@ -279,6 +303,26 @@ def collect_threads(mf) -> CommandResult:
                            unavailable_fields=_THREAD_INFO_ONLY_FIELDS,
                            available_fields=("TID",) + _THREAD_BASE_ONLY_FIELDS),
     ]
+    # Records the stream declared but never delivered. Reported before
+    # any TID-mismatch reason below, because it is the reason a mismatch
+    # may not be one: a TID this stream is missing because its record
+    # never arrived is a capture gap, not two sources disagreeing.
+    undelivered = truncated_thread_info_count(mf.thread_info)
+    if undelivered:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_INFO_STREAM_TRUNCATED, source="thread_info",
+            affected_count=undelivered))
+    # Records that DID arrive but establish no start address. StartAddress
+    # is one of the fields this command reports, so a record that carries
+    # none is a field this run could not fill -- the same class of gap as
+    # a record that never arrived, one level finer.
+    no_start = sum(1 for rec in records
+                   if rec.dump_flags_state != DUMP_FLAGS_ABSENT
+                   and rec.start_address_state != START_ADDRESS_RECORDED)
+    if no_start:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_START_ADDRESS_UNAVAILABLE, source="thread_info",
+            affected_count=no_start))
     if missing_from_info:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SOURCE_KEY_MISMATCH, source="thread_info",
@@ -335,11 +379,14 @@ def render_threads_console(records, coverage) -> None:
         print(YELLOW(f"  [~] {reason}\n"))
 
     for rec in records:
-        flag_tag = f"[{rec.flags[0]}]" if rec.flags else ""
+        # One bracketed tag per DumpFlags bit set, in the record's own
+        # order, so a combined value is never rendered as if it carried
+        # only its first flag.
+        flag_tag = "".join(f"[{tag}]" for tag in rec.flags)
         exited   = "EXITED" in rec.flags
 
         tid_str = f"0x{rec.tid:x}"
-        if flag_tag == "[DUMPER]":
+        if "DUMPER" in rec.flags:
             tid_str = CYAN(tid_str) + f" {CYAN(flag_tag)}"
         elif exited:
             tid_str = DIM(tid_str) + f" {DIM(flag_tag)}"
@@ -348,9 +395,22 @@ def render_threads_console(records, coverage) -> None:
 
         print(f"\n  {BOLD('TID')}              {tid_str}")
         if rec.start_address is None:
-            backed = DIM("(unknown — requires ThreadInfoListStream)")
+            # Why there is no address decides how it reads, and there are
+            # three different answers: no record for this TID at all (a
+            # capture gap), a record that disowns every field but its
+            # ThreadId, or a record that simply did not carry the
+            # StartAddress field. None of them is address 0x0.
+            if rec.start_address_state == START_ADDRESS_INVALID:
+                backed = YELLOW("(dump reports this thread's own record as invalid — "
+                                "only its TID is meaningful)")
+            elif rec.dump_flags_state == DUMP_FLAGS_ABSENT:
+                backed = DIM("(unknown — requires ThreadInfoListStream)")
+            else:
+                backed = YELLOW("(this thread's ThreadInfoListStream record carried no "
+                                "StartAddress field)")
             print(f"  {'StartAddress':<16} {DIM('unavailable')}  ← {backed}")
         else:
+            unverified = rec.start_address_state == START_ADDRESS_UNVERIFIED
             if rec.module_context == MODULE_CONTEXT_RESOLVED:
                 # ntpath.basename() of a ModuleListStream name -- a dump
                 # string, so escaped before the colour helper. The other
@@ -359,11 +419,20 @@ def render_threads_console(records, coverage) -> None:
             elif rec.module_context == MODULE_CONTEXT_UNREGISTERED:
                 # Confirmed: ModuleListStream was available and this
                 # address genuinely isn't backed by any known module.
-                backed = RED("⚠  NOT IN ANY MODULE")
+                # Only an address its own record stands behind can carry
+                # that claim -- an `unverified` start classifies the same
+                # way but establishes nothing.
+                backed = (YELLOW("not in any module, but this thread's own DumpFlags could "
+                                 "not be read — unverified") if unverified
+                          else RED("⚠  NOT IN ANY MODULE"))
             else:
                 # MODULE_CONTEXT_UNAVAILABLE -- ModuleListStream itself
                 # missing; must not read as the confirmed anomaly above.
                 backed = YELLOW("(module data unavailable — ModuleListStream missing)")
+            if unverified and rec.module_context != MODULE_CONTEXT_UNREGISTERED:
+                # The classification itself still holds; what nothing
+                # establishes is the address it was made about.
+                backed = f"{backed} {YELLOW('(address unverified — DumpFlags unreadable)')}"
             print(f"  {'StartAddress':<16} {rec.start_address}  ← {backed}")
         # CurrentIP is this thread's OWN captured CONTEXT, independent of
         # StartAddress above -- never inferred from it and never printed
@@ -380,7 +449,12 @@ def render_threads_console(records, coverage) -> None:
                 # join `ip` against (see ip_context_conflict_for) -- the
                 # dispute status is undeterminable, never a confirmed
                 # "not disputed" the way a genuinely clean DumpFlags is.
-                undeterminable = "cannot confirm whether this context is disputed — no ThreadInfoListStream record for this thread"
+                undeterminable = (
+                    "cannot confirm whether this context is disputed — no ThreadInfoListStream "
+                    "record for this thread"
+                    if rec.dump_flags_state == DUMP_FLAGS_ABSENT else
+                    "cannot confirm whether this context is disputed — this thread's own "
+                    "DumpFlags could not be read")
                 note = DIM(f" ({zero_note}; {undeterminable})" if zero_note
                            else f" ({undeterminable})")
             elif zero_note and rec.ip_context_conflict:
@@ -405,15 +479,11 @@ def render_threads_console(records, coverage) -> None:
                 # says this thread's context could not be retrieved --
                 # a parsed base-ThreadListStream CONTEXT existing anyway
                 # is a genuine disagreement between the two sources, not
-                # a confirmed divergent execution location. Reach is
-                # narrower than a bitwise DumpFlags check would give:
-                # upstream `minidump` parses DumpFlags via a plain
-                # single-member Enum lookup (MINIDUMP_THREAD_INFO.parse,
-                # `DumpFlags(raw_int)`), so a genuinely-combined flag
-                # value (e.g. EXITED_THREAD | INVALID_CONTEXT) fails that
-                # lookup and leaves DumpFlags -- and this tag -- unset.
-                # This branch only ever fires for the single, exact
-                # INVALID_CONTEXT value.
+                # a confirmed divergent execution location. Fires for
+                # any DumpFlags value carrying INVALID_CONTEXT, alone or
+                # combined with other bits (see dumpex.core.memory.
+                # dump_flags_value, which reads the raw UINT32 rather
+                # than the upstream single-member Enum lookup).
                 note = DIM(" (dump reports this thread's context as invalid — not confirmed)")
             else:
                 diverges = (rec.start_address is not None and rec.ip != rec.start_address)

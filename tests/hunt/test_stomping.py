@@ -935,7 +935,7 @@ def test_verified_change_multi_thread_conflict_counts_are_not_collapsed_to_one_s
     assert vc["confidence"] == "high"
     caveat = vc["limitations"][0]
     assert "2 thread(s) whose captured CONTEXT" in caveat
-    assert "1 thread(s) with no ThreadInfoListStream record" in caveat
+    assert "1 thread(s) for which no DumpFlags value could be established" in caveat
 
 
 # ── no --ref-dir: a protection anomaly ALONE stays a plain lead, but one ──

@@ -128,11 +128,11 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   (`DumpFlags == MINIDUMP_THREAD_INFO_INVALID_CONTEXT`, rendered as the
   existing `[NO_CTX]` tag) — a parsed base-stream CONTEXT existing anyway
   is a genuine disagreement between the two sources, not a confirmed
-  location. This check's reach is exactly as wide as the upstream
-  `minidump` library's own single-member `DumpFlags` parse: a genuinely
-  combined flag value (e.g. exited *and* invalid-context together) is not
-  representable by that parse and leaves `DumpFlags`, and this tag,
-  unset, so it is not caught here either.
+  location. The check reads the record's raw `DumpFlags` bit mask, so a
+  genuinely combined flag value (e.g. exited *and* invalid-context
+  together) is caught exactly like a lone one -- see the raw-DumpFlags
+  entry further down for why the upstream library's own parse cannot
+  answer this on its own.
   `--report`'s per-card `coverage.sources` now attributes the base
   ThreadListStream (`CurrentIP`'s own source) by name, so its absence is
   visible to a JSON consumer; unlike `thread_info`, its absence alone does
@@ -373,6 +373,155 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   by `thread_id`), not the handle count. Neither fix moves any score,
   confidence, verdict, or coverage.status -- both are corrections to
   caveat text that was already present, not new evidence.
+- A `ThreadInfoListStream` record whose own `DumpFlags` carry
+  `MINIDUMP_THREAD_INFO_ERROR_THREAD` or `MINIDUMP_THREAD_INFO_INVALID_INFO`
+  is documented by Windows as a placeholder: no thread information exists
+  in it beyond the thread identifier. `--threads`, `--report`, and
+  `--hunt injection` nonetheless read its `StartAddress` field as a real
+  address, so the zero bytes the producer never wrote resolved through
+  module lookup as a confirmed "not in any module" answer -- manufacturing
+  an `unbacked_thread` finding and a `SUSPICIOUS` verdict out of missing
+  evidence, and (in `--report`) suppressing the current-IP anchor fallback
+  that would otherwise have examined where the thread actually is. Such a
+  record's `StartAddress` is now reported as unknown rather than as
+  `0x0`: no module classification is attempted for it, it contributes no
+  finding in either `--report` section, `--hunt injection`'s
+  unbacked-thread scan skips it, and a `--report-tid` card falls back to
+  that thread's own independently captured current IP exactly as it does
+  for a TID the stream never covered. The same record's `CreateTime`/
+  `ExitTime`/`KernelTime`/`UserTime`/`ExitStatus` are reported as unknown
+  for the same reason. The thread's captured CONTEXT comes from the base
+  `ThreadListStream` and is untouched throughout.
+- `DumpFlags` reached every consumer through the upstream `minidump`
+  library's own single-member `DumpFlags(value)` Enum lookup, which
+  silently leaves the field unset for any value that Enum cannot
+  represent. Two very different on-disk values were therefore
+  indistinguishable: `0x00000000` (the producer set no flag -- the
+  ordinary case) and any COMBINATION, such as
+  `INVALID_CONTEXT | EXITED_THREAD`, which `MiniDumpWriteDump` emits
+  routinely. A combined value carrying `INVALID_CONTEXT` was reported as
+  `ip_context_conflict: false` -- a confirmed absence of conflict derived
+  from a value nothing had read -- and its card could report `CLEAN` and
+  `complete` with no `Scope:` note at all. dumpex now recovers each
+  entry's raw `DumpFlags` UINT32 from the stream's own bytes and derives
+  every flag fact from it, so a combined value is reported in full (one
+  tag per bit set, rather than only its first) and disputes the captured
+  CONTEXT exactly as a lone `INVALID_CONTEXT` does, while `0x0` stays a
+  CONFIRMED absence of flags. Where neither the raw value nor the
+  upstream parse establishes a value, the flags are reported as
+  unreadable and every fact derived from them degrades to undeterminable
+  -- `ip_context_conflict: null`, a start address kept but marked as
+  vouched for by nothing, and no `unbacked_thread` finding from it --
+  never to a confirmed clean answer.
+- dumpex now parses ThreadInfoListStream itself, the way it already
+  parses HandleDataStream, instead of reading DumpFlags out of the
+  stream's raw bytes while every other field came from the installed
+  `minidump` library's own fixed-layout parse. Two different layouts over
+  the same records produced two classes of fabricated evidence:
+  - The library reads each field with `buff.read(n)`, which returns empty
+    once the chunk runs out, and an empty read is 0. A record the dump
+    declares SHORTER than the 64-byte layout, or one the stream's own
+    `DataSize` cuts off partway, therefore yielded `StartAddress == 0` --
+    indistinguishable from a thread that really started at address 0,
+    and, run through module lookup, a confirmed "not in any module"
+    finding built from bytes that were never on disk. Readable DumpFlags
+    do not establish that the StartAddress field was captured, so they
+    no longer vouch for one: a field this stream's own declared record
+    size does not cover, or that the stream or the file cuts off, is
+    reported as unknown. A record cut short mid-way is still delivered
+    for the fields it DID carry -- its ThreadId and DumpFlags are
+    captured evidence, and discarding them reads downstream as a thread
+    the dump never had, which `--diff` reported as a `removed` thread
+    with `COMPLETE` coverage and no stated reason while the base
+    ThreadListStream still listed it. A whole ThreadId is enough for a
+    record to survive -- it is what attributes a record to a thread at
+    all -- with its DumpFlags reported as unreadable rather than as 0, so
+    a record reduced to four bytes no longer disappears and no longer
+    produces a false `removed` thread in `--diff`. Only a record without
+    even a whole ThreadId is not offered; that shortfall reaches
+    `--threads`, `--report`, `--diff` and `--hunt injection` as the new
+    `THREAD_INFO_STREAM_TRUNCATED` coverage limitation, which states that
+    the stream cannot settle which TIDs exist.
+  - A record that DID arrive but establishes no start address -- it
+    disowns its own fields, its DumpFlags could not be read, or it
+    carried no StartAddress field -- is likewise a check that could not
+    be run rather than one that ran and found nothing, and reaches the
+    same four commands as the new `THREAD_START_ADDRESS_UNAVAILABLE`
+    limitation.
+  - A ThreadInfoListStream that is present, complete, and simply does
+    not cover one of the threads the base ThreadListStream lists left
+    `--report` and `--hunt injection` reporting a complete result too:
+    the whole-stream source requirement has nothing to say about a
+    stream that is there, and both counted only the records that exist.
+    That per-TID gap is now reported by both, under the same
+    `SOURCE_KEY_MISMATCH` code and the same wording `--threads` has
+    always used for it, so one dump cannot read as complete in one
+    command and partial in another. It stays distinct from
+    `THREAD_START_ADDRESS_UNAVAILABLE`: "this stream never described
+    that thread" and "the record it did carry establishes nothing" are
+    different facts and are never reported in each other's words.
+  All three move `coverage.status` to `partial` and the exit code from 0
+  to 3; `--hunt injection`'s own verdict moves from CLEAN to
+  INCONCLUSIVE for such a dump, which previously reported a clean,
+  complete result over threads it never examined. A card anchored on a
+  thread the stream DOES fully describe stays complete -- the gap
+  belongs to the thread that has it.
+  - The library also ignores the stream's declared `SizeOfEntry`
+    entirely, so a producer declaring a longer stride had every entry
+    after the first read from the wrong offset. Every field now comes
+    from one layout walked at the stream's own declared stride, so
+    ThreadId, DumpFlags and StartAddress always describe the same
+    record. Correspondence is no longer inferred from ThreadId equality,
+    which a stride whose padding happens to contain the next record's
+    ThreadId satisfies while every later field belongs to other bytes.
+  The entry-array read is bounded by the stream's declared extent and by
+  explicit entry-count, stride, and total-byte ceilings, all checked
+  before any read: a `SizeOfEntry` of `0xffffffff` previously sized a
+  ~4 GiB read request from a dump-controlled UINT32, and a stream
+  declaring only 16 bytes still had a full 64-byte entry read from the
+  file after it and published those bytes as its own flags. Framing that
+  cannot locate anything reliably now fails the stream explicitly rather
+  than yielding records read at a guessed offset.
+- `--hunt injection`, `--hunt pipe`, and `--diff` still read a thread's
+  `StartAddress` field directly, so the validity rule `--threads` and
+  `--report` apply to the same record did not reach them. A record whose
+  own DumpFlags disown its fields, or whose DumpFlags could not be read,
+  produced an `injection.unbacked_thread_startaddress` finding with a
+  score, a `pipe.start_address_proximity_lead`, and a pipe
+  unbacked-thread record — all from an address nothing established. All
+  five consumers now resolve a start address through the same
+  `recorded_start_address` derivation, so only an address its own record
+  stands behind contributes evidence. A thread whose start address was
+  never recorded at all is likewise held back rather than classified
+  from a substituted 0. Threads held back this way are not
+  silently dropped: `--hunt injection` reports them as
+  `injection.start_address_not_established`, an observation carrying the
+  count and an explicit limitation that whether those threads begin
+  inside unbacked memory is undeterminable rather than a checked
+  negative, and that fact now counts against `--hunt injection`'s own
+  coverage rather than staying an observation beside a COMPLETE result.
+  No score, confidence, or verdict rises as a result; the injection score
+  for a dump whose only start-address evidence was unestablished falls
+  from 1 to 0, and its verdict from CLEAN to INCONCLUSIVE.
+- A `start_address` of `null` has three different causes -- no
+  ThreadInfoListStream record for this TID, a record that disowns every
+  field but its ThreadId, and a record that simply did not carry the
+  StartAddress field -- and the structured result already distinguished
+  all three. The rendered explanations did not: `--report` and
+  `--threads` said "no ThreadInfoListStream entry" for a record that was
+  plainly there and readable, and `--hunt injection` said its DumpFlags
+  were invalid or unreadable when they were neither. Every one of those
+  now names the cause the record itself carries, derived from the same
+  `start_address_state`/`dump_flags_state` pair the JSON publishes.
+- An undeterminable context dispute has two possible causes — no
+  ThreadInfoListStream record for this TID, or a record whose DumpFlags
+  could not be read — and the JSON already published which
+  (`dump_flags_state`). `--report`'s console `Scope:` line and the shared
+  hunter caveat still asserted the first cause unconditionally, so a card
+  could print "this TID has no ThreadInfoListStream record at all" beside
+  its own record's `dump_flags_state: "unresolved"`. Both now name the
+  cause the record actually carries, from the same field the JSON
+  publishes.
 
 ### Changed
 
@@ -414,6 +563,32 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   fallback anchor is labeled on the wire with its own `anchor_source`
   value, `tid_current_ip`, distinct from the ordinary `tid` value an
   anchor with a recorded start address uses.
+  Later same-version addition, still v2.20 (unreleased): `threadRecord`
+  and `reportThreadInfo` gain `start_address_state`
+  (`recorded`/`invalid`/`unverified`/`absent`) and `dump_flags_state`
+  (`resolved`/`unresolved`/`absent`), bidirectionally enforced against
+  each other and against `start_address` in both Python and the schema.
+  Together they say what a `start_address` is worth and whether an empty
+  `flags` list means "no flag set" or "nothing is known" -- the same
+  confirmed-versus-undeterminable distinction `module_context` and
+  `ip_context_conflict` already carry. `threadRecord.flags` now carries
+  one tag per `DumpFlags` bit set rather than at most one tag in total.
+  `huntThreadRef` keeps its existing field set; its `start_address` and
+  tri-state `ip_context_conflict` now have the wider causes described
+  above. `coverage.status` and the exit code do not move for any of
+  this. `findings`/`verdict` move only in the direction this correction
+  corrects: an `unbacked_thread` finding derived from a record that
+  disowns its own fields, or from flags nothing could read, is no longer
+  raised, so no result is ever newly promoted toward malicious by it.
+  Later same-version addition, still v2.20 (unreleased): `--hunt
+  injection` gains the check id `injection.start_address_not_established`
+  (`findings[].check`, an open string vocabulary — no schema change), an
+  observation naming how many ThreadInfoListStream records were held
+  back from this hunter's start-address evidence because no start
+  address was established for them. `coverage.status` and the exit code
+  do not move for it; the score for a dump whose only start-address
+  evidence was unestablished falls from 1 to 0, the direction this
+  correction corrects.
 
 ## 3.9.0 — 2026-09-18
 

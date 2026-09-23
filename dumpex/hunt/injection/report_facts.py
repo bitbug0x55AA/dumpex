@@ -97,6 +97,7 @@ _FACT_ITEM_RENDERERS = {
 }
 
 _RIP_CORRELATION_UNAVAILABLE = "injection.rip_correlation_unavailable"
+_START_ADDRESS_NOT_ESTABLISHED = "injection.start_address_not_established"
 
 
 def _facts_for(result, report: InjectionReport) -> tuple:
@@ -104,12 +105,16 @@ def _facts_for(result, report: InjectionReport) -> tuple:
     (capped at `result.evidence_limit`, with a "... and N more" summary
     line appended when the cap trims anything, same policy aggregate.py's
     own `[:20]`/`[:10]` slices apply today) rather than stored as text.
-    `rip_correlation_unavailable` is the one check whose single fact comes
-    from the Report's own coverage snapshot, not from an evidence item --
-    it legitimately carries no evidence (see CheckResult.evidence's own
-    docstring)."""
+    `rip_correlation_unavailable` and `start_address_not_established`
+    are the checks whose single fact comes from the Report's own coverage
+    snapshot, not from an evidence item -- both legitimately carry no
+    evidence (see CheckResult.evidence's own docstring): a thread held
+    back because no start address was established for it is precisely a
+    thread this hunter has no evidence about."""
     if result.check == _RIP_CORRELATION_UNAVAILABLE:
         return (f"thread_list_stream_present={report.coverage.thread_list_stream}",)
+    if result.check == _START_ADDRESS_NOT_ESTABLISHED:
+        return (f"starts_not_established={report.coverage.starts_not_established}",)
     renderer = _FACT_ITEM_RENDERERS.get(result.check)
     if renderer is None:
         raise ValueError(
@@ -215,6 +220,18 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
         reasons.append(f"{coverage.pe_evidence_capped} validated hidden PE header(s) were "
                         f"found but not retained (evidence cap) — the reported list is not "
                         f"exhaustive")
+    if coverage.thread_info_truncated:
+        reasons.append(f"ThreadInfoListStream declares {coverage.thread_info_truncated} more "
+                        f"thread record(s) than this dump delivered — those threads were "
+                        f"not examined at all")
+    if coverage.starts_not_established:
+        reasons.append(f"{coverage.starts_not_established} ThreadInfoListStream record(s) "
+                        f"establish no start address — whether those threads begin inside "
+                        f"unbacked memory is undeterminable")
+    if coverage.threads_without_a_record:
+        reasons.append(f"{coverage.threads_without_a_record} thread(s) present in "
+                        f"ThreadListStream have no ThreadInfoListStream record — where "
+                        f"those threads began could not be checked at all")
     if not coverage.thread_context:
         reasons.append("No per-thread CONTEXT (RIP/EIP) available — live-execution "
                         "correlation could not run")
@@ -308,6 +325,21 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.THREAD_CONTEXT_PARTIAL, source="thread_context",
             affected_count=coverage.contexts_missing))
+    if coverage.thread_info_truncated:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_INFO_STREAM_TRUNCATED, source="thread_info",
+            affected_count=coverage.thread_info_truncated))
+    if coverage.starts_not_established:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_START_ADDRESS_UNAVAILABLE, source="thread_info",
+            affected_count=coverage.starts_not_established))
+    if coverage.threads_without_a_record:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SOURCE_KEY_MISMATCH, source="thread_info",
+            counterpart_source="thread_list", scope="thread",
+            affected_count=coverage.threads_without_a_record,
+            unavailable_fields=("StartAddress", "CreateTime", "ExitTime", "KernelTime",
+                                 "UserTime", "DumpFlags")))
     return build_coverage_report(
         coverage_sources, evaluation_sources=("memory_info", "thread_info"),
         completeness_checks=completeness_checks,
