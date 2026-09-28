@@ -1,0 +1,28 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--diff",
+  "<TMP>/reference.dmp",
+  "--diff-scope",
+  "threads"
+ ],
+ "exit_code": 0,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "dumpex diff: target sample.dmp vs baseline reference.dmp",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "",
+  "\u2550\u2550\u2550 THREAD DIFF \u2550\u2550\u2550",
+  "  reference.dmp: 3 threads",
+  "  sample.dmp: 3 threads",
+  "",
+  "  [+] No new threads.",
+  "",
+  "  [-] No removed threads.",
+  "",
+  ""
+ ]
+}

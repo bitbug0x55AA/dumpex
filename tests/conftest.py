@@ -11,6 +11,7 @@ collide/misresolve same-named modules across sibling test directories),
 so `pytest` from a bare checkout must succeed with no external fixtures,
 network access, or malware corpus.
 """
+import importlib
 import os
 import sys
 
@@ -101,6 +102,53 @@ def _reset_thread_context_monkeypatches():
         mod.enriched_thread_contexts = _real_enriched_thread_contexts
     for mod in _RAW_THREAD_CONTEXT_MODULES:
         mod.get_thread_contexts = _real_get_thread_contexts
+
+
+# Every other module attribute that holds a dumpex.core.memory /
+# dumpex.output.records object by name and that tests replace in place --
+# many with a plain assignment that is never undone. Each is put back to the
+# object it held when this conftest was imported, before and after every
+# test. The thread-context readers are reset by the fixture above instead.
+# tests/unit/test_memory_patch_seams.py asserts this table covers every
+# such seam in the decomposition baseline's inventory.
+READER_SEAMS = (
+    ("dumpex.cli", "open_dump"),
+    ("dumpex.commands.extract", "read_region"),
+    ("dumpex.commands.report", "MAX_REGION_READ"),
+    ("dumpex.commands.report", "_extract_strings_from_data"),
+    ("dumpex.commands.report", "read_region"),
+    ("dumpex.commands.report_enrichment", "ReportStringContextEntry"),
+    ("dumpex.hunt", "get_memory_regions"),
+    ("dumpex.hunt._location", "va_to_file_offset"),
+    ("dumpex.hunt._registry", "HUNTERS"),
+    ("dumpex.hunt.encoding", "read_region"),
+    ("dumpex.hunt.encoding.targeted", "read_region_spanning"),
+    ("dumpex.hunt.hollowing", "read_region"),
+    ("dumpex.hunt.injection", "read_region"),
+    ("dumpex.hunt.pipe", "read_region"),
+    ("dumpex.hunt.pipe.targeted", "read_region_spanning"),
+    ("dumpex.hunt.stomping", "read_region"),
+    ("dumpex.hunt.stomping.targeted", "read_region_spanning"),
+)
+_READER_SEAM_ORIGINALS = tuple(
+    (importlib.import_module(module), name, getattr(importlib.import_module(module), name))
+    for module, name in READER_SEAMS)
+
+
+def _restore_reader_seams():
+    for module, name, original in _READER_SEAM_ORIGINALS:
+        setattr(module, name, original)
+
+
+@pytest.fixture(autouse=True)
+def _reset_reader_seams():
+    """Put every READER_SEAMS attribute back to its original object around
+    each test, so a replacement one test leaves behind cannot change what
+    a later test reads -- the same guarantee
+    _reset_thread_context_monkeypatches gives the thread-context readers."""
+    _restore_reader_seams()
+    yield
+    _restore_reader_seams()
 
 
 @pytest.fixture(autouse=True)

@@ -1,0 +1,700 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--report",
+  "--report-tid",
+  "0x108",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": [
+    {
+     "code": "REPORT_CURRENT_IP_NOT_EXAMINED",
+     "message": "TID 0x108's captured current IP 0x7ffe00000500 conflicts with its own ThreadInfoListStream record, which flags this thread's context as invalid \u2014 this value is not confirmed as a real execution location, regardless of whether it falls inside the region this card examined.",
+     "severity": "warning"
+    }
+   ]
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "tid_0x108",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "min_len": 6,
+     "output": null,
+     "report_addr": null,
+     "report_string": null,
+     "report_tid": "0x108",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "rules": {
+    "explicit": false,
+    "path": "<dumpex.rules_pkg>/data/rules.yaml",
+    "sha256": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+    "version": 1
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": null,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "SOURCE_FAILED",
+      "counterpart_source": null,
+      "detail": "1 of 1 triage card region read(s) failed",
+      "related_sources": [],
+      "related_tids": [],
+      "scope": "dump",
+      "source": "requested_region",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     }
+    ],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "requested_region present but could not be read: 1 of 1 triage card region read(s) failed"
+    ],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "requested_region": {
+      "detail": "1 of 1 triage card region read(s) failed",
+      "record_count": null,
+      "state": "failed"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "allocation_neighborhood": {
+       "allocation_base": "0x00007ffe00000000",
+       "entries": [
+        {
+         "allocation_base": "0x00007ff600000000",
+         "base_address": "0x00007ff600001000",
+         "distance": 34359730176,
+         "module_owner": "C:\\Program Files\\Sample\\app.exe",
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READ",
+         "relation": "preceding",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        },
+        {
+         "allocation_base": "0x00007ff600000000",
+         "base_address": "0x00007ff600002000",
+         "distance": 34359726080,
+         "module_owner": "C:\\Program Files\\Sample\\app.exe",
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "preceding",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        },
+        {
+         "allocation_base": "0x00007ffe00000000",
+         "base_address": "0x00007ffe00000000",
+         "distance": 0,
+         "module_owner": "C:\\Windows\\System32\\ntdll.dll",
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READ",
+         "relation": "anchor",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        }
+       ],
+       "section": {
+        "cap": 9,
+        "included": 3,
+        "limitations": [],
+        "name": "allocation",
+        "provenance": [
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 3,
+        "truncated": false
+       }
+      },
+      "anchor_address": "0x00007ffe00000400",
+      "anchor_pe_context": {
+       "anchor_address": "0x00007ffe00000400",
+       "classification": "unmapped",
+       "declared_executable": null,
+       "declared_readable": null,
+       "declared_writable": null,
+       "live_protection": "PAGE_EXECUTE_READ",
+       "module_base": "0x00007ffe00000000",
+       "module_owner": "C:\\Windows\\System32\\ntdll.dll",
+       "module_owner_truncated": false,
+       "module_rva": 1024,
+       "protection_matches_declared": null,
+       "region_base": "0x00007ffe00000000",
+       "region_type": "MEM_IMAGE",
+       "registration": "registered",
+       "section": {
+        "cap": 1,
+        "included": 1,
+        "limitations": [],
+        "name": "anchor_pe_context",
+        "provenance": [
+         "pe_profile",
+         "modules",
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 1,
+        "truncated": false
+       },
+       "section_index": null,
+       "section_name": null,
+       "section_name_truncated": false
+      },
+      "anchor_source": "tid",
+      "anchor_tid": 264,
+      "artifact_id": null,
+      "exception_context": {
+       "entries": [],
+       "section": {
+        "cap": 4,
+        "included": 0,
+        "limitations": [
+         "the dump carries no ExceptionStream: no exception was evaluated"
+        ],
+        "name": "exception",
+        "provenance": [
+         "exception"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "extract_read_clamped": null,
+      "extract_read_truncated": null,
+      "finding_details": {},
+      "findings": [],
+      "handle_correlation": {
+       "entries": [],
+       "section": {
+        "cap": 8,
+        "included": 0,
+        "limitations": [
+         "this card examined no content: no handle name could be correlated"
+        ],
+        "name": "handle_correlation",
+        "provenance": [
+         "handles"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "iat_correlation": {
+       "dll_count": 0,
+       "entries": [],
+       "entry_count": 0,
+       "iat_directory_present": null,
+       "import_directory_present": null,
+       "module_base": "0x00007ffe00000000",
+       "module_owner": "C:\\Windows\\System32\\ntdll.dll",
+       "module_owner_truncated": false,
+       "section": {
+        "cap": 16,
+        "included": 0,
+        "limitations": [
+         "the import directory array was not readable: whether the module declares imports is undetermined"
+        ],
+        "name": "iat_correlation",
+        "provenance": [
+         "pe_profile",
+         "iat"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "instruction_context": {
+       "anchor_address": "0x00007ffe00000500",
+       "anchor_source": "thread_rip",
+       "architecture": "x64",
+       "branch_targets": [],
+       "branch_targets_total": 0,
+       "branch_targets_truncated": false,
+       "bytes_read": 0,
+       "decoder_state": "not_run",
+       "instructions": [],
+       "section": {
+        "cap": 48,
+        "included": 0,
+        "limitations": [
+         "no bytes were captured at the thread_rip anchor 0x7ffe00000500"
+        ],
+        "name": "instruction_context",
+        "provenance": [
+         "report_content_scan",
+         "disasm",
+         "pe_profile"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       },
+       "window_base": "0x00007ffe00000500"
+      },
+      "ioc_strings": [],
+      "notable_strings": [],
+      "other_threads_in_region": [
+       {
+        "backing_module": "C:\\Windows\\System32\\ntdll.dll",
+        "backing_module_base": null,
+        "backing_module_end": null,
+        "dump_flags_state": "resolved",
+        "ip": "0x00007ffe00000500",
+        "ip_context_conflict": true,
+        "ip_reg": "RIP",
+        "kernel_time_100ns": 0,
+        "module_context": "resolved",
+        "region_membership": "start_and_current",
+        "start_address": "0x00007ffe00000400",
+        "start_address_state": "recorded",
+        "tid": 264,
+        "user_time_100ns": 0
+       }
+      ],
+      "region": {
+       "base_address": "0x00007ffe00000000",
+       "file_offset": null,
+       "has_injected_pe": null,
+       "is_rwx_private": false,
+       "module_context": "resolved",
+       "module_owner": "C:\\Windows\\System32\\ntdll.dll",
+       "mz_header_detected": null,
+       "pe_header_state": null,
+       "protect": "PAGE_EXECUTE_READ",
+       "protection_suspicious": false,
+       "size": 8192,
+       "type": "MEM_IMAGE"
+      },
+      "string_context": null,
+      "string_hit": null,
+      "string_scan": null,
+      "string_scan_error": "Memory address 0x7ffe00000000 is not in process memory space",
+      "thread": {
+       "backing_module": "C:\\Windows\\System32\\ntdll.dll",
+       "backing_module_base": "0x00007ffe00000000",
+       "backing_module_end": "0x00007ffe00002000",
+       "dump_flags_state": "resolved",
+       "ip": "0x00007ffe00000500",
+       "ip_context_conflict": true,
+       "ip_reg": "RIP",
+       "kernel_time_100ns": 0,
+       "module_context": "resolved",
+       "region_membership": null,
+       "start_address": "0x00007ffe00000400",
+       "start_address_state": "recorded",
+       "tid": 264,
+       "user_time_100ns": 0
+      },
+      "thread_region_correlation_excluded": false,
+      "verdict": "CLEAN"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "report",
+   "summary": {
+    "card_count": 1,
+    "cards_skipped_for_budget": 0,
+    "clamped_regions": 0,
+    "hits_image": null,
+    "hits_image_registration_unavailable": null,
+    "hits_mapped": null,
+    "hits_private": null,
+    "hits_region_type_unavailable": null,
+    "hits_sharing_a_region": 0,
+    "hits_skipped_for_budget": 0,
+    "hits_unregistered_image": null,
+    "image_hit_modules": [],
+    "mode": "tid",
+    "pe_context": {
+     "conflict_count": 0,
+     "consistent_count": 10,
+     "entry_point_rva": 4096,
+     "entry_point_va": "0x00007ff600001000",
+     "image_base": "0x00007ff600000000",
+     "machine": 34404,
+     "machine_name": "AMD64",
+     "module_match": "resolved",
+     "not_applicable_count": 17,
+     "observations": [],
+     "pe32_plus": true,
+     "preferred_image_base": "0x00007ff600000000",
+     "section": {
+      "cap": 16,
+      "included": 0,
+      "limitations": [],
+      "name": "pe_context",
+      "provenance": [
+       "pe_profile",
+       "pe_correlation"
+      ],
+      "scope": "process",
+      "status": "complete",
+      "total": 0,
+      "truncated": false
+     },
+     "section_count": 1,
+     "size_of_image": 12288,
+     "time_date_stamp": 1600000000,
+     "unavailable_count": 2
+    },
+    "process_enrichment": {
+     "command_line": "\"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+     "command_line_truncated": false,
+     "environment": {
+      "entries": [
+       {
+        "name": "COMPUTERNAME",
+        "truncated": false,
+        "value": "HOST-SYNTH"
+       },
+       {
+        "name": "USERNAME",
+        "truncated": false,
+        "value": "analyst"
+       },
+       {
+        "name": "PROCESSOR_ARCHITECTURE",
+        "truncated": false,
+        "value": "AMD64"
+       }
+      ],
+      "section": {
+       "cap": 7,
+       "included": 3,
+       "limitations": [],
+       "name": "environment",
+       "provenance": [
+        "environment_block"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 3,
+       "truncated": false
+      }
+     },
+     "handles": {
+      "by_type": [
+       {
+        "count": 2,
+        "type_name": "File",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Event",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Key",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Section",
+        "type_name_truncated": false
+       }
+      ],
+      "section": {
+       "cap": 12,
+       "included": 4,
+       "limitations": [],
+       "name": "handles",
+       "provenance": [
+        "handles"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 4,
+       "truncated": false
+      },
+      "total_handles": 5
+     },
+     "identity_conflicts": [],
+     "identity_conflicts_total": 0,
+     "image_base_address": "0x00007ff600000000",
+     "module_match_state": "resolved",
+     "path_source": "peb",
+     "pid": 4242,
+     "process_name": "app.exe",
+     "process_name_truncated": false,
+     "process_path": "C:\\Program Files\\Sample\\app.exe",
+     "process_path_truncated": false,
+     "process_start_utc": null,
+     "section": {
+      "cap": 1,
+      "included": 1,
+      "limitations": [
+       "no process start time resolved from MiscInfoStream"
+      ],
+      "name": "process",
+      "provenance": [
+       "misc_info",
+       "peb",
+       "modules"
+      ],
+      "scope": "process",
+      "status": "partial",
+      "total": 1,
+      "truncated": false
+     },
+     "token": {
+      "detail": "the dump declares no TokenStream: no token or privilege evidence was captured",
+      "parser_state": null,
+      "status": "unavailable",
+      "stream_present": false
+     }
+    },
+    "query_addr": null,
+    "query_string": null,
+    "query_tid": "0x108",
+    "skipped_unreadable_regions": 0,
+    "total_hits": null,
+    "truncated_regions": 0
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "  [\u00b7] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=b1e78e29b51cf439\u2026)",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  dumpex TRIAGE REPORT",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  File : sample.dmp",
+  "  TID  : 0x108",
+  "",
+  "ASSESSMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  CLEAN \u2014 no suspicious indicators found",
+  "",
+  "  \u26a0 Scope: TID 0x108's captured current IP 0x00007ffe00000500 conflicts with its own ThreadInfoListStream record (context flagged invalid) \u2014 not confirmed as a real execution location, regardless of whether it falls inside the examined region",
+  "",
+  "  Next:",
+  "    this card's own evidence found nothing eligible -- see the coverage summary below for what this run could not evaluate",
+  "",
+  "COVERAGE SUMMARY",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Status: PARTIAL  (core report coverage \u2014 see below for optional-enrichment gaps)",
+  "  Known evidence gaps:",
+  "    [~] requested_region present but could not be read: 1 of 1 triage card region read(s) failed",
+  "    [~] Exception context: the dump carries no ExceptionStream: no exception was evaluated",
+  "    [~] Instruction context: no bytes were captured at the thread_rip anchor 0x7ffe00000500",
+  "    [~] IAT correlation: the import directory array was not readable: whether the module declares imports is undetermined",
+  "    [~] Correlated handles: this card examined no content: no handle name could be correlated",
+  "    [~] Process identity: no process start time resolved from MiscInfoStream",
+  "    [~] Token: the dump declares no TokenStream: no token or privilege evidence was captured",
+  "  [\u00b7] treat every finding below as based on what this run could evaluate, and consider a more complete capture or a targeted re-run over the missing coverage before ruling anything in or out",
+  "",
+  "",
+  "ANCHOR CONTEXT",
+  "==================================================",
+  "THREAD ANALYSIS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  TID                    0x108",
+  "  Start Address          0x7ffe00000400",
+  "  Current IP             0x7ffe00000500  (RIP)  (dump reports this thread's context as invalid \u2014 not confirmed)",
+  "  Kernel Time            0s",
+  "  User Time              0s",
+  "  Backed By              C:\\Windows\\System32\\ntdll.dll",
+  "  Module Range           0x7ffe00000000 \u2014 0x7ffe00002000",
+  "",
+  "MEMORY REGION AT TARGET ADDRESS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Region base (VA)         0x00007ffe00000000  \u2190 process virtual address",
+  "  Region base (file offset) (not captured in dump)  \u2190 byte offset inside .dmp",
+  "  Physical addr (RAM)      not recorded in minidumps",
+  "  IOC addr = base + offset see formula per string below",
+  "  Region Size              0x2000  (8 KB)",
+  "  Protection             PAGE_EXECUTE_READ",
+  "  Type                   MEM_IMAGE",
+  "  Module Owner           C:\\Windows\\System32\\ntdll.dll",
+  "  [~] Could not read region header \u2014 injected-PE check skipped",
+  "",
+  "OTHER THREADS WITH A START OR CURRENT IP IN THIS REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  TID=0x108       StartAddr=0x7ffe00000400  CurrentIP=0x7ffe00000500 (RIP) [context flagged invalid \u2014 not confirmed]  via=start_and_current  StartAddr\u2192ntdll.dll \u2190 report TID",
+  "",
+  "ANCHOR PLACEMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Placement          unmapped",
+  "  Owning module      C:\\Windows\\System32\\ntdll.dll   registered",
+  "  Module RVA         0x400",
+  "  Live protection    PAGE_EXECUTE_READ",
+  "",
+  "",
+  "KEY EVIDENCE",
+  "==================================================",
+  "STRINGS IN REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [!] Could not read region: Memory address 0x7ffe00000000 is not in process memory space",
+  "",
+  "",
+  "CORRELATION",
+  "==================================================",
+  "EXCEPTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No exception evidence was evaluated.",
+  "  Exception state is execution evidence, not a maliciousness finding.",
+  "  evidence: not evaluated",
+  "  [~] the dump carries no ExceptionStream: no exception was evaluated",
+  "",
+  "INSTRUCTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Window at 0x00007ffe00000500 (thread_rip, x64); 0 byte(s) read; decoder: not_run",
+  "  [\u00b7] No bytes were captured at this anchor.",
+  "  Instruction context names no function, argument, or call stack.",
+  "  evidence: not evaluated",
+  "  [~] no bytes were captured at the thread_rip anchor 0x7ffe00000500",
+  "",
+  "IAT CORRELATION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  C:\\Windows\\System32\\ntdll.dll   0 DLL(s), 0 import(s)",
+  "  [\u00b7] No import slot is instruction-correlated or unusual.",
+  "  An unusual thunk target is an investigation lead, not a verdict.",
+  "  evidence: partial   kept: 0",
+  "  [~] the import directory array was not readable: whether the module declares imports is undetermined",
+  "",
+  "CORRELATED HANDLES",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No handle evidence was evaluated for this card.",
+  "  Full inventory: --handles",
+  "  evidence: not evaluated",
+  "  [~] this card examined no content: no handle name could be correlated",
+  "",
+  "",
+  "ADDITIONAL CONTEXT",
+  "==================================================",
+  "ALLOCATION NEIGHBORHOOD",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Allocation base        0x00007ffe00000000",
+  "    0x00007ff600001000        4 KB  PAGE_EXECUTE_READ        MEM_IMAGE      preceding gap 0x7ffffe000",
+  "    0x00007ff600002000        4 KB  PAGE_READWRITE           MEM_IMAGE      preceding gap 0x7ffffd000",
+  "  \u25ba 0x00007ffe00000000        8 KB  PAGE_EXECUTE_READ        MEM_IMAGE      anchor adjacent",
+  "  Adjacency is memory layout, not a relationship to the anchor.",
+  "",
+  "",
+  "PROCESS CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  PID                    4242",
+  "  Process                app.exe",
+  "  Path                   C:\\Program Files\\Sample\\app.exe  \u2190 from peb",
+  "  Command Line           \"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+  "  evidence: partial   kept: 1 of 1",
+  "  [~] no process start time resolved from MiscInfoStream",
+  "",
+  "  Session (allowlisted environment)",
+  "    Captured                 COMPUTERNAME  USERNAME  PROCESSOR_ARCHITECTURE",
+  "    [\u00b7] values not shown \u2014 use --verbose for them; --json carries the same retained set",
+  "",
+  "  Handles",
+  "    Total                    5",
+  "    By type                  File=2  Event=1  Key=1  Section=1",
+  "",
+  "  Token",
+  "    Capability               unavailable",
+  "    the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "MAIN IMAGE PE CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Image base           0x00007ff600000000",
+  "  Machine              AMD64",
+  "  Correlation          10 consistent  0 conflict  2 unavailable  17 not applicable",
+  "  A structural conflict is a lead for review, not a maliciousness finding.",
+  "",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

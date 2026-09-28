@@ -1,0 +1,126 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--modules",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "modules",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "anomaly_flags": [],
+      "base_address": "0x00007ff600000000",
+      "checksum": 4660,
+      "compiled_utc": "2020-09-13 12:26:40 UTC",
+      "end_address": "0x00007ff600003000",
+      "file_version": null,
+      "full_path": "C:\\Program Files\\Sample\\app.exe",
+      "name": "app.exe",
+      "size": 12288
+     },
+     {
+      "anomaly_flags": [],
+      "base_address": "0x00007ffe00000000",
+      "checksum": null,
+      "compiled_utc": "2020-07-04 04:05:20 UTC",
+      "end_address": "0x00007ffe00002000",
+      "file_version": null,
+      "full_path": "C:\\Windows\\System32\\ntdll.dll",
+      "name": "ntdll.dll",
+      "size": 8192
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "modules",
+   "summary": {
+    "count": 2
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "  app.exe",
+  "  Full path          C:\\Program Files\\Sample\\app.exe",
+  "  Base \u2192 End         0x00007ff600000000 \u2192 0x00007ff600003000  (size 0x3000)",
+  "  Compiled (UTC)     2020-09-13 12:26:40 UTC",
+  "  Checksum           0x00001234",
+  "",
+  "  ntdll.dll",
+  "  Full path          C:\\Windows\\System32\\ntdll.dll",
+  "  Base \u2192 End         0x00007ffe00000000 \u2192 0x00007ffe00002000  (size 0x2000)",
+  "  Compiled (UTC)     2020-07-04 04:05:20 UTC",
+  "",
+  "[+] 2 module(s).",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

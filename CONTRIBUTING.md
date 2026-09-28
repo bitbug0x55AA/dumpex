@@ -34,6 +34,8 @@ requires no malware corpus, external fixture download, or network access.
 | `tests/integration/` | Command/output behavior across components |
 | `tests/perf/` | Bounded performance and regression benchmarks |
 | `tests/fixtures/fakes.py` | Synthetic minidump and PE builders |
+| `tests/fixtures/minidump_bytes.py` | Byte-level synthetic `.dmp` writer for tests that drive the real loader and readers |
+| `tests/fixtures/decomposition_baseline/` | Records/memory decomposition baseline and its goldens (see [the baseline document](docs/developer/decomposition_baseline.md)) |
 | `tests/corpus/` | Optional local tests against analyst-authorized real samples |
 
 The default public CI suite intentionally has no private corpus dependency.
@@ -57,9 +59,19 @@ python scripts/repo_privacy_scan.py
 Findings intentionally omit matched text. Treat any credential that reached a
 commit as compromised: revoke or rotate it before considering history cleanup.
 
-`tests/conftest.py` resets module-level thread-context monkeypatch points
-before and after tests so synthetic instruction pointers do not leak between
+`tests/conftest.py` resets module-level thread-context monkeypatch points,
+and every other module attribute tests replace that holds a
+`dumpex.core.memory` or `dumpex.output.records` object by name, before and
+after tests so synthetic readers and instruction pointers do not leak between
 cases.
+
+Changes that move code out of `dumpex.output.records`, `dumpex.core.memory`
+or `dumpex.output.coverage` regenerate the structural ownership map
+(`python scripts/update_decomposition_baseline.py structure`, which also
+records how those modules import one another) and must keep
+`python scripts/update_decomposition_baseline.py --check` clean for every
+other golden; see
+[the decomposition baseline](docs/developer/decomposition_baseline.md).
 
 ## Expectations for changes
 

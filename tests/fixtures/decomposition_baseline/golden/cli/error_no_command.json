@@ -1,0 +1,14 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp"
+ ],
+ "exit_code": 2,
+ "stderr": [
+  "usage: <argparse usage>",
+  "dumpex: error: one of the arguments --list --modules --threads --extract --strings --process --handles --profile --sysinfo --diff --report --hunt is required",
+  ""
+ ],
+ "stdout": [
+  ""
+ ]
+}

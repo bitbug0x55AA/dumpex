@@ -1,0 +1,339 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--profile",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "profile",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "handles": {
+      "detail": null,
+      "record_count": 5,
+      "state": "present"
+     },
+     "memory_content": {
+      "detail": null,
+      "record_count": 7,
+      "state": "present"
+     },
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "profile_directory": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "sysinfo": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "architecture": "AMD64",
+      "capabilities": [
+       {
+        "capability_id": "memory_region_analysis",
+        "limitations": [],
+        "optional_sources": [],
+        "required_source_groups": [
+         [
+          "memory_info"
+         ]
+        ],
+        "required_sources": [
+         "memory_info"
+        ],
+        "status": "available"
+       },
+       {
+        "capability_id": "module_analysis",
+        "limitations": [],
+        "optional_sources": [],
+        "required_source_groups": [
+         [
+          "modules"
+         ]
+        ],
+        "required_sources": [
+         "modules"
+        ],
+        "status": "available"
+       },
+       {
+        "capability_id": "injection_artifact_analysis",
+        "limitations": [],
+        "optional_sources": [
+         "modules",
+         "threads",
+         "memory_content"
+        ],
+        "required_source_groups": [
+         [
+          "memory_info",
+          "thread_info"
+         ]
+        ],
+        "required_sources": [
+         "memory_info",
+         "thread_info"
+        ],
+        "status": "available"
+       },
+       {
+        "capability_id": "thread_analysis",
+        "limitations": [],
+        "optional_sources": [
+         "modules"
+        ],
+        "required_source_groups": [
+         [
+          "threads",
+          "thread_info"
+         ]
+        ],
+        "required_sources": [
+         "threads",
+         "thread_info"
+        ],
+        "status": "available"
+       },
+       {
+        "capability_id": "handle_analysis",
+        "limitations": [],
+        "optional_sources": [],
+        "required_source_groups": [
+         [
+          "handles"
+         ]
+        ],
+        "required_sources": [
+         "handles"
+        ],
+        "status": "available"
+       },
+       {
+        "capability_id": "injector_handle_assessment",
+        "limitations": [],
+        "optional_sources": [
+         "threads"
+        ],
+        "required_source_groups": [
+         [
+          "handles"
+         ]
+        ],
+        "required_sources": [
+         "handles"
+        ],
+        "status": "available"
+       }
+      ],
+      "memory_capture": {
+       "captured_bytes_total": 32768,
+       "captured_segment_count": 7,
+       "full_memory_flag_set": true,
+       "memory64_list_present": true,
+       "memory_list_present": false
+      },
+      "raw_flags": 2,
+      "recognized_flags": [
+       "MiniDumpWithFullMemory"
+      ],
+      "streams": [
+       {
+        "detail": null,
+        "directory_index": 0,
+        "parser_state": "parsed",
+        "record_count": null,
+        "stream_type_id": 7,
+        "stream_type_name": "SystemInfoStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 1,
+        "parser_state": "parsed",
+        "record_count": 2,
+        "stream_type_id": 4,
+        "stream_type_name": "ModuleListStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 2,
+        "parser_state": "parsed",
+        "record_count": 4,
+        "stream_type_id": 3,
+        "stream_type_name": "ThreadListStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 3,
+        "parser_state": "parsed",
+        "record_count": 3,
+        "stream_type_id": 17,
+        "stream_type_name": "ThreadInfoListStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 4,
+        "parser_state": "parsed",
+        "record_count": 9,
+        "stream_type_id": 16,
+        "stream_type_name": "MemoryInfoListStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 5,
+        "parser_state": "parsed",
+        "record_count": 5,
+        "stream_type_id": 12,
+        "stream_type_name": "HandleDataStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 6,
+        "parser_state": "parsed",
+        "record_count": null,
+        "stream_type_id": 15,
+        "stream_type_name": "MiscInfoStream"
+       },
+       {
+        "detail": null,
+        "directory_index": 7,
+        "parser_state": "parsed",
+        "record_count": 7,
+        "stream_type_id": 9,
+        "stream_type_name": "Memory64ListStream"
+       }
+      ],
+      "unrecognized_flag_bits": 0
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "profile",
+   "summary": {
+    "capability_summary": {
+     "available": 6,
+     "limited": 0,
+     "unavailable": 0
+    },
+    "stream_count": 8
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550 PROFILE \u2550\u2550\u2550",
+  "  8 directory entries inventoried",
+  "",
+  "  Basic",
+  "    Architecture             AMD64",
+  "    Full memory (flag)       yes",
+  "    Captured memory content  7 segment(s), 32768 byte(s)",
+  "    Raw MINIDUMP_TYPE flags  0x2",
+  "    Recognized flags         MiniDumpWithFullMemory",
+  "",
+  "  Streams",
+  "    SystemInfoStream             parsed",
+  "    ModuleListStream             parsed [2]",
+  "    ThreadListStream             parsed [4]",
+  "    ThreadInfoListStream         parsed [3]",
+  "    MemoryInfoListStream         parsed [9]",
+  "    HandleDataStream             parsed [5]",
+  "    MiscInfoStream               parsed",
+  "    Memory64ListStream           parsed [7]",
+  "",
+  "  Analysis capabilities",
+  "    Memory-region analysis           available",
+  "    Module analysis                  available",
+  "    Injection-artifact analysis      available",
+  "    Thread analysis                  available",
+  "    Handle analysis                  available",
+  "    Injector-handle assessment       available",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}
