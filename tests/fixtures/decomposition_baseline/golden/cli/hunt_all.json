@@ -1,6 +1,6 @@
 {
  "argv": [
-  "<TMP>/sample.dmp",
+  "<TMP>/sample case.dmp",
   "--hunt",
   "all",
   "--json",
@@ -16,9 +16,9 @@
   "meta": {
    "evidence": [
     {
-     "file_name": "sample.dmp",
+     "file_name": "sample case.dmp",
      "id": "primary",
-     "path": "<TMP>/sample.dmp",
+     "path": "<TMP>/sample case.dmp",
      "role": "primary",
      "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
      "size_bytes": 35776
@@ -2164,10 +2164,10 @@
   "       Next: inspect metadata and correlated findings, extract the captured range, targeted",
   "       hunter-specific rescan",
   "       Rescan (match the new result back by hunter + source + scope + base_address + size):",
-  "         dumpex --hunt pipe --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample.dmp\"",
-  "         dumpex --hunt cs-beacon --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample.dmp\"",
-  "         dumpex --hunt yara --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample.dmp\"",
-  "         dumpex --hunt obfuscation --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample.dmp\"",
+  "         dumpex --hunt pipe --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt cs-beacon --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt yara --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt obfuscation --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
   "       No targeted rescan for: injection -- no --hunt-addr capability is registered for this hunter,",
   "       so its coverage gap on this target stays open.",
   "",
@@ -2178,8 +2178,8 @@
   "       Next: inspect metadata and correlated findings, extract the captured range, targeted",
   "       hunter-specific rescan",
   "       Rescan (match the new result back by hunter + source + scope + base_address + size):",
-  "         dumpex --hunt pipe --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample.dmp\"",
-  "         dumpex --hunt obfuscation --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample.dmp\"",
+  "         dumpex --hunt pipe --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt obfuscation --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample case.dmp\"",
   "       No targeted rescan for: injection -- no --hunt-addr capability is registered for this hunter,",
   "       so its coverage gap on this target stays open.",
   "",

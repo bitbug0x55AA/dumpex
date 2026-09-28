@@ -324,7 +324,9 @@ def _freeze(monkeypatch):
 
 
 def _write_inputs(scenario: Scenario, tmp: str) -> "tuple[str, str]":
-    dump = os.path.join(tmp, "sample.dmp")
+    # Rescan commands quote paths with spaces on both Windows and POSIX.
+    dump_name = "sample case.dmp" if scenario.name == "hunt_all" else "sample.dmp"
+    dump = os.path.join(tmp, dump_name)
     ref = os.path.join(tmp, "reference.dmp")
     if scenario.dump in ("primary", "leads"):
         spec = leads_spec() if scenario.dump == "leads" else primary_spec()
