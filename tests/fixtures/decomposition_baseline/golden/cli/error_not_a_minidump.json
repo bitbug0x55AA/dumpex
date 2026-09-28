@@ -1,0 +1,15 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--modules"
+ ],
+ "exit_code": 1,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[!] Could not parse <TMP>/sample.dmp as a minidump file: MinidumpHeaderSignatureMismatchException: siht",
+  "    The file may be corrupted, truncated, or not a Windows minidump (.dmp) at all.",
+  ""
+ ]
+}

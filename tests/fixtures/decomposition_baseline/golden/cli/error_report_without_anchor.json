@@ -1,0 +1,14 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--report"
+ ],
+ "exit_code": 1,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[!] --report requires at least one of: --report-tid, --report-addr, --report-string",
+  ""
+ ]
+}

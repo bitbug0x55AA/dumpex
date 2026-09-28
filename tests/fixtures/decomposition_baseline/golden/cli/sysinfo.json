@@ -1,0 +1,186 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--sysinfo",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "sysinfo",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "dump_file": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "environment_block": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     },
+     "misc_info": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "peb": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "sysinfo": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "architecture": "AMD64",
+      "cpu_current_mhz": null,
+      "cpu_max_mhz": null,
+      "cpu_vendor": null,
+      "current_directory": "D:\\Cases\\Work\\",
+      "dump_file": "sample.dmp",
+      "dump_file_size_bytes": 35776,
+      "dump_sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+      "dump_time_utc": "2020-09-13 12:26:40 UTC",
+      "environment_variables": [
+       {
+        "name": "COMPUTERNAME",
+        "value": "HOST-SYNTH"
+       },
+       {
+        "name": "USERNAME",
+        "value": "analyst"
+       },
+       {
+        "name": "PATH",
+        "value": "C:\\Windows"
+       },
+       {
+        "name": "PROCESSOR_ARCHITECTURE",
+        "value": "AMD64"
+       }
+      ],
+      "hostname": "HOST-SYNTH",
+      "module_count": 2,
+      "os": "Windows 10 - 22H2",
+      "os_version": "10.0.19045",
+      "processors": 4,
+      "product_type": "VER_NT_WORKSTATION",
+      "thread_count": 4,
+      "username": "analyst"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "sysinfo",
+   "summary": {
+    "count": 1
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550 DUMP \u2550\u2550\u2550",
+  "    File                   sample.dmp",
+  "    Size                   34.9 KiB (35776 bytes)",
+  "    SHA-256                169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+  "    Dump Time              2020-09-13 12:26:40 UTC",
+  "    Threads in dump        4",
+  "    Modules in dump        2",
+  "",
+  "\u2550\u2550\u2550 SYSTEM INFO \u2550\u2550\u2550",
+  "",
+  "  Operating System",
+  "    OS                     Windows 10 - 22H2",
+  "    Version                10.0.19045",
+  "    Architecture           AMD64",
+  "    Product Type           VER_NT_WORKSTATION",
+  "",
+  "  Host",
+  "    Hostname               HOST-SYNTH",
+  "    Username               analyst",
+  "",
+  "  CPU",
+  "    Processors             4",
+  "",
+  "\u2550\u2550\u2550 ENVIRONMENT \u2550\u2550\u2550",
+  "    Current Directory      D:\\Cases\\Work\\",
+  "    Environment Variables  4 captured (--verbose or --json to view)",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

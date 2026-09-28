@@ -1,0 +1,14 @@
+{
+ "argv": [
+  "<TMP>/absent.dmp",
+  "--modules"
+ ],
+ "exit_code": 1,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[!] File not found: <TMP>/absent.dmp",
+  ""
+ ]
+}

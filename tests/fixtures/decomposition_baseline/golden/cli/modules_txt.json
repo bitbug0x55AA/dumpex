@@ -1,0 +1,45 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--modules",
+  "--txt",
+  "<TMP>/out.txt"
+ ],
+ "exit_code": 0,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "  app.exe",
+  "  Full path          C:\\Program Files\\Sample\\app.exe",
+  "  Base \u2192 End         0x00007ff600000000 \u2192 0x00007ff600003000  (size 0x3000)",
+  "  Compiled (UTC)     2020-09-13 12:26:40 UTC",
+  "  Checksum           0x00001234",
+  "",
+  "  ntdll.dll",
+  "  Full path          C:\\Windows\\System32\\ntdll.dll",
+  "  Base \u2192 End         0x00007ffe00000000 \u2192 0x00007ffe00002000  (size 0x2000)",
+  "  Compiled (UTC)     2020-07-04 04:05:20 UTC",
+  "",
+  "[+] 2 module(s).",
+  "  [\u00b7] TXT  written \u2192 <TMP>/out.txt  (<WRITTEN>)",
+  ""
+ ],
+ "txt": [
+  "",
+  "  app.exe",
+  "  Full path          C:\\Program Files\\Sample\\app.exe",
+  "  Base \u2192 End         0x00007ff600000000 \u2192 0x00007ff600003000  (size 0x3000)",
+  "  Compiled (UTC)     2020-09-13 12:26:40 UTC",
+  "  Checksum           0x00001234",
+  "",
+  "  ntdll.dll",
+  "  Full path          C:\\Windows\\System32\\ntdll.dll",
+  "  Base \u2192 End         0x00007ffe00000000 \u2192 0x00007ffe00002000  (size 0x2000)",
+  "  Compiled (UTC)     2020-07-04 04:05:20 UTC",
+  "",
+  "[+] 2 module(s).",
+  ""
+ ]
+}

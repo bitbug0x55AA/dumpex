@@ -1,0 +1,129 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--strings",
+  "0x30000000",
+  "-s",
+  "0x800",
+  "--grep",
+  "c2",
+  "--strings-encoding",
+  "ascii",
+  "--min-len",
+  "8",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "strings_0x30000000",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "encoding": "ascii",
+     "grep": "c2",
+     "min_len": 8,
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "requested_region": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "address": "0x0000000030000400",
+      "encoding": "ASCII",
+      "matched_grep": true,
+      "offset": 1024,
+      "text": "GET http://c2.example.test/beacon?id=7 HTTP/1.1"
+     },
+     {
+      "address": "0x0000000030000500",
+      "encoding": "ASCII",
+      "matched_grep": false,
+      "offset": 1280,
+      "text": "User-Agent: Mozilla/5.0 (synthetic)"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "strings",
+   "summary": {
+    "auto_sized": false,
+    "bytes_read": 2048,
+    "count": 2,
+    "requested_address": "0x0000000030000000",
+    "requested_size": 2048,
+    "shown": 1
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[*] Extracting strings from 0x30000000 (size=0x800, min=8, enc=ascii)",
+  "",
+  "Offset         Enc     String",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "0x30000400     ASCII   GET http://c2.example.test/beacon?id=7 HTTP/1.1",
+  "",
+  "[+] 1 string(s) shown.",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

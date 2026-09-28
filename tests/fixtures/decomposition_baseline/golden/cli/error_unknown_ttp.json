@@ -1,0 +1,15 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--hunt",
+  "bogus"
+ ],
+ "exit_code": 1,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[!] Unknown TTP 'bogus'. Choose from: all, cs-beacon, hollowing, injection, obfuscation, pipe, stomping, yara",
+  ""
+ ]
+}

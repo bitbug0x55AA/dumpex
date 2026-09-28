@@ -1,0 +1,23 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--extract",
+  "0x60000000",
+  "-s",
+  "0x10",
+  "-o",
+  "<TMP>/out.bin",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 1,
+ "json": null,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[*] Reading 0x10 bytes from 0x60000000 ...",
+  "[!] Read failed: Memory address 0x60000000 is not in process memory space",
+  ""
+ ]
+}

@@ -1,0 +1,108 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--list",
+  "--filter",
+  "PAGE_EXECUTE_READWRITE",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "list",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "filter": "PAGE_EXECUTE_READWRITE",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "base_address": "0x0000000030000000",
+      "protect": "PAGE_EXECUTE_READWRITE",
+      "size": 8192,
+      "state": "MEM_COMMIT",
+      "suspicious": true,
+      "type": "MEM_PRIVATE"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "memory_regions",
+   "summary": {
+    "count": 1
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "Address                  Size           State          Protection                       Type",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "0x0000000030000000       0x2000         MEM_COMMIT     PAGE_EXECUTE_READWRITE           MEM_PRIVATE",
+  "",
+  "[+] 1 region(s) shown.",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

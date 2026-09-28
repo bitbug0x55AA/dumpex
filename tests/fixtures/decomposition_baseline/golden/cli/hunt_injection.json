@@ -1,0 +1,543 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--hunt",
+  "injection",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "hunt_injection",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "hunt": "injection",
+     "ref_dir": null,
+     "rules_file": null,
+     "triage_skipped": false,
+     "verbose": false,
+     "yara_dir": null
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 8192,
+     "complete": false,
+     "distinct_ranges": 1,
+     "eligible_bytes": null,
+     "quantified_gaps": 1,
+     "state": "lower_bound",
+     "unquantified_gaps": 1,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 8192
+    },
+    "reasons": [],
+    "sources": {},
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "confidence": "high",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "PE_HEADER_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "hidden_pe_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "PE_HEADER_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "hidden_pe_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": null,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": null
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SOURCE_KEY_MISMATCH",
+         "counterpart_source": "thread_list",
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "thread",
+         "source": "thread_info",
+         "targets": [],
+         "thread_id": null,
+         "unavailable_fields": [
+          "StartAddress",
+          "CreateTime",
+          "ExitTime",
+          "KernelTime",
+          "UserTime",
+          "DumpFlags"
+         ]
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 8192,
+        "complete": false,
+        "distinct_ranges": 1,
+        "eligible_bytes": 24576,
+        "quantified_gaps": 1,
+        "state": "lower_bound",
+        "unquantified_gaps": 1,
+        "unscanned_fraction": 0.3333333333333333,
+        "unscanned_pass_bytes": 8192
+       },
+       "reasons": [
+        "1 region(s) failed to read while checking for hidden PE headers: 0x000000007ffde000 (8 KB)",
+        "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined: 0x0000000040000000 (4 KB)",
+        "1 thread(s) present in thread_list but missing from ThreadInfoListStream (StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those)"
+       ],
+       "sources": {
+        "hidden_pe_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "memory_info": {
+         "detail": null,
+         "record_count": 9,
+         "state": "present"
+        },
+        "modules": {
+         "detail": null,
+         "record_count": 2,
+         "state": "present"
+        },
+        "thread_context": {
+         "detail": null,
+         "record_count": 4,
+         "state": "present"
+        },
+        "thread_info": {
+         "detail": null,
+         "record_count": 3,
+         "state": "present"
+        },
+        "thread_list": {
+         "detail": null,
+         "record_count": 4,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "hidden_pe_unvalidated": [],
+       "hidden_pe_validated": [
+        {
+         "entry_point_rva": 4096,
+         "file_offset": "0x0000000000004b40",
+         "image_base": "0x0000000030000000",
+         "is_pe32_plus": true,
+         "machine_name": "AMD64",
+         "number_of_sections": 1,
+         "reason": null,
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "region_offset": 0,
+         "va": "0x0000000030000000",
+         "valid": true
+        }
+       ],
+       "informational_validated_pe_hits": [],
+       "rip_full_correlation": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": "0x0000000030000100",
+          "ip_context_conflict": false,
+          "ip_reg": "RIP",
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "rip_hits": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": "0x0000000030000100",
+          "ip_context_conflict": false,
+          "ip_reg": "RIP",
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "rwx": [
+        {
+         "allocation_base": "0x0000000030000000",
+         "base_address": "0x0000000030000000",
+         "protect": "PAGE_EXECUTE_READWRITE",
+         "size": 8192,
+         "type": "MEM_PRIVATE"
+        }
+       ],
+       "rwx_and_pe_alloc_bases": [
+        "0x0000000030000000"
+       ],
+       "start_hits": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": null,
+          "ip_context_conflict": false,
+          "ip_reg": null,
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "suspicious_validated_pe_hits": [
+        {
+         "entry_point_rva": 4096,
+         "file_offset": "0x0000000000004b40",
+         "image_base": "0x0000000030000000",
+         "is_pe32_plus": true,
+         "machine_name": "AMD64",
+         "number_of_sections": 1,
+         "reason": null,
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "region_offset": 0,
+         "va": "0x0000000030000000",
+         "valid": true
+        }
+       ],
+       "thread_contexts": [
+        {
+         "ip": "0x00007ff600001010",
+         "ip_context_conflict": false,
+         "ip_reg": "RIP",
+         "start_address": "0x00007ff600001000",
+         "tid": 256
+        },
+        {
+         "ip": "0x0000000030000100",
+         "ip_context_conflict": false,
+         "ip_reg": "RIP",
+         "start_address": "0x0000000030000100",
+         "tid": 260
+        },
+        {
+         "ip": "0x00007ffe00000500",
+         "ip_context_conflict": true,
+         "ip_reg": "RIP",
+         "start_address": "0x00007ffe00000400",
+         "tid": 264
+        },
+        {
+         "ip": "0x00007ff600001020",
+         "ip_context_conflict": null,
+         "ip_reg": "RIP",
+         "start_address": null,
+         "tid": 268
+        }
+       ],
+       "threads": [
+        {
+         "ip": null,
+         "ip_context_conflict": false,
+         "ip_reg": null,
+         "start_address": "0x0000000030000100",
+         "tid": 260
+        }
+       ]
+      },
+      "findings": [
+       {
+        "check": "injection.rwx_regions",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
+        ],
+        "id": "finding-68c870c887310c3eab914d30210d7e41",
+        "inference": "1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).",
+        "iocs": [],
+        "limitations": [
+         "Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases."
+        ],
+        "rationale": "RWX is a directly-observed page protection flag, not a heuristic guess \u2014 but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.",
+        "rule_id": "injection.rwx_regions",
+        "rule_version": null,
+        "severity": "medium",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.hidden_pe_validated",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x0000000030000000"
+        ],
+        "id": "finding-eee3d4c97706eae395038c04824cfe84",
+        "inference": "1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
+        "iocs": [],
+        "limitations": [
+         "Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted."
+        ],
+        "rationale": "Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) \u2014 confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.",
+        "rule_id": "injection.hidden_pe_validated",
+        "rule_version": null,
+        "severity": "medium",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.unbacked_thread_startaddress",
+        "confidence": "low",
+        "evidence_refs": [],
+        "facts": [
+         "TID=0x104 StartAddress=0x0000000030000100"
+        ],
+        "id": "finding-96657aa9b8888d05b3c90273523c83ee",
+        "inference": "1 thread(s) began execution at an address not covered by any known module.",
+        "iocs": [],
+        "limitations": [],
+        "rationale": "StartAddress records where a thread BEGAN, not where it is executing now \u2014 a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.",
+        "rule_id": "injection.unbacked_thread_startaddress",
+        "rule_version": null,
+        "severity": "low",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.allocation_correlation",
+        "confidence": "high",
+        "evidence_refs": [],
+        "facts": [
+         "TID=0x104 RIP=0x0000000030000100 -> VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE  [FULL: RWX+validated-PE]"
+        ],
+        "id": "finding-6d215fb633ec528f30810760e6254be3",
+        "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
+        "iocs": [],
+        "limitations": [
+         "RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here."
+        ],
+        "rationale": "This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.",
+        "rule_id": "injection.allocation_correlation",
+        "rule_version": null,
+        "severity": "critical",
+        "tag": "detection",
+        "technique_ids": []
+       }
+      ],
+      "hunter": "injection",
+      "lead_count": 3,
+      "max_score": 3,
+      "review_priority": "high",
+      "score": 3,
+      "status": "DETECTED",
+      "verdict_level": "high"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "hunt",
+   "summary": {
+    "detected_count": 1,
+    "highest_verdict_level": "high",
+    "hunter_count": 1,
+    "inconclusive_count": 0,
+    "investigation_actions": [],
+    "lead_count": 3,
+    "not_evaluated_count": 0,
+    "overall_status": "DETECTED",
+    "scan_scope": {
+     "kind": "full"
+    },
+    "selected": "injection"
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Process Injection",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     HIGH CONFIDENCE INJECTION",
+  "  Confidence  high",
+  "  Score       3/3",
+  "  Coverage    PARTIAL \u2014 at least 8 KB unscanned across 1 range(s) (at least 33% of 24 KB eligible),",
+  "              plus 1 gap(s) of unmeasured extent; 1 region(s) short-read by the hidden-PE scan; +1",
+  "              more (see COVERAGE)",
+  "  Review      high",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [!] DETECTION  Live execution in a correlated allocation",
+  "      1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a",
+  "      validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on",
+  "      the same AllocationBase.",
+  "",
+  "  [~] LEAD       RWX memory",
+  "      1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct",
+  "      allocation(s).",
+  "",
+  "  [~] LEAD       Hidden PE header",
+  "      1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section",
+  "      table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE",
+  "      memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live",
+  "      thread execution.",
+  "",
+  "  [~] LEAD       Unbacked thread start",
+  "      1 thread(s) began execution at an address not covered by any known module.",
+  "",
+  "  WHY THIS VERDICT",
+  "",
+  "  Inference",
+  "    1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a",
+  "    validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the",
+  "    same AllocationBase.",
+  "",
+  "  Confidence: HIGH",
+  "    This is the strongest evidence this hunter can produce: the process is, at the moment of the",
+  "    dump, actively running code from an allocation with no legitimate module backing and a concealed",
+  "    PE image.",
+  "",
+  "  Caveat",
+  "    RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the",
+  "    dump was captured would not appear here.",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 region(s) failed to read while checking for hidden PE headers",
+  "      1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short",
+  "      read) \u2014 not fully examined",
+  "      1 thread(s) present in ThreadListStream have no ThreadInfoListStream record \u2014 where those",
+  "      threads began could not be checked at all",
+  "",
+  "  Use --verbose for complete per-region evidence and file offsets.",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

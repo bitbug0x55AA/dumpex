@@ -1,0 +1,2215 @@
+{
+ "argv": [
+  "<TMP>/sample case.dmp",
+  "--hunt",
+  "all",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample case.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample case.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "hunt_all",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "hunt": "all",
+     "ref_dir": null,
+     "rules_file": null,
+     "triage_skipped": false,
+     "verbose": false,
+     "yara_dir": null
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "rules": {
+    "explicit": false,
+    "path": "<dumpex.rules_pkg>/data/rules.yaml",
+    "sha256": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+    "version": 1
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   },
+   "yara_rules": {
+    "aggregate_sha256": "5e964b520e76a37050cb954b62ece6304c667b757d512be9f911ec87aa49d642",
+    "compile_failed": 0,
+    "compiled_ok": 3,
+    "files": [
+     {
+      "compiled": true,
+      "error": null,
+      "name": "cs_indicators.yar",
+      "sha256": "e4f3e7578991090acda4f6c083bfb6620bc099e5246d9a3702b93de763274d7a"
+     },
+     {
+      "compiled": true,
+      "error": null,
+      "name": "lateral_movement.yar",
+      "sha256": "a75f4c15d17c34b08bf30f86f92011f27e5d66a9d858c6f880759a8199e0dc2b"
+     },
+     {
+      "compiled": true,
+      "error": null,
+      "name": "suspicious_memory.yar",
+      "sha256": "cd84e9918e93beb255355b3e8c8684015b3beca0f95fa706ae031194b860950c"
+     }
+    ],
+    "rules_dir": "<REPO>/dumpex/rules_pkg/data/yara"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 12160,
+     "complete": false,
+     "distinct_ranges": 2,
+     "eligible_bytes": null,
+     "quantified_gaps": 15,
+     "state": "lower_bound",
+     "unquantified_gaps": 2,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 36480
+    },
+    "reasons": [],
+    "sources": {},
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "confidence": "high",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "PE_HEADER_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "hidden_pe_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "PE_HEADER_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "hidden_pe_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": null,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": null
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SOURCE_KEY_MISMATCH",
+         "counterpart_source": "thread_list",
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "thread",
+         "source": "thread_info",
+         "targets": [],
+         "thread_id": null,
+         "unavailable_fields": [
+          "StartAddress",
+          "CreateTime",
+          "ExitTime",
+          "KernelTime",
+          "UserTime",
+          "DumpFlags"
+         ]
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 8192,
+        "complete": false,
+        "distinct_ranges": 1,
+        "eligible_bytes": 24576,
+        "quantified_gaps": 1,
+        "state": "lower_bound",
+        "unquantified_gaps": 1,
+        "unscanned_fraction": 0.3333333333333333,
+        "unscanned_pass_bytes": 8192
+       },
+       "reasons": [
+        "1 region(s) failed to read while checking for hidden PE headers: 0x000000007ffde000 (8 KB)",
+        "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined: 0x0000000040000000 (4 KB)",
+        "1 thread(s) present in thread_list but missing from ThreadInfoListStream (StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those)"
+       ],
+       "sources": {
+        "hidden_pe_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "memory_info": {
+         "detail": null,
+         "record_count": 9,
+         "state": "present"
+        },
+        "modules": {
+         "detail": null,
+         "record_count": 2,
+         "state": "present"
+        },
+        "thread_context": {
+         "detail": null,
+         "record_count": 4,
+         "state": "present"
+        },
+        "thread_info": {
+         "detail": null,
+         "record_count": 3,
+         "state": "present"
+        },
+        "thread_list": {
+         "detail": null,
+         "record_count": 4,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "hidden_pe_unvalidated": [],
+       "hidden_pe_validated": [
+        {
+         "entry_point_rva": 4096,
+         "file_offset": "0x0000000000004b40",
+         "image_base": "0x0000000030000000",
+         "is_pe32_plus": true,
+         "machine_name": "AMD64",
+         "number_of_sections": 1,
+         "reason": null,
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "region_offset": 0,
+         "va": "0x0000000030000000",
+         "valid": true
+        }
+       ],
+       "informational_validated_pe_hits": [],
+       "rip_full_correlation": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": "0x0000000030000100",
+          "ip_context_conflict": false,
+          "ip_reg": "RIP",
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "rip_hits": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": "0x0000000030000100",
+          "ip_context_conflict": false,
+          "ip_reg": "RIP",
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "rwx": [
+        {
+         "allocation_base": "0x0000000030000000",
+         "base_address": "0x0000000030000000",
+         "protect": "PAGE_EXECUTE_READWRITE",
+         "size": 8192,
+         "type": "MEM_PRIVATE"
+        }
+       ],
+       "rwx_and_pe_alloc_bases": [
+        "0x0000000030000000"
+       ],
+       "start_hits": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "ip": null,
+          "ip_context_conflict": false,
+          "ip_reg": null,
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ],
+       "suspicious_validated_pe_hits": [
+        {
+         "entry_point_rva": 4096,
+         "file_offset": "0x0000000000004b40",
+         "image_base": "0x0000000030000000",
+         "is_pe32_plus": true,
+         "machine_name": "AMD64",
+         "number_of_sections": 1,
+         "reason": null,
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "region_offset": 0,
+         "va": "0x0000000030000000",
+         "valid": true
+        }
+       ],
+       "thread_contexts": [
+        {
+         "ip": "0x00007ff600001010",
+         "ip_context_conflict": false,
+         "ip_reg": "RIP",
+         "start_address": "0x00007ff600001000",
+         "tid": 256
+        },
+        {
+         "ip": "0x0000000030000100",
+         "ip_context_conflict": false,
+         "ip_reg": "RIP",
+         "start_address": "0x0000000030000100",
+         "tid": 260
+        },
+        {
+         "ip": "0x00007ffe00000500",
+         "ip_context_conflict": true,
+         "ip_reg": "RIP",
+         "start_address": "0x00007ffe00000400",
+         "tid": 264
+        },
+        {
+         "ip": "0x00007ff600001020",
+         "ip_context_conflict": null,
+         "ip_reg": "RIP",
+         "start_address": null,
+         "tid": 268
+        }
+       ],
+       "threads": [
+        {
+         "ip": null,
+         "ip_context_conflict": false,
+         "ip_reg": null,
+         "start_address": "0x0000000030000100",
+         "tid": 260
+        }
+       ]
+      },
+      "findings": [
+       {
+        "check": "injection.rwx_regions",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
+        ],
+        "id": "finding-68c870c887310c3eab914d30210d7e41",
+        "inference": "1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).",
+        "iocs": [],
+        "limitations": [
+         "Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases."
+        ],
+        "rationale": "RWX is a directly-observed page protection flag, not a heuristic guess \u2014 but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.",
+        "rule_id": "injection.rwx_regions",
+        "rule_version": null,
+        "severity": "medium",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.hidden_pe_validated",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x0000000030000000"
+        ],
+        "id": "finding-eee3d4c97706eae395038c04824cfe84",
+        "inference": "1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
+        "iocs": [],
+        "limitations": [
+         "Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted."
+        ],
+        "rationale": "Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) \u2014 confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.",
+        "rule_id": "injection.hidden_pe_validated",
+        "rule_version": null,
+        "severity": "medium",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.unbacked_thread_startaddress",
+        "confidence": "low",
+        "evidence_refs": [],
+        "facts": [
+         "TID=0x104 StartAddress=0x0000000030000100"
+        ],
+        "id": "finding-96657aa9b8888d05b3c90273523c83ee",
+        "inference": "1 thread(s) began execution at an address not covered by any known module.",
+        "iocs": [],
+        "limitations": [],
+        "rationale": "StartAddress records where a thread BEGAN, not where it is executing now \u2014 a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.",
+        "rule_id": "injection.unbacked_thread_startaddress",
+        "rule_version": null,
+        "severity": "low",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "injection.allocation_correlation",
+        "confidence": "high",
+        "evidence_refs": [],
+        "facts": [
+         "TID=0x104 RIP=0x0000000030000100 -> VA=0x0000000030000000 AllocationBase=0x0000000030000000 size=0x2000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE  [FULL: RWX+validated-PE]"
+        ],
+        "id": "finding-6d215fb633ec528f30810760e6254be3",
+        "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
+        "iocs": [],
+        "limitations": [
+         "RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here."
+        ],
+        "rationale": "This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.",
+        "rule_id": "injection.allocation_correlation",
+        "rule_version": null,
+        "severity": "critical",
+        "tag": "detection",
+        "technique_ids": []
+       }
+      ],
+      "hunter": "injection",
+      "lead_count": 3,
+      "max_score": 3,
+      "review_priority": "high",
+      "score": 3,
+      "status": "DETECTED",
+      "verdict_level": "high"
+     },
+     {
+      "confidence": "none",
+      "coverage": {
+       "limitations": [],
+       "missed_bytes": {
+        "bytes": 0,
+        "complete": true,
+        "distinct_ranges": 0,
+        "eligible_bytes": null,
+        "quantified_gaps": 0,
+        "state": "exact",
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
+       },
+       "reasons": [],
+       "sources": {
+        "image_base_region": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "modules": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "mz_header_read": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "peb": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        }
+       },
+       "status": "complete"
+      },
+      "details": {
+       "image_base": "0x00007ff600000000",
+       "is_rwx_at_base": false,
+       "mem_private_at_base": false,
+       "module_name": "C:\\Program Files\\Sample\\app.exe",
+       "mz_header_present": true,
+       "name_mismatch": false,
+       "peb_image_path": "C:\\Program Files\\Sample\\app.exe",
+       "region_type": "MEM_IMAGE"
+      },
+      "findings": [],
+      "hunter": "hollowing",
+      "lead_count": 0,
+      "max_score": 2,
+      "review_priority": "none",
+      "score": 0,
+      "status": "NOT_DETECTED_IN_SCANNED_SCOPE",
+      "verdict_level": "clean"
+     },
+     {
+      "confidence": "none",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "MODULE_HEADER_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "module_headers",
+         "targets": [],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": null,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "STOMPING_REFERENCE_NOT_SUPPLIED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "dump",
+         "source": "reference_files",
+         "targets": [],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "ioc_string_scan",
+         "targets": [
+          {
+           "allocation_base": "0x00007ffe00000000",
+           "base_address": "0x00007ffe00000000",
+           "capture_state": "none",
+           "captured_size": 0,
+           "examined_size": 0,
+           "file_offset": null,
+           "kind": "memory_region",
+           "protection": "PAGE_EXECUTE_READ",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_IMAGE",
+           "unexamined_size": 0
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 0,
+        "complete": false,
+        "distinct_ranges": 0,
+        "eligible_bytes": 4096,
+        "quantified_gaps": 1,
+        "state": "lower_bound",
+        "unquantified_gaps": 1,
+        "unscanned_fraction": 0.0,
+        "unscanned_pass_bytes": 0
+       },
+       "reasons": [
+        "1 module header read(s) failed",
+        "--ref-dir not supplied -- verified content comparison (the only scored signal) was not performed for any module",
+        "1 region(s) failed to read: 0x00007ffe00000000 (8 KB)"
+       ],
+       "sources": {
+        "ioc_string_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "memory_info": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "module_headers": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "modules": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "reference_files": {
+         "detail": null,
+         "record_count": null,
+         "state": "absent"
+        },
+        "section_content_diff": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "protection_leads": [],
+       "verified_changes": []
+      },
+      "findings": [
+       {
+        "check": "stomping.protection_deviation_lead",
+        "confidence": "low",
+        "evidence_refs": [],
+        "facts": [
+         "1 module(s) checked"
+        ],
+        "id": "finding-51cd345b3a3bde671413fce994c57d96",
+        "inference": "No module section declared executable-but-not-writable shows a live protection state outside the normal set.",
+        "iocs": [],
+        "limitations": [],
+        "rationale": "Absence of a protection anomaly is weak evidence of absence \u2014 stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
+        "rule_id": "stomping.protection_deviation_lead",
+        "rule_version": null,
+        "severity": "info",
+        "tag": "observation",
+        "technique_ids": []
+       }
+      ],
+      "hunter": "stomping",
+      "lead_count": 0,
+      "max_score": 2,
+      "review_priority": "low",
+      "score": 0,
+      "status": "INCONCLUSIVE",
+      "verdict_level": "inconclusive"
+     },
+     {
+      "confidence": "high",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 3,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "pipe_name_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          },
+          {
+           "allocation_base": "0x00007ff600000000",
+           "base_address": "0x00007ff600002000",
+           "capture_state": "none",
+           "captured_size": 0,
+           "examined_size": 0,
+           "file_offset": null,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_IMAGE",
+           "unexamined_size": 0
+          },
+          {
+           "allocation_base": "0x00007ffe00000000",
+           "base_address": "0x00007ffe00000000",
+           "capture_state": "none",
+           "captured_size": 0,
+           "examined_size": 0,
+           "file_offset": null,
+           "kind": "memory_region",
+           "protection": "PAGE_EXECUTE_READ",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_IMAGE",
+           "unexamined_size": 0
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "pipe_name_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 12160,
+        "complete": true,
+        "distinct_ranges": 2,
+        "eligible_bytes": 32768,
+        "quantified_gaps": 4,
+        "state": "exact",
+        "unquantified_gaps": 0,
+        "unscanned_fraction": 0.37109375,
+        "unscanned_pass_bytes": 12160
+       },
+       "reasons": [
+        "3 region(s) failed to read: 0x000000007ffde000 (8 KB), 0x00007ff600002000 (4 KB), 0x00007ffe00000000 (8 KB)",
+        "1 region(s) returned fewer bytes than declared (short read) -- not fully scanned: 0x0000000040000000 (4 KB)"
+       ],
+       "sources": {
+        "handle_data": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "memory_info": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "pipe_name_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "c2_context": [
+        {
+         "name": "\\pipe\\msagent_12",
+         "records": [
+          {
+           "context": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000047455420687474703a2f2f63322e6578616d706c652e746573742f626561636f6e3f69643d3720485454502f312e310000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005c005c002e005c0070006900700065005c006d0073006100670065006e0074005f003100320000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000055736572",
+           "match": "http://",
+           "original_length": 7,
+           "sha256": "8c8dac95aa0a16cdc1d9219faf6edef368449abe8bc11404601ca000013efe9d",
+           "va": "0x0000000030000404"
+          }
+         ],
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         }
+        }
+       ],
+       "framework_pipes": [
+        {
+         "canonical_name": "msagent_12",
+         "framework_match": {
+          "framework": "Cobalt Strike",
+          "mitre": "T1090.001",
+          "technique": "SMB Beacon peer-to-peer pipe \u2014 default msagent pipe name"
+         },
+         "handle": {
+          "granted_access": 1180063,
+          "handle": "0x000000000000000c",
+          "object_name": "\\Device\\NamedPipe\\msagent_12",
+          "type_name": "File"
+         }
+        }
+       ],
+       "handle_pipes": [
+        {
+         "canonical_name": "msagent_12",
+         "framework_match": {
+          "framework": "Cobalt Strike",
+          "mitre": "T1090.001",
+          "technique": "SMB Beacon peer-to-peer pipe \u2014 default msagent pipe name"
+         },
+         "handle": {
+          "granted_access": 1180063,
+          "handle": "0x000000000000000c",
+          "object_name": "\\Device\\NamedPipe\\msagent_12",
+          "type_name": "File"
+         }
+        }
+       ],
+       "private_pipes": [
+        {
+         "encoding": "utf16le",
+         "name": "\\pipe\\msagent_12",
+         "offset": 1158,
+         "original_length": 32,
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "sha256": "33f80bfdffdd68f734d88c6a61ba3b7f7b2673a1caf1cf1e1c13ab8390e3f8b9",
+         "truncated": false
+        }
+       ],
+       "unbacked_in_rgn": [
+        {
+         "region": {
+          "allocation_base": "0x0000000030000000",
+          "base_address": "0x0000000030000000",
+          "protect": "PAGE_EXECUTE_READWRITE",
+          "size": 8192,
+          "type": "MEM_PRIVATE"
+         },
+         "thread": {
+          "start_address": "0x0000000030000100",
+          "tid": 260
+         }
+        }
+       ]
+      },
+      "findings": [
+       {
+        "check": "pipe.open_handles",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "Handle=0xc ObjectName=\\Device\\NamedPipe\\msagent_12 GrantedAccess=0x12019f  [framework=Cobalt Strike]"
+        ],
+        "id": "finding-d192af3af90b354c7031559aebf97b3f",
+        "inference": "Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.",
+        "iocs": [],
+        "limitations": [
+         "Presence of a pipe handle is not inherently suspicious."
+        ],
+        "rationale": "HandleDataStream is the OS's own record of what this process actually has open \u2014 far stronger than a bare string match, but having ANY pipe handle open is completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.); only a handle whose name matches a known C2/lateral-movement framework convention, or one corroborated by nearby C2 context / active execution, is treated as a detection.",
+        "rule_id": "pipe.open_handles",
+        "rule_version": null,
+        "severity": "info",
+        "tag": "observation",
+        "technique_ids": []
+       },
+       {
+        "check": "pipe.handle_framework_match",
+        "confidence": "medium",
+        "evidence_refs": [],
+        "facts": [
+         "Handle=0xc ObjectName=\\Device\\NamedPipe\\msagent_12 framework=Cobalt Strike technique=SMB Beacon peer-to-peer pipe \u2014 default msagent pipe name mitre=T1090.001"
+        ],
+        "id": "finding-123cdd1f91a95b516778019403bcfb04",
+        "inference": "1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.",
+        "iocs": [],
+        "limitations": [
+         "Framework pipe-name conventions can be renamed/customized by an operator; absence of a match does not mean absence of C2."
+        ],
+        "rationale": "An OS-confirmed open handle (not just a string sitting in memory) whose name matches a specific, narrow framework convention (e.g. Cobalt Strike's msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental \u2014 raised to HIGH only when further corroborated (see pipe.corroboration below).",
+        "rule_id": "pipe.handle_framework_match",
+        "rule_version": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+        "severity": "high",
+        "tag": "detection",
+        "technique_ids": [
+         "T1090.001"
+        ]
+       },
+       {
+        "check": "pipe.string_scan_lead",
+        "confidence": "low",
+        "evidence_refs": [],
+        "facts": [
+         "VA=0x0000000030000486 file_offset=0x4fc6 name='\\\\pipe\\\\msagent_12' region_type=MEM_PRIVATE"
+        ],
+        "id": "finding-a1ab83d96686ad4b8678df8bf4b86f0e",
+        "inference": "1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
+        "iocs": [],
+        "limitations": [
+         "Every one of these 1 occurrence(s) shares a canonical name with an open handle reported above (see pipe.open_handles/pipe.handle_framework_match/pipe.corroboration) \u2014 the string match itself is still not scored; see those checks for the scored handle evidence."
+        ],
+        "rationale": "A string match proves only that these bytes exist somewhere in memory \u2014 not that any handle was ever opened by that name, nor that the name isn't leftover/freed heap data or an unrelated buffer. Reported as a lead for the analyst and to locate regions for C2-context/execution correlation; does NOT contribute to the pipe score on its own.",
+        "rule_id": "pipe.string_scan_lead",
+        "rule_version": null,
+        "severity": "low",
+        "tag": "lead",
+        "technique_ids": []
+       },
+       {
+        "check": "pipe.corroboration",
+        "confidence": "high",
+        "evidence_refs": [],
+        "facts": [
+         "Handle=0xc ObjectName=\\Device\\NamedPipe\\msagent_12 pipe_va=0x0000000030000486  c2_va=0x0000000030000404 c2_match='http://' distance=0x82 same_page=True  live_rip=TID:0x104@RIP=0x0000000030000100 distance=0x386 same_page=True"
+        ],
+        "id": "finding-41274fb22f1fe113342235e97638e543",
+        "inference": "1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within \u00b14096 bytes of a matching pipe-name string's own address.",
+        "iocs": [],
+        "limitations": [
+         "Name correlation between a handle's ObjectName and a string scan hit uses exact match on the canonicalized pipe name (prefix stripped, casefolded) \u2014 still not a cryptographic guarantee both refer to the identical kernel object if the process has multiple same-named pipe instances.",
+         "Proximity window is \u00b14096 bytes, not a proof of logical association \u2014 an unrelated string or thread could coincidentally fall within that window in a dense region."
+        ],
+        "rationale": "Combines an OS-confirmed open handle with BOTH independent memory signals (C2 artifacts AND live execution), both within 4096 bytes of that pipe's name string \u2014 the strongest correlation this hunter can produce.",
+        "rule_id": "pipe.corroboration",
+        "rule_version": null,
+        "severity": "critical",
+        "tag": "detection",
+        "technique_ids": []
+       }
+      ],
+      "hunter": "pipe",
+      "lead_count": 1,
+      "max_score": 3,
+      "review_priority": "high",
+      "score": 3,
+      "status": "DETECTED",
+      "verdict_level": "high"
+     },
+     {
+      "confidence": "none",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "segment_scan",
+         "targets": [
+          {
+           "allocation_base": null,
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_segment",
+           "protection": null,
+           "size": 4096,
+           "size_limit": null,
+           "state": null,
+           "type": null,
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 3968,
+        "complete": true,
+        "distinct_ranges": 1,
+        "eligible_bytes": 32768,
+        "quantified_gaps": 1,
+        "state": "exact",
+        "unquantified_gaps": 0,
+        "unscanned_fraction": 0.12109375,
+        "unscanned_pass_bytes": 3968
+       },
+       "reasons": [
+        "1 region(s) returned fewer bytes than declared (short read) -- not fully scanned: 0x0000000040000000 (4 KB)"
+       ],
+       "sources": {
+        "memory_info": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "segment_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "thread_context": {
+         "detail": null,
+         "record_count": 4,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "config_count": 0,
+       "configs": []
+      },
+      "findings": [
+       {
+        "check": "cs_beacon.no_structural_config",
+        "confidence": "low",
+        "evidence_refs": [],
+        "facts": [
+         "7 memory segment(s) scanned (1 segment(s) returned fewer bytes than declared (short read) \u2014 not fully scanned: 0x0000000040000000 (4 KB))"
+        ],
+        "id": "finding-e59c8304b4aae307ebacbf4da0fad11e",
+        "inference": "No structurally-valid (sanity-checked TLV, known BeaconType, ASN.1-shaped public key) Cobalt Strike beacon configuration found in what was scanned.",
+        "iocs": [],
+        "limitations": [
+         "Coverage was incomplete \u2014 see coverage_reasons."
+        ],
+        "rationale": "Absence of a decodable config is weak evidence of absence \u2014 an unscanned/skipped/unreadable segment, an unsupported XOR scheme, or a config that never touched memory captured in this dump would all look identical to this.",
+        "rule_id": "cs_beacon.no_structural_config",
+        "rule_version": null,
+        "severity": "info",
+        "tag": "observation",
+        "technique_ids": []
+       }
+      ],
+      "hunter": "cs-beacon",
+      "lead_count": 0,
+      "max_score": 2,
+      "review_priority": "low",
+      "score": 0,
+      "status": "INCONCLUSIVE",
+      "verdict_level": "inconclusive"
+     },
+     {
+      "confidence": null,
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": null,
+         "source": "segment_scan",
+         "targets": [
+          {
+           "allocation_base": null,
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_segment",
+           "protection": null,
+           "size": 4096,
+           "size_limit": null,
+           "state": null,
+           "type": null,
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 3968,
+        "complete": true,
+        "distinct_ranges": 1,
+        "eligible_bytes": 32768,
+        "quantified_gaps": 1,
+        "state": "exact",
+        "unquantified_gaps": 0,
+        "unscanned_fraction": 0.12109375,
+        "unscanned_pass_bytes": 3968
+       },
+       "reasons": [
+        "1 region(s) returned fewer bytes than declared (short read) -- not fully scanned: 0x0000000040000000 (4 KB)"
+       ],
+       "sources": {
+        "segment_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "yara_context": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "yara_rules": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "matches": [
+        {
+         "context_unverified": false,
+         "file": "suspicious_memory.yar",
+         "memory_context": "private",
+         "meta": {
+          "description": "MZ/PE header found \u2014 useful when applied to MEM_PRIVATE regions outside module list",
+          "mitre": "T1055"
+         },
+         "rule": "PE_In_Private_Memory",
+         "seg_fo": 19264,
+         "seg_size": 8192,
+         "seg_va": "0x0000000030000000",
+         "strings": [
+          {
+           "data": "4d5a",
+           "fo": 19264,
+           "offset": 0,
+           "va": "0x0000000030000000",
+           "var": "$mz"
+          },
+          {
+           "data": "50450000",
+           "fo": 19392,
+           "offset": 128,
+           "va": "0x0000000030000080",
+           "var": "$pe"
+          }
+         ],
+         "tags": []
+        }
+       ],
+       "rules_hit": [
+        "PE_In_Private_Memory"
+       ]
+      },
+      "findings": [],
+      "hunter": "yara",
+      "lead_count": null,
+      "max_score": null,
+      "review_priority": null,
+      "score": 1,
+      "status": "DETECTED",
+      "verdict_level": "likely"
+     },
+     {
+      "confidence": "none",
+      "coverage": {
+       "limitations": [
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "sleep_mask",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "entropy",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 2,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_READ_FAILED",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "decode",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x000000007ffde000",
+           "base_address": "0x000000007ffde000",
+           "capture_state": "complete",
+           "captured_size": 8192,
+           "examined_size": 0,
+           "file_offset": 6976,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 8192,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 8192
+          },
+          {
+           "allocation_base": "0x00007ff600000000",
+           "base_address": "0x00007ff600002000",
+           "capture_state": "none",
+           "captured_size": 0,
+           "examined_size": 0,
+           "file_offset": null,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_IMAGE",
+           "unexamined_size": 0
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "sleep_mask",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "entropy",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        },
+        {
+         "affected_count": 1,
+         "available_fields": [],
+         "budget_consumed": null,
+         "budget_limit": null,
+         "code": "SCAN_REGION_SHORT_READ",
+         "counterpart_source": null,
+         "detail": null,
+         "related_sources": [],
+         "related_tids": [],
+         "scope": "decode",
+         "source": "encoding_scan",
+         "targets": [
+          {
+           "allocation_base": "0x0000000040000000",
+           "base_address": "0x0000000040000000",
+           "capture_state": "complete",
+           "captured_size": 4096,
+           "examined_size": 128,
+           "file_offset": 35648,
+           "kind": "memory_region",
+           "protection": "PAGE_READWRITE",
+           "size": 4096,
+           "size_limit": null,
+           "state": "MEM_COMMIT",
+           "type": "MEM_PRIVATE",
+           "unexamined_size": 3968
+          }
+         ],
+         "thread_id": null,
+         "unavailable_fields": []
+        }
+       ],
+       "missed_bytes": {
+        "bytes": 12160,
+        "complete": true,
+        "distinct_ranges": 2,
+        "eligible_bytes": 73728,
+        "quantified_gaps": 7,
+        "state": "exact",
+        "unquantified_gaps": 0,
+        "unscanned_fraction": 0.4947916666666667,
+        "unscanned_pass_bytes": 36480
+       },
+       "reasons": [
+        "1 region(s) failed to read under the sleep_mask scan: 0x000000007ffde000 (8 KB)",
+        "1 region(s) failed to read under the entropy scan: 0x000000007ffde000 (8 KB)",
+        "2 region(s) failed to read under the decode scan: 0x000000007ffde000 (8 KB), 0x00007ff600002000 (4 KB)",
+        "1 region(s) returned fewer bytes than declared (short read) under the sleep_mask scan -- not fully scanned: 0x0000000040000000 (4 KB)",
+        "1 region(s) returned fewer bytes than declared (short read) under the entropy scan -- not fully scanned: 0x0000000040000000 (4 KB)",
+        "1 region(s) returned fewer bytes than declared (short read) under the decode scan -- not fully scanned: 0x0000000040000000 (4 KB)"
+       ],
+       "sources": {
+        "encoding_scan": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        },
+        "memory_info": {
+         "detail": null,
+         "record_count": 1,
+         "state": "present"
+        }
+       },
+       "status": "partial"
+      },
+      "details": {
+       "base64": [],
+       "compressed": [],
+       "entropy": [],
+       "hidden_pe": [],
+       "hidden_shellcode": [],
+       "sleep_mask": [],
+       "xor": []
+      },
+      "findings": [],
+      "hunter": "obfuscation",
+      "lead_count": 0,
+      "max_score": 2,
+      "review_priority": "none",
+      "score": 0,
+      "status": "INCONCLUSIVE",
+      "verdict_level": "inconclusive"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "hunt",
+   "summary": {
+    "detected_count": 3,
+    "highest_verdict_level": "high",
+    "hunter_count": 7,
+    "inconclusive_count": 3,
+    "investigation_actions": [
+     {
+      "coverage_effect": "original_hunter_gap_not_resolved",
+      "evidence_availability": "captured",
+      "priority": "medium",
+      "priority_reason_codes": [
+       "MULTIPLE_SCOPES_SKIPPED"
+      ],
+      "recommended_actions": [
+       {
+        "type": "inspect_metadata"
+       },
+       {
+        "type": "extract_captured_range"
+       },
+       {
+        "hunters": [
+         "pipe",
+         "cs-beacon",
+         "yara",
+         "obfuscation"
+        ],
+        "type": "targeted_hunter_rescan"
+       }
+      ],
+      "skipped_by": [
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "injection",
+        "scope": null,
+        "size_limit": null,
+        "source": "hidden_pe_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "pipe",
+        "scope": null,
+        "size_limit": null,
+        "source": "pipe_name_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "cs-beacon",
+        "scope": null,
+        "size_limit": null,
+        "source": "segment_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "yara",
+        "scope": null,
+        "size_limit": null,
+        "source": "segment_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "obfuscation",
+        "scope": "decode",
+        "size_limit": null,
+        "source": "encoding_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "obfuscation",
+        "scope": "entropy",
+        "size_limit": null,
+        "source": "encoding_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "short_read",
+        "hunter": "obfuscation",
+        "scope": "sleep_mask",
+        "size_limit": null,
+        "source": "encoding_scan"
+       }
+      ],
+      "target": {
+       "allocation_base": "0x0000000040000000",
+       "base_address": "0x0000000040000000",
+       "capture_state": "complete",
+       "captured_size": 4096,
+       "examined_size": null,
+       "file_offset": 35648,
+       "kind": "memory_region",
+       "protection": "PAGE_READWRITE",
+       "size": 4096,
+       "size_limit": null,
+       "state": "MEM_COMMIT",
+       "type": "MEM_PRIVATE",
+       "unexamined_size": null
+      },
+      "triage": {
+       "bytes_examined": 0,
+       "content_reason_codes": [],
+       "finding_count": 0,
+       "findings": [],
+       "findings_truncated": false,
+       "mode": "metadata",
+       "region_fully_examined": false,
+       "status": "completed"
+      }
+     },
+     {
+      "coverage_effect": "original_hunter_gap_not_resolved",
+      "evidence_availability": "captured",
+      "priority": "medium",
+      "priority_reason_codes": [
+       "MULTIPLE_SCOPES_SKIPPED"
+      ],
+      "recommended_actions": [
+       {
+        "type": "inspect_metadata"
+       },
+       {
+        "type": "extract_captured_range"
+       },
+       {
+        "hunters": [
+         "pipe",
+         "obfuscation"
+        ],
+        "type": "targeted_hunter_rescan"
+       }
+      ],
+      "skipped_by": [
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "injection",
+        "scope": null,
+        "size_limit": null,
+        "source": "hidden_pe_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "pipe",
+        "scope": null,
+        "size_limit": null,
+        "source": "pipe_name_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "obfuscation",
+        "scope": "decode",
+        "size_limit": null,
+        "source": "encoding_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "obfuscation",
+        "scope": "entropy",
+        "size_limit": null,
+        "source": "encoding_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "obfuscation",
+        "scope": "sleep_mask",
+        "size_limit": null,
+        "source": "encoding_scan"
+       }
+      ],
+      "target": {
+       "allocation_base": "0x000000007ffde000",
+       "base_address": "0x000000007ffde000",
+       "capture_state": "complete",
+       "captured_size": 8192,
+       "examined_size": 0,
+       "file_offset": 6976,
+       "kind": "memory_region",
+       "protection": "PAGE_READWRITE",
+       "size": 8192,
+       "size_limit": null,
+       "state": "MEM_COMMIT",
+       "type": "MEM_PRIVATE",
+       "unexamined_size": 8192
+      },
+      "triage": {
+       "bytes_examined": 0,
+       "content_reason_codes": [],
+       "finding_count": 0,
+       "findings": [],
+       "findings_truncated": false,
+       "mode": "metadata",
+       "region_fully_examined": false,
+       "status": "completed"
+      }
+     },
+     {
+      "coverage_effect": "original_hunter_gap_not_resolved",
+      "evidence_availability": "not_captured",
+      "priority": "low",
+      "priority_reason_codes": [],
+      "recommended_actions": [
+       {
+        "type": "inspect_metadata"
+       },
+       {
+        "type": "recollect_dump"
+       }
+      ],
+      "skipped_by": [
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "pipe",
+        "scope": null,
+        "size_limit": null,
+        "source": "pipe_name_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "obfuscation",
+        "scope": "decode",
+        "size_limit": null,
+        "source": "encoding_scan"
+       }
+      ],
+      "target": {
+       "allocation_base": "0x00007ff600000000",
+       "base_address": "0x00007ff600002000",
+       "capture_state": "none",
+       "captured_size": 0,
+       "examined_size": 0,
+       "file_offset": null,
+       "kind": "memory_region",
+       "protection": "PAGE_READWRITE",
+       "size": 4096,
+       "size_limit": null,
+       "state": "MEM_COMMIT",
+       "type": "MEM_IMAGE",
+       "unexamined_size": 0
+      },
+      "triage": {
+       "bytes_examined": 0,
+       "content_reason_codes": [],
+       "finding_count": 0,
+       "findings": [],
+       "findings_truncated": false,
+       "mode": "metadata",
+       "region_fully_examined": false,
+       "status": "completed"
+      }
+     },
+     {
+      "coverage_effect": "original_hunter_gap_not_resolved",
+      "evidence_availability": "not_captured",
+      "priority": "low",
+      "priority_reason_codes": [],
+      "recommended_actions": [
+       {
+        "type": "inspect_metadata"
+       },
+       {
+        "type": "recollect_dump"
+       }
+      ],
+      "skipped_by": [
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "stomping",
+        "scope": null,
+        "size_limit": null,
+        "source": "ioc_string_scan"
+       },
+       {
+        "budget_consumed": null,
+        "budget_kind": null,
+        "budget_limit": null,
+        "cause": "read_failed",
+        "hunter": "pipe",
+        "scope": null,
+        "size_limit": null,
+        "source": "pipe_name_scan"
+       }
+      ],
+      "target": {
+       "allocation_base": "0x00007ffe00000000",
+       "base_address": "0x00007ffe00000000",
+       "capture_state": "none",
+       "captured_size": 0,
+       "examined_size": 0,
+       "file_offset": null,
+       "kind": "memory_region",
+       "protection": "PAGE_EXECUTE_READ",
+       "size": 8192,
+       "size_limit": null,
+       "state": "MEM_COMMIT",
+       "type": "MEM_IMAGE",
+       "unexamined_size": 0
+      },
+      "triage": {
+       "bytes_examined": 0,
+       "content_reason_codes": [],
+       "finding_count": 0,
+       "findings": [],
+       "findings_truncated": false,
+       "mode": "metadata",
+       "region_fully_examined": false,
+       "status": "completed"
+      }
+     }
+    ],
+    "lead_count": 4,
+    "not_evaluated_count": 0,
+    "overall_status": "DETECTED",
+    "scan_scope": {
+     "kind": "full"
+    },
+    "selected": "all"
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Process Injection",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     HIGH CONFIDENCE INJECTION",
+  "  Confidence  high",
+  "  Score       3/3",
+  "  Coverage    PARTIAL \u2014 at least 8 KB unscanned across 1 range(s) (at least 33% of 24 KB eligible),",
+  "              plus 1 gap(s) of unmeasured extent; 1 region(s) short-read by the hidden-PE scan; +1",
+  "              more (see COVERAGE)",
+  "  Review      high",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [!] DETECTION  Live execution in a correlated allocation",
+  "      1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a",
+  "      validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on",
+  "      the same AllocationBase.",
+  "",
+  "  [~] LEAD       RWX memory",
+  "      1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct",
+  "      allocation(s).",
+  "",
+  "  [~] LEAD       Hidden PE header",
+  "      1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section",
+  "      table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE",
+  "      memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live",
+  "      thread execution.",
+  "",
+  "  [~] LEAD       Unbacked thread start",
+  "      1 thread(s) began execution at an address not covered by any known module.",
+  "",
+  "  WHY THIS VERDICT",
+  "",
+  "  Inference",
+  "    1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a",
+  "    validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the",
+  "    same AllocationBase.",
+  "",
+  "  Confidence: HIGH",
+  "    This is the strongest evidence this hunter can produce: the process is, at the moment of the",
+  "    dump, actively running code from an allocation with no legitimate module backing and a concealed",
+  "    PE image.",
+  "",
+  "  Caveat",
+  "    RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the",
+  "    dump was captured would not appear here.",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 region(s) failed to read while checking for hidden PE headers",
+  "      1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short",
+  "      read) \u2014 not fully examined",
+  "      1 thread(s) present in ThreadListStream have no ThreadInfoListStream record \u2014 where those",
+  "      threads began could not be checked at all",
+  "",
+  "  Use --verbose for complete per-region evidence and file offsets.",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Process Hollowing",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     CLEAN \u2014 no correlated hollowing indicators",
+  "  Confidence  none",
+  "  Score       0/2  (requires non-MEM_IMAGE memory at the image base correlated with a second structural anomaly; single signals are leads only)",
+  "  Coverage    COMPLETE",
+  "  Review      none",
+  "",
+  "  Use --verbose for the image base's VA/file offset, memory type/protection, header bytes, and module comparison.",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Module Stomping",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     INCONCLUSIVE \u2014 partial coverage",
+  "  Confidence  none",
+  "  Score       0/2  (only a verified content-diff scores; requires --ref-dir)",
+  "  Coverage    PARTIAL \u2014 unscanned extent unmeasured across 1 gap(s); 1 module header(s) unread; no",
+  "              --ref-dir supplied; +1 more (see COVERAGE)",
+  "  Review      low",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [i] CONTEXT    Section protection deviation",
+  "      No module section declared executable-but-not-writable shows a live protection state outside",
+  "      the normal set.",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 module header read(s) failed",
+  "      --ref-dir not supplied \u2014 verified content comparison (the only scored signal) was not",
+  "      performed for any module",
+  "      1 region(s) failed to read and were not scanned for IOC strings: 0x00007ffe00000000 (8 KB)",
+  "      Impact: An IOC result cannot be called clean for memory that was never read \u2014 targeted",
+  "      follow-up needed on the region(s) above: --extract / --strings that VA, or re-scan it with an",
+  "      external scanner.",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Named Pipe C2 / Lateral Movement",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT \u2014 handle-confirmed pipe with BOTH nearby C2 context and live RIP/EIP execution",
+  "  Confidence  high",
+  "  Score       3/3  (handle-anchored; bare pipe strings are unscored leads)",
+  "  Coverage    PARTIAL \u2014 11.9 KB unscanned across 2 range(s) (37% of 32 KB eligible)",
+  "  Review      high",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [!] DETECTION  Handle-confirmed pipe corroborated by memory evidence",
+  "      1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution",
+  "      within \u00b14096 bytes of a matching pipe-name string's own address.",
+  "",
+  "  [!] DETECTION  Known C2 framework pipe naming convention on an open handle",
+  "      1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.",
+  "",
+  "  [i] CONTEXT    Open pipe handles (HandleDataStream)",
+  "      Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.",
+  "",
+  "  [~] LEAD       Pipe name strings in non-system memory",
+  "      1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
+  "",
+  "  WHY THIS VERDICT",
+  "",
+  "  Inference",
+  "    1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within",
+  "    \u00b14096 bytes of a matching pipe-name string's own address.",
+  "",
+  "  Confidence: HIGH",
+  "    Combines an OS-confirmed open handle with BOTH independent memory signals (C2 artifacts AND live",
+  "    execution), both within 4096 bytes of that pipe's name string \u2014 the strongest correlation this",
+  "    hunter can produce.",
+  "",
+  "  Caveat",
+  "    Name correlation between a handle's ObjectName and a string scan hit uses exact match on the",
+  "    canonicalized pipe name (prefix stripped, casefolded) \u2014 still not a cryptographic guarantee both",
+  "    refer to the identical kernel object if the process has multiple same-named pipe instances.",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      3 region(s) failed to read: 0x000000007ffde000 (8 KB), 0x00007ff600002000 (4 KB),",
+  "      0x00007ffe00000000 (8 KB)",
+  "      1 region(s) returned fewer bytes than declared (short read) \u2014 not fully scanned:",
+  "      0x0000000040000000 (4 KB)",
+  "      Impact: A pipe name or C2 artifact in memory that was never read cannot be ruled out \u2014",
+  "      targeted follow-up needed on the region(s) above: --extract / --strings that VA, or re-scan it",
+  "      with an external scanner.",
+  "      Impact: Coverage incomplete despite a detection \u2014 additional pipe channels may exist beyond",
+  "      what could be checked.",
+  "",
+  "  Use --verbose for the full handle list, canonicalized pipe names, VA/file offsets, and nearby C2 context.",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Cobalt Strike Beacon Config",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     INCONCLUSIVE \u2014 partial coverage",
+  "  Confidence  none",
+  "  Score       0/2",
+  "  Coverage    PARTIAL \u2014 3.9 KB unscanned across 1 range(s) (12% of 32 KB eligible)",
+  "  Review      low",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [i] CONTEXT    No structurally-valid config found",
+  "      No structurally-valid (sanity-checked TLV, known BeaconType, ASN.1-shaped public key) Cobalt",
+  "      Strike beacon configuration found in what was scanned.",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 segment(s) returned fewer bytes than declared (short read) \u2014 not fully scanned:",
+  "      0x0000000040000000 (4 KB)",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: YARA Memory Scan",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     MEDIUM \u2014 1 distinct rule(s) matched",
+  "  Confidence  \u2014",
+  "  Score       1/\u2014",
+  "  Coverage    PARTIAL \u2014 3.9 KB unscanned across 1 range(s) (12% of 32 KB eligible)",
+  "  Review      \u2014",
+  "",
+  "  [i] 1 PE_In_Private_Memory match(es) suppressed \u2014 MZ/PE header belonged to a known, legitimately loaded module.",
+  "",
+  "  KEY SIGNALS",
+  "",
+  "  [!] DETECTION  Rule: PE_In_Private_Memory  (1 region(s), 2 string hit(s))",
+  "      suspicious_memory.yar",
+  "      MZ/PE header found \u2014 useful when applied to MEM_PRIVATE regions outside module list",
+  "      T1055",
+  "      regions: 0x0000000030000000",
+  "",
+  "  WHY THIS VERDICT",
+  "",
+  "  Inference",
+  "    Rule 'PE_In_Private_Memory' matched 1 region(s) (2 string hit(s)) -- resolved to private memory,",
+  "    not a known loaded module.",
+  "",
+  "    MZ/PE header found \u2014 useful when applied to MEM_PRIVATE regions outside module list",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 segment(s) returned fewer bytes than declared (short read) \u2014 not fully scanned:",
+  "      0x0000000040000000 (4 KB)",
+  "",
+  "  Use --verbose for the complete region and string match detail.",
+  "",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT: Obfuscation Detection",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "",
+  "  VERDICT     INCONCLUSIVE \u2014 partial scan coverage",
+  "  Confidence  none",
+  "  Score       0/2",
+  "  Coverage    PARTIAL \u2014 11.9 KB unscanned across 2 range(s) (49% of 72 KB eligible)",
+  "  Review      none",
+  "",
+  "  COVERAGE",
+  "",
+  "  [~] PARTIAL",
+  "      1 region(s) failed to read under the sleep_mask scan: 0x000000007ffde000 (8 KB)",
+  "      1 region(s) failed to read under the entropy scan: 0x000000007ffde000 (8 KB)",
+  "      2 region(s) failed to read under the decode scan: 0x000000007ffde000 (8 KB),",
+  "      0x00007ff600002000 (4 KB)",
+  "      1 region(s) returned fewer bytes than declared under the sleep_mask scan (short read) \u2014 not",
+  "      fully scanned: 0x0000000040000000 (4 KB)",
+  "      1 region(s) returned fewer bytes than declared under the entropy scan (short read) \u2014 not fully",
+  "      scanned: 0x0000000040000000 (4 KB)",
+  "      1 region(s) returned fewer bytes than declared under the decode scan (short read) \u2014 not fully",
+  "      scanned: 0x0000000040000000 (4 KB)",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  HUNT SUMMARY",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  OVERALL   DETECTED",
+  "  Highest   HIGH",
+  "  Coverage  PARTIAL",
+  "  Results   3 detected \u00b7 4 lead(s) \u00b7 3 inconclusive",
+  "",
+  "  REVIEW FIRST",
+  "",
+  "  1. Process Injection           HIGH \u00b7 PARTIAL",
+  "     1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a",
+  "     validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the",
+  "     same AllocationBase.",
+  "",
+  "  2. Named Pipe C2 / Lat. Move.  HIGH \u00b7 PARTIAL",
+  "     1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within",
+  "     \u00b14096 bytes of a matching pipe-name string's own address.",
+  "",
+  "  3. YARA Rules                  LIKELY \u00b7 PARTIAL",
+  "     Rule(s) matched: PE_In_Private_Memory",
+  "",
+  "  NEEDS ATTENTION",
+  "",
+  "  [~] Module Stomping",
+  "      Inconclusive: 1 module header read(s) failed",
+  "",
+  "  [~] Cobalt Strike Beacon",
+  "      Inconclusive: 1 region(s) returned fewer bytes than declared (short read) -- not fully",
+  "      scanned: 0x0000000040000000 (4 KB)",
+  "",
+  "  [~] Obfuscation Detection",
+  "      Inconclusive: 1 region(s) failed to read under the sleep_mask scan: 0x000000007ffde000 (8 KB)",
+  "",
+  "  OTHER HUNTERS",
+  "",
+  "  Process Hollowing           CLEAN",
+  "",
+  "  CORRELATED REGIONS",
+  "",
+  "  1. Region 0x0000000030000000 size=0x2000",
+  "     Allocation  0x0000000030000000",
+  "     Hunters     Process Injection [HIGH] \u00b7 Named Pipe C2 / Lat. Move. [HIGH] \u00b7 YARA Rules [LIKELY]",
+  "     Evidence    Injection: validated hidden PE; live RIP/EIP in suspicious region; RWX region (+1",
+  "                 more)",
+  "                 Pipe: pipe/C2 context in memory; pipe string in private memory; unbacked thread in",
+  "                 pipe-bearing region",
+  "                 YARA: PE_In_Private_Memory",
+  "",
+  "     Co-location only \u2014 this relationship does not change hunter scores or verdicts.",
+  "",
+  "  SKIPPED TARGET ACTIONS",
+  "",
+  "  [MEDIUM] 0x0000000040000000  4 KB  captured",
+  "       Skipped by: injection/hidden_pe_scan (short read), pipe/pipe_name_scan (short read),",
+  "       cs-beacon/segment_scan (short read) (+4 more)",
+  "       Why: multiple scan scopes skipped this target",
+  "       Next: inspect metadata and correlated findings, extract the captured range, targeted",
+  "       hunter-specific rescan",
+  "       Rescan (match the new result back by hunter + source + scope + base_address + size):",
+  "         dumpex --hunt pipe --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt cs-beacon --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt yara --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt obfuscation --hunt-addr 0x40000000 --size 0x1000 -- \"<TMP>/sample case.dmp\"",
+  "       No targeted rescan for: injection -- no --hunt-addr capability is registered for this hunter,",
+  "       so its coverage gap on this target stays open.",
+  "",
+  "  [MEDIUM] 0x000000007ffde000  8 KB  captured",
+  "       Skipped by: injection/hidden_pe_scan (read failed), pipe/pipe_name_scan (read failed),",
+  "       obfuscation/encoding_scan:decode (read failed) (+2 more)",
+  "       Why: multiple scan scopes skipped this target",
+  "       Next: inspect metadata and correlated findings, extract the captured range, targeted",
+  "       hunter-specific rescan",
+  "       Rescan (match the new result back by hunter + source + scope + base_address + size):",
+  "         dumpex --hunt pipe --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample case.dmp\"",
+  "         dumpex --hunt obfuscation --hunt-addr 0x7ffde000 --size 0x2000 -- \"<TMP>/sample case.dmp\"",
+  "       No targeted rescan for: injection -- no --hunt-addr capability is registered for this hunter,",
+  "       so its coverage gap on this target stays open.",
+  "",
+  "  [LOW] 0x00007ff600002000  4 KB  not_captured",
+  "       Skipped by: pipe/pipe_name_scan (read failed), obfuscation/encoding_scan:decode (read failed)",
+  "       Why: target not fully examined -- see Skipped by",
+  "       Next: inspect metadata and correlated findings, recollect a fuller dump",
+  "       Rescan: unavailable -- these bytes are not in this dump, so a local scan would read nothing.",
+  "       Recollect a fuller dump instead.",
+  "",
+  "  [LOW] 0x00007ffe00000000  8 KB  not_captured",
+  "       Skipped by: stomping/ioc_string_scan (read failed), pipe/pipe_name_scan (read failed)",
+  "       Why: target not fully examined -- see Skipped by",
+  "       Next: inspect metadata and correlated findings, recollect a fuller dump",
+  "       Rescan: unavailable -- these bytes are not in this dump, so a local scan would read nothing.",
+  "       Recollect a fuller dump instead.",
+  "",
+  "  NEXT INVESTIGATION",
+  "",
+  "  1. Review Process Injection's finding(s) and evidence refs first \u2014 it has the highest-priority",
+  "     detection in this scan.",
+  "  2. Fill in coverage before trusting a clean result: 1 region(s) failed to read while checking for",
+  "     hidden PE headers: 0x000000007ffde000 (8 KB); 1 region(s) returned fewer bytes than requested",
+  "     while checking for hidden PE headers (short read) -- not fully examined: 0x0000000040000000 (4",
+  "     KB); 1 thread(s) present in thread_list but missing from ThreadInfoListStream",
+  "     (StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those) (+11",
+  "     more).",
+  "  3. Review 4 unscored lead(s) across the hunters above before closing this case.",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

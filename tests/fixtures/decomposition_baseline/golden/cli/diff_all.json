@@ -1,0 +1,181 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--diff",
+  "<TMP>/reference.dmp",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "reference.dmp",
+     "id": "baseline",
+     "path": "<TMP>/reference.dmp",
+     "role": "baseline",
+     "sha256": "0cf192e87e95da86175e8fc90a4d66a83742aa03a65919e2803b5e344b2bb036",
+     "size_bytes": 35776
+    },
+    {
+     "file_name": "sample.dmp",
+     "id": "target",
+     "path": "<TMP>/sample.dmp",
+     "role": "target",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "diff",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "diff_mode": "all",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "baseline.memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "baseline.modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "baseline.thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "target.memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "target.modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "target.thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "base_address_after": "0x00007ffe00000000",
+      "base_address_before": "0x00007ffe00100000",
+      "change_type": "rebased",
+      "entity_type": "module",
+      "full_path_after": "C:\\Windows\\System32\\ntdll.dll",
+      "full_path_before": "C:\\Windows\\System32\\ntdll.dll",
+      "name": "ntdll.dll"
+     },
+     {
+      "base_address": "0x0000000030000000",
+      "change_type": "protection_changed",
+      "entity_type": "memory_region",
+      "protect_after": "PAGE_EXECUTE_READWRITE",
+      "protect_before": "PAGE_EXECUTE_READ",
+      "size_after": 8192,
+      "size_before": 8192,
+      "suspicious_after": true,
+      "suspicious_before": false,
+      "type_after": "MEM_PRIVATE",
+      "type_before": "MEM_PRIVATE"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "comparison",
+   "summary": {
+    "count": 2
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "dumpex diff: target sample.dmp vs baseline reference.dmp",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "",
+  "\u2550\u2550\u2550 MODULE DIFF \u2550\u2550\u2550",
+  "  reference.dmp: 2 modules",
+  "  sample.dmp: 2 modules",
+  "",
+  "  [+] No new modules.",
+  "",
+  "  [-] No removed modules.",
+  "",
+  "  [~] Rebased (1):",
+  "      ntdll.dll: 0x7ffe00100000 \u2192 0x7ffe00000000",
+  "",
+  "\u2550\u2550\u2550 THREAD DIFF \u2550\u2550\u2550",
+  "  reference.dmp: 3 threads",
+  "  sample.dmp: 3 threads",
+  "",
+  "  [+] No new threads.",
+  "",
+  "  [-] No removed threads.",
+  "",
+  "\u2550\u2550\u2550 MEMORY REGION DIFF \u2550\u2550\u2550",
+  "  reference.dmp: 9 regions",
+  "  sample.dmp: 9 regions",
+  "  Delta: +0 / -0 regions",
+  "",
+  "  [!] No RWX regions added.",
+  "",
+  "  [~] Protection changed (1):",
+  "      0x0000000030000000  PAGE_EXECUTE_READ \u2192 PAGE_EXECUTE_READWRITE \u2190 now RWX!",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

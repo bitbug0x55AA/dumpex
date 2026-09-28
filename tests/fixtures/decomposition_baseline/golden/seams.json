@@ -1,0 +1,249 @@
+{
+ "consumer_seams": {
+  "dumpex.cli": {
+   "open_dump": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.commands.extract": {
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.commands.report": {
+   "MAX_REGION_READ": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   },
+   "_extract_strings_from_data": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   },
+   "read_region": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.commands.report_enrichment": {
+   "ReportStringContextEntry": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.output.records": true
+    }
+   }
+  },
+  "dumpex.hunt": {
+   "get_memory_regions": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt._location": {
+   "va_to_file_offset": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt._registry": {
+   "HUNTERS": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.output.records": true
+    }
+   }
+  },
+  "dumpex.hunt.cs_beacon": {
+   "get_thread_contexts": {
+    "kinds": [
+     "assign"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.encoding": {
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.encoding.targeted": {
+   "read_region_spanning": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.hollowing": {
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.injection": {
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.pipe": {
+   "enriched_thread_contexts": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   },
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.pipe.targeted": {
+   "read_region_spanning": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.stomping": {
+   "enriched_thread_contexts": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   },
+   "read_region": {
+    "kinds": [
+     "assign",
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  },
+  "dumpex.hunt.stomping.targeted": {
+   "read_region_spanning": {
+    "kinds": [
+     "patch"
+    ],
+    "same_object_as": {
+     "dumpex.core.memory": true
+    }
+   }
+  }
+ },
+ "legacy_patch_targets": {
+  "dumpex.core.memory": [
+   "CONTEXT",
+   "MAX_HANDLE_DESCRIPTORS",
+   "MAX_REGION_READ",
+   "MAX_THREAD_INFO_ENTRIES",
+   "MINIDUMP_HANDLE_DESCRIPTOR",
+   "MINIDUMP_HANDLE_DESCRIPTOR_2",
+   "PEB",
+   "_HANDLE_DESCRIPTOR_LAYOUT_CACHE",
+   "_STREAM_DISPATCH",
+   "_descriptor_class_size",
+   "_handle_descriptor_layout",
+   "_is_real_thread_info",
+   "_memory_segments",
+   "_resolve_size",
+   "clamped_reader",
+   "dump_flags_value",
+   "enriched_thread_contexts",
+   "get_handles",
+   "get_thread_contexts",
+   "get_thread_infos",
+   "read_region",
+   "read_region_spanning",
+   "recorded_start_address",
+   "stream_failure",
+   "va_range_captured_bytes",
+   "va_to_file_offset"
+  ],
+  "dumpex.output.coverage": [
+   "_CODE_SPECS",
+   "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS",
+   "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS",
+   "_SOURCE_DISPLAY_NAMES"
+  ],
+  "dumpex.output.records": [
+   "HUNTERS",
+   "ProcessPeRecord",
+   "ThreadRecord",
+   "_OPTIONAL_LIMITATION_CODES",
+   "_require_nonneg_int",
+   "hex_address"
+  ]
+ }
+}

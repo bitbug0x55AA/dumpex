@@ -1,0 +1,1335 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--report",
+  "--report-string",
+  "needle-string",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "string",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "min_len": 6,
+     "output": null,
+     "report_addr": null,
+     "report_string": "needle-string",
+     "report_tid": null,
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "rules": {
+    "explicit": false,
+    "path": "<dumpex.rules_pkg>/data/rules.yaml",
+    "sha256": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+    "version": 1
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": null,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "REGION_READ_TRUNCATED",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "requested_region",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     },
+     {
+      "affected_count": 3,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "REPORT_STRING_SCAN_INCOMPLETE",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "string_search",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     },
+     {
+      "affected_count": 1,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "REPORT_STRING_SCAN_TRUNCATED",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "string_search",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     }
+    ],
+    "missed_bytes": {
+     "bytes": null,
+     "complete": false,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "unknown",
+     "unquantified_gaps": 4,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "Requested memory region was only partially read",
+     "The memory-wide string search skipped 3 region(s) it could not read",
+     "The memory-wide string search only partially read 1 region(s) -- a needle past that point would not be found"
+    ],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "requested_region": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "string_search": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "allocation_neighborhood": {
+       "allocation_base": "0x0000000040000000",
+       "entries": [
+        {
+         "allocation_base": "0x0000000020000000",
+         "base_address": "0x0000000020000000",
+         "distance": 536866816,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "preceding",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000030000000",
+         "base_address": "0x0000000030000000",
+         "distance": 268427264,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READWRITE",
+         "relation": "preceding",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000040000000",
+         "base_address": "0x0000000040000000",
+         "distance": 0,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "anchor",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000050000000",
+         "base_address": "0x0000000050000000",
+         "distance": 268431360,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "following",
+         "size": 65536,
+         "state": "MEM_RESERVE",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x000000007ffde000",
+         "base_address": "0x000000007ffde000",
+         "distance": 1073598464,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "following",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        }
+       ],
+       "section": {
+        "cap": 9,
+        "included": 5,
+        "limitations": [],
+        "name": "allocation",
+        "provenance": [
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 5,
+        "truncated": false
+       }
+      },
+      "anchor_address": "0x0000000040000000",
+      "anchor_pe_context": {
+       "anchor_address": "0x0000000040000000",
+       "classification": "private",
+       "declared_executable": null,
+       "declared_readable": null,
+       "declared_writable": null,
+       "live_protection": "PAGE_READWRITE",
+       "module_base": null,
+       "module_owner": null,
+       "module_owner_truncated": false,
+       "module_rva": null,
+       "protection_matches_declared": null,
+       "region_base": "0x0000000040000000",
+       "region_type": "MEM_PRIVATE",
+       "registration": "unregistered",
+       "section": {
+        "cap": 1,
+        "included": 1,
+        "limitations": [],
+        "name": "anchor_pe_context",
+        "provenance": [
+         "pe_profile",
+         "modules",
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 1,
+        "truncated": false
+       },
+       "section_index": null,
+       "section_name": null,
+       "section_name_truncated": false
+      },
+      "anchor_source": "string_hit",
+      "anchor_tid": null,
+      "artifact_id": null,
+      "exception_context": {
+       "entries": [],
+       "section": {
+        "cap": 4,
+        "included": 0,
+        "limitations": [
+         "the dump carries no ExceptionStream: no exception was evaluated"
+        ],
+        "name": "exception",
+        "provenance": [
+         "exception"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "extract_read_clamped": null,
+      "extract_read_truncated": null,
+      "finding_details": {},
+      "findings": [],
+      "handle_correlation": {
+       "entries": [],
+       "section": {
+        "cap": 8,
+        "included": 0,
+        "limitations": [
+         "this card's region read came up short: a handle named only in the unread bytes could not be matched"
+        ],
+        "name": "handle_correlation",
+        "provenance": [
+         "handles"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": 0,
+        "truncated": false
+       }
+      },
+      "iat_correlation": null,
+      "instruction_context": {
+       "anchor_address": "0x0000000040000000",
+       "anchor_source": "card_anchor",
+       "architecture": "x64",
+       "branch_targets": [
+        {
+         "iat_classification_uncertain": false,
+         "iat_symbol": null,
+         "iat_symbol_truncated": false,
+         "instruction_address": "0x0000000040000000",
+         "kind": "direct",
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "region_type": "MEM_PRIVATE",
+         "registration": "unregistered",
+         "resolved_target_address": null,
+         "section_name": null,
+         "section_name_truncated": false,
+         "target_address": "0x000000004000006a"
+        },
+        {
+         "iat_classification_uncertain": false,
+         "iat_symbol": null,
+         "iat_symbol_truncated": false,
+         "instruction_address": "0x0000000040000003",
+         "kind": "direct",
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "region_type": "MEM_PRIVATE",
+         "registration": "unregistered",
+         "resolved_target_address": null,
+         "section_name": null,
+         "section_name_truncated": false,
+         "target_address": "0x0000000040000079"
+        }
+       ],
+       "branch_targets_total": 2,
+       "branch_targets_truncated": false,
+       "bytes_read": 128,
+       "decoder_state": "decoded",
+       "instructions": [
+        {
+         "address": "0x0000000040000000",
+         "branch_kind": "direct",
+         "is_anchor": true,
+         "is_call": false,
+         "is_jump": true,
+         "is_return": false,
+         "size": 2,
+         "text": "jae 0x4000006a",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000002",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "outsd dx, dword ptr [rsi]",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000003",
+         "branch_kind": "direct",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": true,
+         "is_return": false,
+         "size": 2,
+         "text": "jb 0x40000079",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000005",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 3,
+         "text": "and byte ptr [rdx + 0x61], ah",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000008",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 3,
+         "text": "movsxd ebp, dword ptr [rbx + 0x65]",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000000b",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 4,
+         "text": "and byte ptr fs:[rdx + 0x65], dh",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000000f",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 8,
+         "text": "imul ebp, dword ptr [edi + 0x6e], 0x65656e20",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000017",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 2,
+         "text": "insb byte ptr [rdi], dx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000019",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 6,
+         "text": "sub eax, 0x69727473",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000001f",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "outsb dx, byte ptr [rsi]",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000020",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 2,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000022",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000023",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000024",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000025",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000026",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000027",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000028",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000029",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002a",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002b",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002c",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002d",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002e",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000002f",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000030",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000031",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000032",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000033",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000034",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000035",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000036",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000037",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000038",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000039",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003a",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003b",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003c",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003d",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003e",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x000000004000003f",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000040",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000041",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000042",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000043",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000044",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000045",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000040000046",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 1,
+         "text": "push rbx",
+         "text_truncated": false
+        }
+       ],
+       "section": {
+        "cap": 48,
+        "included": 48,
+        "limitations": [
+         "the captured run ended after 128 byte(s): the window is the whole of it",
+         "the instruction window stopped at the cap of 48 instruction(s)"
+        ],
+        "name": "instruction_context",
+        "provenance": [
+         "report_content_scan",
+         "disasm",
+         "pe_profile"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": null,
+        "truncated": false
+       },
+       "window_base": "0x0000000040000000"
+      },
+      "ioc_strings": [],
+      "notable_strings": [
+       {
+        "address": "0x0000000040000000",
+        "encoding": "ASCII",
+        "matched_grep": null,
+        "offset": 0,
+        "text": "short backed region needle-stringSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"
+       }
+      ],
+      "other_threads_in_region": [],
+      "region": {
+       "base_address": "0x0000000040000000",
+       "file_offset": 35648,
+       "has_injected_pe": false,
+       "is_rwx_private": false,
+       "module_context": "unregistered",
+       "module_owner": null,
+       "mz_header_detected": false,
+       "pe_header_state": null,
+       "protect": "PAGE_READWRITE",
+       "protection_suspicious": false,
+       "size": 4096,
+       "type": "MEM_PRIVATE"
+      },
+      "string_context": {
+       "anchor_address": "0x0000000040000000",
+       "bytes_read": 128,
+       "distance_anchor_address": "0x0000000040000014",
+       "entries": [
+        {
+         "address": "0x0000000040000000",
+         "distance": null,
+         "encoding": "ASCII",
+         "offset": 0,
+         "selection_reason": "query_match",
+         "text": "short backed region needle-stringSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+         "text_truncated": false
+        }
+       ],
+       "examined_base_address": "0x0000000040000000",
+       "examined_size": 4096,
+       "query_text": "needle-string",
+       "requested_bytes": 4096,
+       "section": {
+        "cap": 12,
+        "included": 1,
+        "limitations": [
+         "the region read came up short: 128 of 4096 requested byte(s) were read"
+        ],
+        "name": "string_context",
+        "provenance": [
+         "report_content_scan"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": 1,
+        "truncated": false
+       },
+       "total_strings": 1
+      },
+      "string_hit": {
+       "address": "0x0000000040000014",
+       "encoding": "ASCII",
+       "offset": 20
+      },
+      "string_scan": {
+       "ascii_count": 1,
+       "bytes_read": 128,
+       "clamped": false,
+       "requested_bytes": 4096,
+       "total": 1,
+       "truncated": true,
+       "utf16_count": 0
+      },
+      "string_scan_error": null,
+      "thread": null,
+      "thread_region_correlation_excluded": false,
+      "verdict": "CLEAN"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "report",
+   "summary": {
+    "card_count": 1,
+    "cards_skipped_for_budget": 0,
+    "clamped_regions": 0,
+    "hits_image": 0,
+    "hits_image_registration_unavailable": 0,
+    "hits_mapped": 0,
+    "hits_private": 1,
+    "hits_region_type_unavailable": 0,
+    "hits_sharing_a_region": 0,
+    "hits_skipped_for_budget": 0,
+    "hits_unregistered_image": 0,
+    "image_hit_modules": [],
+    "mode": "string",
+    "pe_context": {
+     "conflict_count": 0,
+     "consistent_count": 10,
+     "entry_point_rva": 4096,
+     "entry_point_va": "0x00007ff600001000",
+     "image_base": "0x00007ff600000000",
+     "machine": 34404,
+     "machine_name": "AMD64",
+     "module_match": "resolved",
+     "not_applicable_count": 17,
+     "observations": [],
+     "pe32_plus": true,
+     "preferred_image_base": "0x00007ff600000000",
+     "section": {
+      "cap": 16,
+      "included": 0,
+      "limitations": [],
+      "name": "pe_context",
+      "provenance": [
+       "pe_profile",
+       "pe_correlation"
+      ],
+      "scope": "process",
+      "status": "complete",
+      "total": 0,
+      "truncated": false
+     },
+     "section_count": 1,
+     "size_of_image": 12288,
+     "time_date_stamp": 1600000000,
+     "unavailable_count": 2
+    },
+    "process_enrichment": {
+     "command_line": "\"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+     "command_line_truncated": false,
+     "environment": {
+      "entries": [
+       {
+        "name": "COMPUTERNAME",
+        "truncated": false,
+        "value": "HOST-SYNTH"
+       },
+       {
+        "name": "USERNAME",
+        "truncated": false,
+        "value": "analyst"
+       },
+       {
+        "name": "PROCESSOR_ARCHITECTURE",
+        "truncated": false,
+        "value": "AMD64"
+       }
+      ],
+      "section": {
+       "cap": 7,
+       "included": 3,
+       "limitations": [],
+       "name": "environment",
+       "provenance": [
+        "environment_block"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 3,
+       "truncated": false
+      }
+     },
+     "handles": {
+      "by_type": [
+       {
+        "count": 2,
+        "type_name": "File",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Event",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Key",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Section",
+        "type_name_truncated": false
+       }
+      ],
+      "section": {
+       "cap": 12,
+       "included": 4,
+       "limitations": [],
+       "name": "handles",
+       "provenance": [
+        "handles"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 4,
+       "truncated": false
+      },
+      "total_handles": 5
+     },
+     "identity_conflicts": [],
+     "identity_conflicts_total": 0,
+     "image_base_address": "0x00007ff600000000",
+     "module_match_state": "resolved",
+     "path_source": "peb",
+     "pid": 4242,
+     "process_name": "app.exe",
+     "process_name_truncated": false,
+     "process_path": "C:\\Program Files\\Sample\\app.exe",
+     "process_path_truncated": false,
+     "process_start_utc": null,
+     "section": {
+      "cap": 1,
+      "included": 1,
+      "limitations": [
+       "no process start time resolved from MiscInfoStream"
+      ],
+      "name": "process",
+      "provenance": [
+       "misc_info",
+       "peb",
+       "modules"
+      ],
+      "scope": "process",
+      "status": "partial",
+      "total": 1,
+      "truncated": false
+     },
+     "token": {
+      "detail": "the dump declares no TokenStream: no token or privilege evidence was captured",
+      "parser_state": null,
+      "status": "unavailable",
+      "stream_present": false
+     }
+    },
+    "query_addr": null,
+    "query_string": "needle-string",
+    "query_tid": null,
+    "skipped_unreadable_regions": 3,
+    "total_hits": 1,
+    "truncated_regions": 1
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "  [\u00b7] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=b1e78e29b51cf439\u2026)",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  dumpex TRIAGE REPORT",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  File : sample.dmp",
+  "",
+  "Searching memory for: 'needle-string'",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "COVERAGE SUMMARY",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Status: PARTIAL  (core report coverage \u2014 see below for optional-enrichment gaps)",
+  "  Known evidence gaps:",
+  "    [~] Requested memory region was only partially read",
+  "    [~] The memory-wide string search skipped 3 region(s) it could not read",
+  "    [~] The memory-wide string search only partially read 1 region(s) -- a needle past that point would not be found",
+  "    [~] String context: partial",
+  "    [~] Exception context: the dump carries no ExceptionStream: no exception was evaluated",
+  "    [~] Instruction context: the captured run ended after 128 byte(s): the window is the whole of it",
+  "    [~] Instruction context: the instruction window stopped at the cap of 48 instruction(s)",
+  "    [~] Correlated handles: this card's region read came up short: a handle named only in the unread bytes could not be matched",
+  "    [~] Process identity: no process start time resolved from MiscInfoStream",
+  "    [~] Token: the dump declares no TokenStream: no token or privilege evidence was captured",
+  "  [\u00b7] treat every finding below as based on what this run could evaluate, and consider a more complete capture or a targeted re-run over the missing coverage before ruling anything in or out",
+  "",
+  "  [+] Found in 1 region(s):",
+  "    \u25ba [ASCII]  PAGE_READWRITE  MEM_PRIVATE",
+  "      VA  = region base 0x0000000040000000  +  offset 0x14  =  0x0000000040000014",
+  "      DMP = file offset 0x8b54",
+  "",
+  "  Addr : 0x40000000",
+  "",
+  "ASSESSMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  CLEAN \u2014 no suspicious indicators found",
+  "",
+  "  Next:",
+  "    this card's own evidence found nothing eligible -- see the coverage summary below for what this run could not evaluate",
+  "",
+  "",
+  "ANCHOR CONTEXT",
+  "==================================================",
+  "MEMORY REGION AT TARGET ADDRESS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Region base (VA)         0x0000000040000000  \u2190 process virtual address",
+  "  Region base (file offset) 0x8b40  \u2190 byte offset inside .dmp",
+  "  Physical addr (RAM)      not recorded in minidumps",
+  "  IOC addr = base + offset see formula per string below",
+  "  Region Size              0x1000  (4 KB)",
+  "  Protection             PAGE_READWRITE",
+  "  Type                   MEM_PRIVATE",
+  "  Module Owner           none \u2014 unregistered memory",
+  "",
+  "ANCHOR PLACEMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Placement          private",
+  "  Owning module      (no module)   unregistered",
+  "  Live protection    PAGE_READWRITE",
+  "",
+  "",
+  "KEY EVIDENCE",
+  "==================================================",
+  "STRINGS IN REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Scanning 4 KB  (ASCII + UTF-16LE, min_len=6)",
+  "  [~] Region read came up short: got 128 of 4096 requested byte(s) \u2014 coverage partial",
+  "",
+  "  [\u00b7] No IOC patterns matched.",
+  "",
+  "  [\u00b7] 1 notable string (len > 20) retained -- use --verbose for the ADDITIONAL RETAINED STRINGS section",
+  "",
+  "  Total: 1 strings  (ASCII: 1  UTF-16LE: 0)",
+  "",
+  "STRING CONTEXT AROUND THE ANCHOR",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Examined 0x40000000 + 128 of 4096 requested byte(s); 1 string(s) extracted",
+  "  Searched for: needle-string",
+  "    [ASCII]        0x0000000040000000  anchor",
+  "      short backed region needle-stringSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+  "  Proximity is layout: an adjacent string is not a reference to the anchor.",
+  "  evidence: partial   kept: 1 of 1",
+  "  [~] the region read came up short: 128 of 4096 requested byte(s) were read",
+  "",
+  "",
+  "CORRELATION",
+  "==================================================",
+  "EXCEPTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No exception evidence was evaluated.",
+  "  Exception state is execution evidence, not a maliciousness finding.",
+  "  evidence: not evaluated",
+  "  [~] the dump carries no ExceptionStream: no exception was evaluated",
+  "",
+  "INSTRUCTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Window at 0x0000000040000000 (card_anchor, x64); 128 byte(s) read; decoder: decoded",
+  "  Decode ended at    0x0000000040000047   71/128 byte(s) decoded",
+  "  \u25ba 0x0000000040000000  jae 0x4000006a",
+  "    0x0000000040000002  outsd dx, dword ptr [rsi]",
+  "    0x0000000040000003  jb 0x40000079",
+  "    0x0000000040000005  and byte ptr [rdx + 0x61], ah",
+  "    0x0000000040000008  movsxd ebp, dword ptr [rbx + 0x65]",
+  "    0x000000004000000b  and byte ptr fs:[rdx + 0x65], dh",
+  "    0x000000004000000f  imul ebp, dword ptr [edi + 0x6e], 0x65656e20",
+  "    0x0000000040000017  insb byte ptr [rdi], dx",
+  "  [\u00b7] this section shows 8 of 48 retained entries \u2014 use --verbose for all of them; --json carries the same retained set",
+  "  Branch targets",
+  "    direct               0x000000004000006a  MEM_PRIVATE (unregistered)",
+  "    direct               0x0000000040000079  MEM_PRIVATE (unregistered)",
+  "  Rows are a linear decode from the anchor in byte order, not an executed path;",
+  "  bytes after a branch may be data the code reads rather than instructions.",
+  "  Instruction context names no function, argument, or call stack.",
+  "  evidence: partial   kept: 48",
+  "  [~] the captured run ended after 128 byte(s): the window is the whole of it",
+  "  [~] the instruction window stopped at the cap of 48 instruction(s)",
+  "",
+  "CORRELATED HANDLES",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No handle object name appears in this card's captured text.",
+  "  Full inventory: --handles",
+  "  evidence: partial",
+  "  [~] this card's region read came up short: a handle named only in the unread bytes could not be matched",
+  "",
+  "",
+  "",
+  "ADDITIONAL CONTEXT",
+  "==================================================",
+  "ALLOCATION NEIGHBORHOOD",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Allocation base        0x0000000040000000",
+  "    0x0000000020000000        4 KB  PAGE_READWRITE           MEM_PRIVATE    preceding gap 0x1ffff000",
+  "    0x0000000030000000        8 KB  PAGE_EXECUTE_READWRITE   MEM_PRIVATE    preceding gap 0xfffe000",
+  "  \u25ba 0x0000000040000000        4 KB  PAGE_READWRITE           MEM_PRIVATE    anchor adjacent",
+  "    0x0000000050000000       64 KB  PAGE_READWRITE           MEM_PRIVATE    following gap 0xffff000",
+  "    0x000000007ffde000        8 KB  PAGE_READWRITE           MEM_PRIVATE    following gap 0x3ffdd000",
+  "  Adjacency is memory layout, not a relationship to the anchor.",
+  "",
+  "",
+  "PROCESS CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  PID                    4242",
+  "  Process                app.exe",
+  "  Path                   C:\\Program Files\\Sample\\app.exe  \u2190 from peb",
+  "  Command Line           \"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+  "  evidence: partial   kept: 1 of 1",
+  "  [~] no process start time resolved from MiscInfoStream",
+  "",
+  "  Session (allowlisted environment)",
+  "    Captured                 COMPUTERNAME  USERNAME  PROCESSOR_ARCHITECTURE",
+  "    [\u00b7] values not shown \u2014 use --verbose for them; --json carries the same retained set",
+  "",
+  "  Handles",
+  "    Total                    5",
+  "    By type                  File=2  Event=1  Key=1  Section=1",
+  "",
+  "  Token",
+  "    Capability               unavailable",
+  "    the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "MAIN IMAGE PE CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Image base           0x00007ff600000000",
+  "  Machine              AMD64",
+  "  Correlation          10 consistent  0 conflict  2 unavailable  17 not applicable",
+  "  A structural conflict is a lead for review, not a maliciousness finding.",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

@@ -1,0 +1,253 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--threads",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "threads",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": 1,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "SOURCE_KEY_MISMATCH",
+      "counterpart_source": "threads",
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": "thread",
+      "source": "thread_info",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": [
+       "StartAddress",
+       "CreateTime",
+       "ExitTime",
+       "KernelTime",
+       "UserTime",
+       "DumpFlags"
+      ]
+     }
+    ],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "1 thread(s) present in ThreadListStream but missing from ThreadInfoListStream (StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those)"
+    ],
+    "sources": {
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "backing_module": "app.exe",
+      "create_time": "2019-04-17 18:40:00 UTC",
+      "dump_flags_state": "resolved",
+      "exit_status": 0,
+      "exit_time": null,
+      "flags": [],
+      "ip": "0x00007ff600001010",
+      "ip_context_conflict": false,
+      "ip_reg": "RIP",
+      "kernel_time_100ns": 1000,
+      "module_context": "resolved",
+      "priority": 8,
+      "start_address": "0x00007ff600001000",
+      "start_address_state": "recorded",
+      "suspend_count": 0,
+      "teb": "0x000000007ffde000",
+      "tid": 256,
+      "user_time_100ns": 2000
+     },
+     {
+      "backing_module": null,
+      "create_time": "(none)",
+      "dump_flags_state": "resolved",
+      "exit_status": 0,
+      "exit_time": null,
+      "flags": [],
+      "ip": "0x0000000030000100",
+      "ip_context_conflict": false,
+      "ip_reg": "RIP",
+      "kernel_time_100ns": 0,
+      "module_context": "unregistered",
+      "priority": 8,
+      "start_address": "0x0000000030000100",
+      "start_address_state": "recorded",
+      "suspend_count": 0,
+      "teb": "0x000000007ffe0000",
+      "tid": 260,
+      "user_time_100ns": 0
+     },
+     {
+      "backing_module": "ntdll.dll",
+      "create_time": "(none)",
+      "dump_flags_state": "resolved",
+      "exit_status": 0,
+      "exit_time": null,
+      "flags": [
+       "NO_CTX"
+      ],
+      "ip": "0x00007ffe00000500",
+      "ip_context_conflict": true,
+      "ip_reg": "RIP",
+      "kernel_time_100ns": 0,
+      "module_context": "resolved",
+      "priority": 8,
+      "start_address": "0x00007ffe00000400",
+      "start_address_state": "recorded",
+      "suspend_count": 0,
+      "teb": "0x000000007ffe2000",
+      "tid": 264,
+      "user_time_100ns": 0
+     },
+     {
+      "backing_module": null,
+      "create_time": null,
+      "dump_flags_state": "absent",
+      "exit_status": null,
+      "exit_time": null,
+      "flags": [],
+      "ip": "0x00007ff600001020",
+      "ip_context_conflict": null,
+      "ip_reg": "RIP",
+      "kernel_time_100ns": null,
+      "module_context": null,
+      "priority": 8,
+      "start_address": null,
+      "start_address_state": "absent",
+      "suspend_count": 0,
+      "teb": "0x000000007ffe4000",
+      "tid": 268,
+      "user_time_100ns": null
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "threads",
+   "summary": {
+    "count": 4
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "  [~] 1 thread(s) present in ThreadListStream but missing from ThreadInfoListStream (StartAddress/CreateTime/ExitTime/KernelTime/UserTime/DumpFlags unavailable for those)",
+  "",
+  "",
+  "  TID              0x100",
+  "  StartAddress     0x00007ff600001000  \u2190 app.exe",
+  "  CurrentIP        0x00007ff600001010  (RIP) (differs from StartAddress)",
+  "  SuspendCount     0",
+  "  Priority         8",
+  "  TEB              0x000000007ffde000",
+  "  Created          2019-04-17 18:40:00 UTC",
+  "  Exited           (still running)",
+  "  KernelTime       0.000s  (1000 \u00d7 100ns)",
+  "  UserTime         0.000s  (2000 \u00d7 100ns)",
+  "",
+  "  TID              0x104",
+  "  StartAddress     0x0000000030000100  \u2190 \u26a0  NOT IN ANY MODULE",
+  "  CurrentIP        0x0000000030000100  (RIP)",
+  "  SuspendCount     0",
+  "  Priority         8",
+  "  TEB              0x000000007ffe0000",
+  "  Created          (none)",
+  "  Exited           (still running)",
+  "  KernelTime       0s",
+  "  UserTime         0s",
+  "",
+  "  TID              0x108 [NO_CTX]",
+  "  StartAddress     0x00007ffe00000400  \u2190 ntdll.dll",
+  "  CurrentIP        0x00007ffe00000500  (RIP) (dump reports this thread's context as invalid \u2014 not confirmed)",
+  "  SuspendCount     0",
+  "  Priority         8",
+  "  TEB              0x000000007ffe2000",
+  "  Created          (none)",
+  "  Exited           (still running)",
+  "  KernelTime       0s",
+  "  UserTime         0s",
+  "",
+  "  TID              0x10c",
+  "  StartAddress     unavailable  \u2190 (unknown \u2014 requires ThreadInfoListStream)",
+  "  CurrentIP        0x00007ff600001020  (RIP) (cannot confirm whether this context is disputed \u2014 no ThreadInfoListStream record for this thread)",
+  "  SuspendCount     0",
+  "  Priority         8",
+  "  TEB              0x000000007ffe4000",
+  "",
+  "[+] 4 thread(s).",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

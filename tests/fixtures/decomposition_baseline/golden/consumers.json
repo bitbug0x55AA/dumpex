@@ -1,0 +1,2105 @@
+{
+ "dumpex.core.memory": {
+  "DISPATCHED_STREAM_TYPES": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "DUMP_FLAGS_ABSENT": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "INDICATOR_DIMS": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "IOC_STRING_ENCODING_WIDTHS": {
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ]
+  },
+  "MAX_REGION_READ": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "RawThreadInfo": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "RegionReadError": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ]
+  },
+  "START_ADDRESS_INVALID": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "START_ADDRESS_RECORDED": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/correlation.py": [
+    "from"
+   ]
+  },
+  "START_ADDRESS_UNVERIFIED": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "STREAM_ATTR_NAMES": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "StringSearchStats": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "VERDICT_CLEAN": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "VERDICT_LIKELY_MALICIOUS": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "VERDICT_SUSPICIOUS": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "_extract_ioc_strings": {
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ]
+  },
+  "_extract_strings_from_data": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "_get_region_at": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/hunt/_context.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/context.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/scanner.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/context.py": [
+    "from"
+   ]
+  },
+  "_resolve_size": {
+   "dumpex/cli.py": [
+    "from"
+   ]
+  },
+  "_search_string_in_memory": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "addr_to_module": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/core/va_location.py": [
+    "from"
+   ],
+   "dumpex/hunt/_context.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/decoding.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/entropy.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/sleep_mask.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/correlation.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/scanner.py": [
+    "from"
+   ]
+  },
+  "clamped_reader": {
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "declared_descriptor_count": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "directory_truncated_count": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "dump_flags_state": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "dump_flags_tags": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "enriched_thread_contexts": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/__init__.py": [
+    "from"
+   ]
+  },
+  "get_handles": {
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ]
+  },
+  "get_memory_regions": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/core/va_range.py": [
+    "from"
+   ],
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/targeted.py": [
+    "from"
+   ]
+  },
+  "get_memory_segments": {
+   "dumpex/core/va_range.py": [
+    "from"
+   ]
+  },
+  "get_modules": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/modules.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/targeted.py": [
+    "from"
+   ]
+  },
+  "get_thread_contexts": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ]
+  },
+  "get_thread_infos": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ]
+  },
+  "group_regions_by_allocation": {
+   "dumpex/hunt/injection/correlation.py": [
+    "from"
+   ]
+  },
+  "handle_stream_evidence": {
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ]
+  },
+  "has_stream_directory": {
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "module_name_only": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ]
+  },
+  "observe_stream": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "open_dump": {
+   "dumpex/cli.py": [
+    "from"
+   ],
+   "scripts/evaluate_entropy_page_local_pass.py": [
+    "from"
+   ]
+  },
+  "parse_hex_or_int": {
+   "dumpex/cli.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "prot_str": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/_context.py": [
+    "from"
+   ],
+   "dumpex/hunt/_coverage.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/context.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/decoding.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/entropy.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/sleep_mask.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/context.py": [
+    "from"
+   ]
+  },
+  "read_region": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/__init__.py": [
+    "from"
+   ],
+   "scripts/evaluate_entropy_page_local_pass.py": [
+    "from"
+   ]
+  },
+  "read_region_spanning": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/core/process_info.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/targeted.py": [
+    "from"
+   ]
+  },
+  "recorded_start_address": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/thread_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/correlation.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/models.py": [
+    "from"
+   ]
+  },
+  "stream_failure": {
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/core/process_info.py": [
+    "from"
+   ]
+  },
+  "truncated_descriptor_count": {
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/handle_scan.py": [
+    "from"
+   ]
+  },
+  "truncated_thread_info_count": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/__init__.py": [
+    "from"
+   ]
+  },
+  "va_range_captured_bytes": {
+   "dumpex/core/process_info.py": [
+    "from"
+   ],
+   "dumpex/hunt/_coverage.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/decoding.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/entropy.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/sleep_mask.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ]
+  },
+  "va_to_file_offset": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/_coverage.py": [
+    "from"
+   ],
+   "dumpex/hunt/_location.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/memory_scan.py": [
+    "from"
+   ]
+  },
+  "verdict_for": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  }
+ },
+ "dumpex.output.coverage": {
+  "COVERAGE_COMPLETE": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "COVERAGE_NOT_EVALUATED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "CoverageLimitation": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/_observation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/targeted.py": [
+    "from"
+   ]
+  },
+  "CoverageReport": {
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ],
+   "dumpex/output/command_result.py": [
+    "from"
+   ]
+  },
+  "CoverageStatus": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ]
+  },
+  "EXECUTION_COMPLETED": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/output/command_result.py": [
+    "from"
+   ],
+   "dumpex/output/envelope.py": [
+    "from"
+   ]
+  },
+  "EXECUTION_FAILED": {
+   "dumpex/output/envelope.py": [
+    "from"
+   ]
+  },
+  "EXECUTION_PARTIAL": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/output/envelope.py": [
+    "from"
+   ]
+  },
+  "EXIT_NOT_EVALUATED": {
+   "dumpex/cli.py": [
+    "from"
+   ]
+  },
+  "EXIT_OK": {
+   "dumpex/cli.py": [
+    "from"
+   ]
+  },
+  "EXIT_PARTIAL": {
+   "dumpex/cli.py": [
+    "from"
+   ]
+  },
+  "EvaluationRequirement": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "ExecutionStatus": {
+   "dumpex/output/command_result.py": [
+    "from"
+   ]
+  },
+  "LimitationCode": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/targeted.py": [
+    "from"
+   ]
+  },
+  "ScanTarget": {
+   "dumpex/hunt/_coverage.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/models.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/domain.py": [
+    "from"
+   ]
+  },
+  "ScanTargetKind": {
+   "dumpex/hunt/_coverage.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/memory_scan.py": [
+    "from"
+   ]
+  },
+  "SourceObservation": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ]
+  },
+  "SourceRequirement": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "SourceState": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/core/process_info.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ]
+  },
+  "_format_bytes": {
+   "dumpex/hunt/summary_presentation.py": [
+    "from"
+   ]
+  },
+  "build_coverage_report": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ],
+   "dumpex/commands/modules.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "combine_coverage_reports": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "combine_missed_bytes": {
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ]
+  },
+  "display_source_name": {
+   "dumpex/hunt/_targeted_console.py": [
+    "from"
+   ]
+  },
+  "exit_code_for": {
+   "dumpex/cli.py": [
+    "from"
+   ]
+  },
+  "format_evidence_gap_clause": {
+   "dumpex/hunt/_report_console.py": [
+    "from"
+   ]
+  },
+  "format_missed_bytes_clause": {
+   "dumpex/hunt/_report_console.py": [
+    "from"
+   ]
+  },
+  "format_scan_target_preview": {
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/domain.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "observe_source": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ],
+   "dumpex/commands/modules.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "render_limitation": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ],
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_console.py": [
+    "from"
+   ]
+  },
+  "scan_target_noun": {
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ]
+  },
+  "unstated_gaps": {
+   "dumpex/hunt/_report_console.py": [
+    "from"
+   ]
+  }
+ },
+ "dumpex.output.records": {
+  "Artifact": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/output/command_result.py": [
+    "from"
+   ]
+  },
+  "CAPABILITY_BY_ID": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "CAPABILITY_IDS": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "CapabilityLimitation": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "CapabilityLimitationCode": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "CapabilityStatus": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "CsBeaconDetails": {
+   "dumpex/hunt/cs_beacon/report_record.py": [
+    "from"
+   ]
+  },
+  "Diagnostic": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/output/collector.py": [
+    "from"
+   ],
+   "dumpex/output/command_result.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_COMPLETE": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_MISSING": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_PARTIAL": {
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_SCOPE_CARD": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_SCOPE_PROCESS": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ENRICHMENT_TEXT_CAP": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "EnrichmentSection": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ExtractRecord": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ]
+  },
+  "HUNTERS": {
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_observation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_registry.py": [
+    "from"
+   ],
+   "dumpex/hunt/_request.py": [
+    "from"
+   ],
+   "dumpex/hunt/_rescan_command.py": [
+    "from"
+   ],
+   "dumpex/hunt/region_correlation.py": [
+    "from"
+   ],
+   "dumpex/hunt/summary.py": [
+    "from"
+   ],
+   "dumpex/hunt/summary_presentation.py": [
+    "from"
+   ]
+  },
+  "HandleRecord": {
+   "dumpex/commands/handles.py": [
+    "from"
+   ]
+  },
+  "HollowingDetails": {
+   "dumpex/hunt/hollowing/report_record.py": [
+    "from"
+   ]
+  },
+  "HuntPeHeaderHit": {
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ]
+  },
+  "HuntRegionRef": {
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ]
+  },
+  "HuntThreadRef": {
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ]
+  },
+  "HuntThreadRegionHit": {
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ]
+  },
+  "HunterRecord": {
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/region_correlation.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/summary.py": [
+    "from"
+   ],
+   "dumpex/hunt/summary_presentation.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/collect.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_record.py": [
+    "from"
+   ]
+  },
+  "INSTRUCTION_LEAD_NAMES": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "IatRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ImportEntryRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "InjectionDetails": {
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ]
+  },
+  "MAX_INSTRUCTION_LEAD_EVIDENCE": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "MEMORY_DIFF_ADDED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MEMORY_DIFF_PROTECTION_CHANGED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MEMORY_DIFF_REMOVED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MODULE_CONTEXT_RESOLVED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ]
+  },
+  "MODULE_CONTEXT_UNAVAILABLE": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ]
+  },
+  "MODULE_CONTEXT_UNREGISTERED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/_investigation.py": [
+    "from"
+   ]
+  },
+  "MODULE_DIFF_ADDED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MODULE_DIFF_REBASED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MODULE_DIFF_REMOVED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MemoryDiffRecord": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "MemoryRegionRecord": {
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ]
+  },
+  "ModuleDiffRecord": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "ModuleRecord": {
+   "dumpex/commands/modules.py": [
+    "from"
+   ]
+  },
+  "ObfuscationDetails": {
+   "dumpex/hunt/encoding/report_record.py": [
+    "from"
+   ]
+  },
+  "PeObservationRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "PipeDetails": {
+   "dumpex/hunt/pipe/report_record.py": [
+    "from"
+   ]
+  },
+  "ProcessDiagnosticRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessPeAcquisitionRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessPeDirectoryRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessPeEntryPointRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessPeRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessPeSectionRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProcessRecord": {
+   "dumpex/commands/process.py": [
+    "from"
+   ]
+  },
+  "ProfileCapabilityEntry": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "ProfileMemoryCapture": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "ProfileRecord": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "ProfileStreamEntry": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "REGION_MEMBERSHIP_CURRENT": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "REGION_MEMBERSHIP_START": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "REGION_MEMBERSHIP_START_AND_CURRENT": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "ReportAddressContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportAllocationNeighborhood": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportAnchorPeContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportBranchTarget": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportCorrelatedHandle": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportDecodedInstruction": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportEnvironmentSummary": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportEnvironmentValue": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportExceptionContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportExceptionEntry": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportHandleCorrelation": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportHandleSummary": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportHandleTypeCount": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportIatCorrelatedEntry": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportIatCorrelation": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportIdentityConflict": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportInstructionContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportInstructionLead": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportIocString": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "ReportNeighborRegion": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportPeContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportProcessEnrichment": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportRegionInfo": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "ReportStringContext": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportStringContextEntry": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "ReportThreadInfo": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "ReportTokenCapability": {
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "SEVERITY_ERROR": {
+   "dumpex/output/collector.py": [
+    "from"
+   ]
+  },
+  "SEVERITY_WARNING": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "StompingDetails": {
+   "dumpex/hunt/stomping/report_record.py": [
+    "from"
+   ]
+  },
+  "StreamParserState": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ]
+  },
+  "StringRecord": {
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "SysInfoRecord": {
+   "dumpex/commands/sysinfo.py": [
+    "from"
+   ]
+  },
+  "THREAD_DIFF_ADDED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "THREAD_DIFF_REMOVED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "TRIAGE_ANCHOR_ADDRESS": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "TRIAGE_ANCHOR_STRING_HIT": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "TRIAGE_ANCHOR_TID": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "TRIAGE_ANCHOR_TID_CURRENT_IP": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "TargetedMeasurement": {
+   "dumpex/hunt/_observation.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ]
+  },
+  "TargetedScopeRecord": {
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ]
+  },
+  "ThreadDiffRecord": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "ThreadRecord": {
+   "dumpex/commands/threads.py": [
+    "from"
+   ]
+  },
+  "TriageCardRecord": {
+   "dumpex/commands/report.py": [
+    "from"
+   ]
+  },
+  "YaraDetails": {
+   "dumpex/hunt/yara_hunt/report_record.py": [
+    "from"
+   ]
+  },
+  "_HUNT_CONFIDENCES": {
+   "dumpex/hunt/summary_presentation.py": [
+    "from"
+   ]
+  },
+  "_HUNT_REVIEW_PRIORITIES": {
+   "dumpex/hunt/summary_presentation.py": [
+    "from"
+   ]
+  },
+  "_require_hex_address": {
+   "dumpex/hunt/summary.py": [
+    "from"
+   ]
+  },
+  "handle_name_display": {
+   "dumpex/commands/handles.py": [
+    "from"
+   ]
+  },
+  "hex_address": {
+   "dumpex/cli.py": [
+    "from"
+   ],
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/extract.py": [
+    "from"
+   ],
+   "dumpex/commands/handles.py": [
+    "from"
+   ],
+   "dumpex/commands/list_cmd.py": [
+    "from"
+   ],
+   "dumpex/commands/modules.py": [
+    "from"
+   ],
+   "dumpex/commands/process.py": [
+    "from"
+   ],
+   "dumpex/commands/report.py": [
+    "from"
+   ],
+   "dumpex/commands/report_enrichment.py": [
+    "from"
+   ],
+   "dumpex/commands/threads.py": [
+    "from"
+   ],
+   "dumpex/hunt/__init__.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/_targeted_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/cs_beacon/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/encoding/targeted.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/hollowing/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/injection/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/pipe/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_facts.py": [
+    "from"
+   ],
+   "dumpex/hunt/stomping/report_record.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_console.py": [
+    "from"
+   ],
+   "dumpex/hunt/yara_hunt/report_facts.py": [
+    "from"
+   ]
+  },
+  "render_capability_limitation": {
+   "dumpex/commands/profile.py": [
+    "from"
+   ]
+  }
+ }
+}

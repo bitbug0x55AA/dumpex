@@ -548,7 +548,7 @@ def _mf_with_regions(regions, read_map):
     return mf
 
 
-def test_search_string_in_memory_returns_hits_and_zero_skipped_when_all_readable():
+def test_search_string_in_memory_returns_hits_and_zero_skipped_when_all_readable(monkeypatch):
     # Region content padded to the full region size -- a short fixture
     # payload would otherwise register as `truncated`, conflating this
     # test's own single purpose (the skip counter) with truncation.
@@ -557,13 +557,13 @@ def test_search_string_in_memory_returns_hits_and_zero_skipped_when_all_readable
         [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
         {0x1000: data})
     import dumpex.core.memory as core_memory
-    core_memory.read_region = mem_reader({0x1000: data})
+    monkeypatch.setattr(core_memory, "read_region", mem_reader({0x1000: data}))
     hits, stats = _search_string_in_memory(mf, "NEEDLE1234")
     assert len(hits) == 1
     assert stats == StringSearchStats(skipped=0, clamped=0, truncated=0)
 
 
-def test_search_string_in_memory_counts_skipped_unreadable_regions():
+def test_search_string_in_memory_counts_skipped_unreadable_regions(monkeypatch):
     mf = _mf_with_regions(
         [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
          Region(0x2000, 0x2000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
@@ -574,7 +574,7 @@ def test_search_string_in_memory_counts_skipped_unreadable_regions():
         if addr == 0x1000:
             raise RuntimeError("simulated read failure")
         return b"header NEEDLE1234 trailer".ljust(0x1000, b"\x00")
-    core_memory.read_region = _reader
+    monkeypatch.setattr(core_memory, "read_region", _reader)
     hits, stats = _search_string_in_memory(mf, "NEEDLE1234")
     assert stats.skipped == 1
     assert stats.clamped == 0
@@ -595,18 +595,19 @@ def test_search_string_in_memory_counts_clamped_regions_bigger_than_cap(monkeypa
     assert stats.skipped == 0
 
 
-def test_search_string_in_memory_counts_truncated_short_reads():
+def test_search_string_in_memory_counts_truncated_short_reads(monkeypatch):
     mf = _mf_with_regions(
         [Region(0x1000, 0x1000, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")], {})
     import dumpex.core.memory as core_memory
-    core_memory.read_region = lambda mf_, addr, size: b"only nine"   # far short of 4096
+    monkeypatch.setattr(core_memory, "read_region",
+                        lambda mf_, addr, size: b"only nine")   # far short of 4096
     hits, stats = _search_string_in_memory(mf, "NEEDLE1234")
     assert stats.truncated == 1
     assert stats.clamped == 0
     assert stats.skipped == 0
 
 
-def test_search_string_in_memory_needle_past_truncation_is_a_miss_but_counted():
+def test_search_string_in_memory_needle_past_truncation_is_a_miss_but_counted(monkeypatch):
     # The exact false-negative the review flagged: the needle sits past
     # where the (clamped-and-then-short) read actually reached, so it's
     # never found -- but stats.truncated must say so, rather than the scan
@@ -615,7 +616,8 @@ def test_search_string_in_memory_needle_past_truncation_is_a_miss_but_counted():
         [Region(0x1000, 0x1000, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")], {})
     import dumpex.core.memory as core_memory
     payload = (b"x" * 100) + b"NEEDLE1234"
-    core_memory.read_region = lambda mf_, addr, size: payload[:16]   # cuts off before the needle
+    monkeypatch.setattr(core_memory, "read_region",
+                        lambda mf_, addr, size: payload[:16])   # cuts off before the needle
     hits, stats = _search_string_in_memory(mf, "NEEDLE1234")
     assert hits == []
     assert stats.truncated == 1

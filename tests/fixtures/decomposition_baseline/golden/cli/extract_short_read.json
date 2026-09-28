@@ -1,0 +1,140 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--extract",
+  "0x40000000",
+  "-s",
+  "0x100",
+  "-o",
+  "<TMP>/out.bin",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [
+   {
+    "description": "Bytes extracted from 0x40000000",
+    "id": "extract_output",
+    "kind": "extracted_region",
+    "path": "<TMP>/out.bin",
+    "sha256": "79f4c3d0083cc687bf22b12abae0e2948ee9948080add4aacb8be8a372134982",
+    "size_bytes": 128
+   }
+  ],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "extract_0x40000000",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "output": "<TMP>/out.bin",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": null,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "REGION_READ_TRUNCATED",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "requested_region",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     }
+    ],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "Requested memory region was only partially read"
+    ],
+    "sources": {
+     "requested_region": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "auto_sized": false,
+      "bytes_read": 128,
+      "mz_header_detected": false,
+      "pe_header_state": null,
+      "requested_address": "0x0000000040000000",
+      "requested_size": 256
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "extract",
+   "summary": {
+    "count": 1
+   }
+  }
+ },
+ "output_file": {
+  "sha256": "79f4c3d0083cc687bf22b12abae0e2948ee9948080add4aacb8be8a372134982",
+  "size": 128
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[*] Reading 0x100 bytes from 0x40000000 ...",
+  "  [~] Requested memory region was only partially read",
+  "[+] Saved \u2192 <TMP>/out.bin  (128 bytes  sha256=79f4c3d0083cc687bf22b12abae0e2948ee9948080add4aacb8be8a372134982)",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

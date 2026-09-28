@@ -1,0 +1,765 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--report",
+  "--report-tid",
+  "0x100",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "tid_0x100",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "min_len": 6,
+     "output": null,
+     "report_addr": null,
+     "report_string": null,
+     "report_tid": "0x100",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "rules": {
+    "explicit": false,
+    "path": "<dumpex.rules_pkg>/data/rules.yaml",
+    "sha256": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+    "version": 1
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "requested_region": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "allocation_neighborhood": {
+       "allocation_base": "0x00007ff600000000",
+       "entries": [
+        {
+         "allocation_base": "0x0000000050000000",
+         "base_address": "0x0000000050000000",
+         "distance": 140693196443648,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "preceding",
+         "size": 65536,
+         "state": "MEM_RESERVE",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x000000007ffde000",
+         "base_address": "0x000000007ffde000",
+         "distance": 140692391333888,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "preceding",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x00007ff600000000",
+         "base_address": "0x00007ff600000000",
+         "distance": 0,
+         "module_owner": "C:\\Program Files\\Sample\\app.exe",
+         "module_owner_truncated": false,
+         "protection": "PAGE_READONLY",
+         "relation": "same_allocation",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        },
+        {
+         "allocation_base": "0x00007ff600000000",
+         "base_address": "0x00007ff600001000",
+         "distance": 0,
+         "module_owner": "C:\\Program Files\\Sample\\app.exe",
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READ",
+         "relation": "anchor",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        },
+        {
+         "allocation_base": "0x00007ff600000000",
+         "base_address": "0x00007ff600002000",
+         "distance": 0,
+         "module_owner": "C:\\Program Files\\Sample\\app.exe",
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "same_allocation",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        },
+        {
+         "allocation_base": "0x00007ffe00000000",
+         "base_address": "0x00007ffe00000000",
+         "distance": 34359730176,
+         "module_owner": "C:\\Windows\\System32\\ntdll.dll",
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READ",
+         "relation": "following",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_IMAGE"
+        }
+       ],
+       "section": {
+        "cap": 9,
+        "included": 6,
+        "limitations": [],
+        "name": "allocation",
+        "provenance": [
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 6,
+        "truncated": false
+       }
+      },
+      "anchor_address": "0x00007ff600001000",
+      "anchor_pe_context": {
+       "anchor_address": "0x00007ff600001000",
+       "classification": "code",
+       "declared_executable": true,
+       "declared_readable": true,
+       "declared_writable": false,
+       "live_protection": "PAGE_EXECUTE_READ",
+       "module_base": "0x00007ff600000000",
+       "module_owner": "C:\\Program Files\\Sample\\app.exe",
+       "module_owner_truncated": false,
+       "module_rva": 4096,
+       "protection_matches_declared": true,
+       "region_base": "0x00007ff600001000",
+       "region_type": "MEM_IMAGE",
+       "registration": "registered",
+       "section": {
+        "cap": 1,
+        "included": 1,
+        "limitations": [],
+        "name": "anchor_pe_context",
+        "provenance": [
+         "pe_profile",
+         "modules",
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 1,
+        "truncated": false
+       },
+       "section_index": 0,
+       "section_name": ".text",
+       "section_name_truncated": false
+      },
+      "anchor_source": "tid",
+      "anchor_tid": 256,
+      "artifact_id": null,
+      "exception_context": {
+       "entries": [],
+       "section": {
+        "cap": 4,
+        "included": 0,
+        "limitations": [
+         "the dump carries no ExceptionStream: no exception was evaluated"
+        ],
+        "name": "exception",
+        "provenance": [
+         "exception"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "extract_read_clamped": null,
+      "extract_read_truncated": null,
+      "finding_details": {},
+      "findings": [],
+      "handle_correlation": {
+       "entries": [],
+       "section": {
+        "cap": 8,
+        "included": 0,
+        "limitations": [],
+        "name": "handle_correlation",
+        "provenance": [
+         "handles"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 0,
+        "truncated": false
+       }
+      },
+      "iat_correlation": {
+       "dll_count": 0,
+       "entries": [],
+       "entry_count": 0,
+       "iat_directory_present": false,
+       "import_directory_present": false,
+       "module_base": "0x00007ff600000000",
+       "module_owner": "C:\\Program Files\\Sample\\app.exe",
+       "module_owner_truncated": false,
+       "section": {
+        "cap": 16,
+        "included": 0,
+        "limitations": [
+         "the module declares no import directory"
+        ],
+        "name": "iat_correlation",
+        "provenance": [
+         "pe_profile",
+         "iat"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 0,
+        "truncated": false
+       }
+      },
+      "instruction_context": {
+       "anchor_address": "0x00007ff600001010",
+       "anchor_source": "thread_rip",
+       "architecture": "x64",
+       "branch_targets": [],
+       "branch_targets_total": 0,
+       "branch_targets_truncated": false,
+       "bytes_read": 512,
+       "decoder_state": "decode_error",
+       "instructions": [],
+       "section": {
+        "cap": 48,
+        "included": 0,
+        "limitations": [
+         "linear decoding stopped at 0x7ff600001010, 0 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 512 byte(s) were not decoded",
+         "the region holds more than the 512-byte decode window: instructions past it were not evaluated"
+        ],
+        "name": "instruction_context",
+        "provenance": [
+         "report_content_scan",
+         "disasm",
+         "pe_profile"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": null,
+        "truncated": false
+       },
+       "window_base": "0x00007ff600001010"
+      },
+      "ioc_strings": [],
+      "notable_strings": [],
+      "other_threads_in_region": [
+       {
+        "backing_module": "C:\\Program Files\\Sample\\app.exe",
+        "backing_module_base": null,
+        "backing_module_end": null,
+        "dump_flags_state": "resolved",
+        "ip": "0x00007ff600001010",
+        "ip_context_conflict": false,
+        "ip_reg": "RIP",
+        "kernel_time_100ns": 1000,
+        "module_context": "resolved",
+        "region_membership": "start_and_current",
+        "start_address": "0x00007ff600001000",
+        "start_address_state": "recorded",
+        "tid": 256,
+        "user_time_100ns": 2000
+       },
+       {
+        "backing_module": null,
+        "backing_module_base": null,
+        "backing_module_end": null,
+        "dump_flags_state": "absent",
+        "ip": "0x00007ff600001020",
+        "ip_context_conflict": null,
+        "ip_reg": "RIP",
+        "kernel_time_100ns": null,
+        "module_context": null,
+        "region_membership": "current",
+        "start_address": null,
+        "start_address_state": "absent",
+        "tid": 268,
+        "user_time_100ns": null
+       }
+      ],
+      "region": {
+       "base_address": "0x00007ff600001000",
+       "file_offset": 31552,
+       "has_injected_pe": false,
+       "is_rwx_private": false,
+       "module_context": "resolved",
+       "module_owner": "C:\\Program Files\\Sample\\app.exe",
+       "mz_header_detected": false,
+       "pe_header_state": null,
+       "protect": "PAGE_EXECUTE_READ",
+       "protection_suspicious": false,
+       "size": 4096,
+       "type": "MEM_IMAGE"
+      },
+      "string_context": {
+       "anchor_address": "0x00007ff600001000",
+       "bytes_read": 4096,
+       "distance_anchor_address": "0x00007ff600001000",
+       "entries": [],
+       "examined_base_address": "0x00007ff600001000",
+       "examined_size": 4096,
+       "query_text": null,
+       "requested_bytes": 4096,
+       "section": {
+        "cap": 12,
+        "included": 0,
+        "limitations": [],
+        "name": "string_context",
+        "provenance": [
+         "report_content_scan"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 0,
+        "truncated": false
+       },
+       "total_strings": 0
+      },
+      "string_hit": null,
+      "string_scan": {
+       "ascii_count": 0,
+       "bytes_read": 4096,
+       "clamped": false,
+       "requested_bytes": 4096,
+       "total": 0,
+       "truncated": false,
+       "utf16_count": 0
+      },
+      "string_scan_error": null,
+      "thread": {
+       "backing_module": "C:\\Program Files\\Sample\\app.exe",
+       "backing_module_base": "0x00007ff600000000",
+       "backing_module_end": "0x00007ff600003000",
+       "dump_flags_state": "resolved",
+       "ip": "0x00007ff600001010",
+       "ip_context_conflict": false,
+       "ip_reg": "RIP",
+       "kernel_time_100ns": 1000,
+       "module_context": "resolved",
+       "region_membership": null,
+       "start_address": "0x00007ff600001000",
+       "start_address_state": "recorded",
+       "tid": 256,
+       "user_time_100ns": 2000
+      },
+      "thread_region_correlation_excluded": false,
+      "verdict": "CLEAN"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "report",
+   "summary": {
+    "card_count": 1,
+    "cards_skipped_for_budget": 0,
+    "clamped_regions": 0,
+    "hits_image": null,
+    "hits_image_registration_unavailable": null,
+    "hits_mapped": null,
+    "hits_private": null,
+    "hits_region_type_unavailable": null,
+    "hits_sharing_a_region": 0,
+    "hits_skipped_for_budget": 0,
+    "hits_unregistered_image": null,
+    "image_hit_modules": [],
+    "mode": "tid",
+    "pe_context": {
+     "conflict_count": 0,
+     "consistent_count": 10,
+     "entry_point_rva": 4096,
+     "entry_point_va": "0x00007ff600001000",
+     "image_base": "0x00007ff600000000",
+     "machine": 34404,
+     "machine_name": "AMD64",
+     "module_match": "resolved",
+     "not_applicable_count": 17,
+     "observations": [],
+     "pe32_plus": true,
+     "preferred_image_base": "0x00007ff600000000",
+     "section": {
+      "cap": 16,
+      "included": 0,
+      "limitations": [],
+      "name": "pe_context",
+      "provenance": [
+       "pe_profile",
+       "pe_correlation"
+      ],
+      "scope": "process",
+      "status": "complete",
+      "total": 0,
+      "truncated": false
+     },
+     "section_count": 1,
+     "size_of_image": 12288,
+     "time_date_stamp": 1600000000,
+     "unavailable_count": 2
+    },
+    "process_enrichment": {
+     "command_line": "\"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+     "command_line_truncated": false,
+     "environment": {
+      "entries": [
+       {
+        "name": "COMPUTERNAME",
+        "truncated": false,
+        "value": "HOST-SYNTH"
+       },
+       {
+        "name": "USERNAME",
+        "truncated": false,
+        "value": "analyst"
+       },
+       {
+        "name": "PROCESSOR_ARCHITECTURE",
+        "truncated": false,
+        "value": "AMD64"
+       }
+      ],
+      "section": {
+       "cap": 7,
+       "included": 3,
+       "limitations": [],
+       "name": "environment",
+       "provenance": [
+        "environment_block"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 3,
+       "truncated": false
+      }
+     },
+     "handles": {
+      "by_type": [
+       {
+        "count": 2,
+        "type_name": "File",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Event",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Key",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Section",
+        "type_name_truncated": false
+       }
+      ],
+      "section": {
+       "cap": 12,
+       "included": 4,
+       "limitations": [],
+       "name": "handles",
+       "provenance": [
+        "handles"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 4,
+       "truncated": false
+      },
+      "total_handles": 5
+     },
+     "identity_conflicts": [],
+     "identity_conflicts_total": 0,
+     "image_base_address": "0x00007ff600000000",
+     "module_match_state": "resolved",
+     "path_source": "peb",
+     "pid": 4242,
+     "process_name": "app.exe",
+     "process_name_truncated": false,
+     "process_path": "C:\\Program Files\\Sample\\app.exe",
+     "process_path_truncated": false,
+     "process_start_utc": null,
+     "section": {
+      "cap": 1,
+      "included": 1,
+      "limitations": [
+       "no process start time resolved from MiscInfoStream"
+      ],
+      "name": "process",
+      "provenance": [
+       "misc_info",
+       "peb",
+       "modules"
+      ],
+      "scope": "process",
+      "status": "partial",
+      "total": 1,
+      "truncated": false
+     },
+     "token": {
+      "detail": "the dump declares no TokenStream: no token or privilege evidence was captured",
+      "parser_state": null,
+      "status": "unavailable",
+      "stream_present": false
+     }
+    },
+    "query_addr": null,
+    "query_string": null,
+    "query_tid": "0x100",
+    "skipped_unreadable_regions": 0,
+    "total_hits": null,
+    "truncated_regions": 0
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "  [\u00b7] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=b1e78e29b51cf439\u2026)",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  dumpex TRIAGE REPORT",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  File : sample.dmp",
+  "  TID  : 0x100",
+  "",
+  "ASSESSMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  CLEAN \u2014 no suspicious indicators found",
+  "",
+  "  Next:",
+  "    no anomalies were found within this rule set's current coverage; if the originating alert independently indicates compromise, re-verify against raw telemetry outside this dump",
+  "",
+  "COVERAGE SUMMARY",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Status: COMPLETE  (core report coverage \u2014 see below for optional-enrichment gaps)",
+  "  Known evidence gaps:",
+  "    [~] Exception context: the dump carries no ExceptionStream: no exception was evaluated",
+  "    [~] Instruction context: linear decoding stopped at 0x7ff600001010, 0 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 512 byte(s) were not decoded",
+  "    [~] Instruction context: the region holds more than the 512-byte decode window: instructions past it were not evaluated",
+  "    [~] Process identity: no process start time resolved from MiscInfoStream",
+  "    [~] Token: the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "ANCHOR CONTEXT",
+  "==================================================",
+  "THREAD ANALYSIS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  TID                    0x100",
+  "  Start Address          0x7ff600001000",
+  "  Current IP             0x7ff600001010  (RIP)  (differs from Start Address)",
+  "  Kernel Time            0.000s  (1000 \u00d7 100ns)",
+  "  User Time              0.000s  (2000 \u00d7 100ns)",
+  "  Backed By              C:\\Program Files\\Sample\\app.exe",
+  "  Module Range           0x7ff600000000 \u2014 0x7ff600003000",
+  "",
+  "MEMORY REGION AT TARGET ADDRESS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Region base (VA)         0x00007ff600001000  \u2190 process virtual address",
+  "  Region base (file offset) 0x7b40  \u2190 byte offset inside .dmp",
+  "  Physical addr (RAM)      not recorded in minidumps",
+  "  IOC addr = base + offset see formula per string below",
+  "  Region Size              0x1000  (4 KB)",
+  "  Protection             PAGE_EXECUTE_READ",
+  "  Type                   MEM_IMAGE",
+  "  Module Owner           C:\\Program Files\\Sample\\app.exe",
+  "",
+  "OTHER THREADS WITH A START OR CURRENT IP IN THIS REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  TID=0x100       StartAddr=0x7ff600001000  CurrentIP=0x7ff600001010 (RIP)  via=start_and_current  StartAddr\u2192app.exe \u2190 report TID",
+  "  TID=0x10c       StartAddr=unavailable  CurrentIP=0x7ff600001020 (RIP) [dispute unconfirmable \u2014 no ThreadInfoListStream record]  via=current  StartAddr\u2192n/a \u2014 no start address to classify",
+  "",
+  "ANCHOR PLACEMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Placement          code in .text",
+  "  Owning module      C:\\Program Files\\Sample\\app.exe   registered",
+  "  Module RVA         0x1000",
+  "  Protection         declared RX   live PAGE_EXECUTE_READ  (matches declared)",
+  "  A protection mismatch is a lead for review, not a verdict.",
+  "",
+  "",
+  "KEY EVIDENCE",
+  "==================================================",
+  "STRINGS IN REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Scanning 4 KB  (ASCII + UTF-16LE, min_len=6)",
+  "",
+  "  [\u00b7] No IOC patterns matched.",
+  "",
+  "  Total: 0 strings  (ASCII: 0  UTF-16LE: 0)",
+  "",
+  "STRING CONTEXT AROUND THE ANCHOR",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Examined 0x7ff600001000 + 4096 of 4096 requested byte(s); 0 string(s) extracted",
+  "  [\u00b7] No string was retained from the examined range.",
+  "  Proximity is layout: an adjacent string is not a reference to the anchor.",
+  "",
+  "",
+  "CORRELATION",
+  "==================================================",
+  "EXCEPTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No exception evidence was evaluated.",
+  "  Exception state is execution evidence, not a maliciousness finding.",
+  "  evidence: not evaluated",
+  "  [~] the dump carries no ExceptionStream: no exception was evaluated",
+  "",
+  "INSTRUCTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Window at 0x00007ff600001010 (thread_rip, x64); 512 byte(s) read; decoder: decode_error",
+  "  Decode ended at    0x00007ff600001010   0/512 byte(s) decoded",
+  "  [\u00b7] No instruction was decoded.",
+  "  Instruction context names no function, argument, or call stack.",
+  "  evidence: partial   kept: 0",
+  "  [~] linear decoding stopped at 0x7ff600001010, 0 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 512 byte(s) were not decoded",
+  "  [~] the region holds more than the 512-byte decode window: instructions past it were not evaluated",
+  "",
+  "IAT CORRELATION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  C:\\Program Files\\Sample\\app.exe   0 DLL(s), 0 import(s)",
+  "  [\u00b7] No import slot is instruction-correlated or unusual.",
+  "  An unusual thunk target is an investigation lead, not a verdict.",
+  "  [\u00b7] the module declares no import directory",
+  "",
+  "CORRELATED HANDLES",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No handle object name appears in this card's captured text.",
+  "  Full inventory: --handles",
+  "",
+  "",
+  "ADDITIONAL CONTEXT",
+  "==================================================",
+  "ALLOCATION NEIGHBORHOOD",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Allocation base        0x00007ff600000000",
+  "    0x0000000050000000       64 KB  PAGE_READWRITE           MEM_PRIVATE    preceding gap 0x7ff5afff1000",
+  "    0x000000007ffde000        8 KB  PAGE_READWRITE           MEM_PRIVATE    preceding gap 0x7ff580021000",
+  "    0x00007ff600000000        4 KB  PAGE_READONLY            MEM_IMAGE      same_allocation adjacent",
+  "  \u25ba 0x00007ff600001000        4 KB  PAGE_EXECUTE_READ        MEM_IMAGE      anchor adjacent",
+  "    0x00007ff600002000        4 KB  PAGE_READWRITE           MEM_IMAGE      same_allocation adjacent",
+  "  [\u00b7] this section shows 5 of 6 retained entries \u2014 use --verbose for all of them; --json carries the same retained set",
+  "  Adjacency is memory layout, not a relationship to the anchor.",
+  "",
+  "",
+  "PROCESS CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  PID                    4242",
+  "  Process                app.exe",
+  "  Path                   C:\\Program Files\\Sample\\app.exe  \u2190 from peb",
+  "  Command Line           \"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+  "  evidence: partial   kept: 1 of 1",
+  "  [~] no process start time resolved from MiscInfoStream",
+  "",
+  "  Session (allowlisted environment)",
+  "    Captured                 COMPUTERNAME  USERNAME  PROCESSOR_ARCHITECTURE",
+  "    [\u00b7] values not shown \u2014 use --verbose for them; --json carries the same retained set",
+  "",
+  "  Handles",
+  "    Total                    5",
+  "    By type                  File=2  Event=1  Key=1  Section=1",
+  "",
+  "  Token",
+  "    Capability               unavailable",
+  "    the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "MAIN IMAGE PE CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Image base           0x00007ff600000000",
+  "  Machine              AMD64",
+  "  Correlation          10 consistent  0 conflict  2 unavailable  17 not applicable",
+  "  A structural conflict is a lead for review, not a maliciousness finding.",
+  "",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

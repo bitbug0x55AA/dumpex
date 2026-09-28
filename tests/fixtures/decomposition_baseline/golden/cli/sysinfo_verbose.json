@@ -1,0 +1,47 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--sysinfo",
+  "--verbose"
+ ],
+ "exit_code": 0,
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550 DUMP \u2550\u2550\u2550",
+  "    File                   sample.dmp",
+  "    Size                   34.9 KiB (35776 bytes)",
+  "    SHA-256                169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+  "    Dump Time              2020-09-13 12:26:40 UTC",
+  "    Threads in dump        4",
+  "    Modules in dump        2",
+  "",
+  "\u2550\u2550\u2550 SYSTEM INFO \u2550\u2550\u2550",
+  "",
+  "  Operating System",
+  "    OS                     Windows 10 - 22H2",
+  "    Version                10.0.19045",
+  "    Architecture           AMD64",
+  "    Product Type           VER_NT_WORKSTATION",
+  "",
+  "  Host",
+  "    Hostname               HOST-SYNTH",
+  "    Username               analyst",
+  "",
+  "  CPU",
+  "    Processors             4",
+  "",
+  "\u2550\u2550\u2550 ENVIRONMENT \u2550\u2550\u2550",
+  "    Current Directory      D:\\Cases\\Work\\",
+  "    Environment Variables  4 captured (--verbose or --json to view)",
+  "",
+  "      COMPUTERNAME            HOST-SYNTH",
+  "      USERNAME                analyst",
+  "      PATH                    C:\\Windows",
+  "      PROCESSOR_ARCHITECTURE  AMD64",
+  "",
+  ""
+ ]
+}

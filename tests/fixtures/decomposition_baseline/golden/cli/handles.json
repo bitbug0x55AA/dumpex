@@ -1,0 +1,188 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--handles",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "handles",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "handle_records": {
+      "detail": null,
+      "record_count": 5,
+      "state": "present"
+     },
+     "handles": {
+      "detail": null,
+      "record_count": 5,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "attributes": 0,
+      "granted_access": 1180063,
+      "handle": "0x0000000000000004",
+      "handle_count": 1,
+      "object_name": "\\Device\\HarddiskVolume3\\Users\\analyst\\notes.txt",
+      "object_name_status": "ok",
+      "pointer_count": 1,
+      "type_name": "File",
+      "type_name_status": "ok"
+     },
+     {
+      "attributes": 0,
+      "granted_access": 2031619,
+      "handle": "0x0000000000000008",
+      "handle_count": 1,
+      "object_name": null,
+      "object_name_status": "unnamed",
+      "pointer_count": 1,
+      "type_name": "Event",
+      "type_name_status": "ok"
+     },
+     {
+      "attributes": 0,
+      "granted_access": 1180063,
+      "handle": "0x000000000000000c",
+      "handle_count": 1,
+      "object_name": "\\Device\\NamedPipe\\msagent_12",
+      "object_name_status": "ok",
+      "pointer_count": 1,
+      "type_name": "File",
+      "type_name_status": "ok"
+     },
+     {
+      "attributes": 0,
+      "granted_access": 131097,
+      "handle": "0x0000000000000010",
+      "handle_count": 1,
+      "object_name": "\\REGISTRY\\MACHINE\\SOFTWARE\\Sample",
+      "object_name_status": "ok",
+      "pointer_count": 1,
+      "type_name": "Key",
+      "type_name_status": "ok"
+     },
+     {
+      "attributes": 0,
+      "granted_access": 4,
+      "handle": "0x0000000000000014",
+      "handle_count": 1,
+      "object_name": null,
+      "object_name_status": "unnamed",
+      "pointer_count": 1,
+      "type_name": "Section",
+      "type_name_status": "ok"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "handles",
+   "summary": {
+    "by_type": {
+     "Event": 1,
+     "File": 2,
+     "Key": 1,
+     "Section": 1
+    },
+    "count": 5
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550 HANDLES \u2550\u2550\u2550",
+  "  5 handle(s) captured",
+  "  By type: File 2, Event 1, Key 1, Section 1",
+  "",
+  "  Handle              Type            Access      Cnt  Ptr  Object",
+  "  0x0000000000000004  File            0x0012019f    1    1  \\Device\\HarddiskVolume3\\Users\\analyst\\notes.txt",
+  "      \u2514\u2500 Rights   FileGenericRead \u00b7 FileGenericWrite",
+  "  0x000000000000000c  File            0x0012019f    1    1  \\Device\\NamedPipe\\msagent_12",
+  "      \u2514\u2500 Rights   FileGenericRead \u00b7 FileGenericWrite",
+  "  0x0000000000000010  Key             0x00020019    1    1  \\REGISTRY\\MACHINE\\SOFTWARE\\Sample",
+  "      \u2514\u2500 Rights   KeyRead",
+  "  0x0000000000000014  Section         0x00000004    1    1  (unnamed)",
+  "      \u2514\u2500 Rights   MapRead",
+  "  (unnamed) = the descriptor records no name; (unreadable) = a name was recorded but the bounded read failed",
+  "  Rights decode each row's own Access mask against its recorded object type -- the same bit means",
+  "  different things for a File, a Process and a Token. A long list splits into Type (rights that",
+  "  object type defines) and Standard (the rights every type shares). They are an observation about",
+  "  what the handle permitted, never evidence that it was used.",
+  "",
+  "  Aliases used",
+  "    Each display name maps to one Windows SDK, WDK or native constant, and what that constant",
+  "    contains depends on the object type it was read against.",
+  "      File  FileGenericRead  = ReadData \u00b7 ReadEa \u00b7 ReadAttributes \u00b7 ReadControl \u00b7 Synchronize",
+  "      File  FileGenericWrite = WriteData \u00b7 AppendData \u00b7 WriteEa \u00b7 WriteAttributes \u00b7 ReadControl \u00b7",
+  "                               Synchronize",
+  "      Key   KeyRead          = QueryValue \u00b7 EnumerateSubKeys \u00b7 Notify \u00b7 ReadControl",
+  "",
+  "  1 anonymous handle(s) not shown (no object name recorded): Event 1",
+  "  These rows are captured evidence and are complete in structured output -- use --verbose to show all.",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

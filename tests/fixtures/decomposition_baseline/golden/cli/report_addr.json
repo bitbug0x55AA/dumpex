@@ -1,0 +1,854 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--report",
+  "--report-addr",
+  "0x30000400",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 0,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "addr_0x30000400",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "min_len": 6,
+     "output": null,
+     "report_addr": "0x30000400",
+     "report_string": null,
+     "report_tid": null,
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "rules": {
+    "explicit": false,
+    "path": "<dumpex.rules_pkg>/data/rules.yaml",
+    "sha256": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
+    "version": 1
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "requested_region": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "thread_info": {
+      "detail": null,
+      "record_count": 3,
+      "state": "present"
+     },
+     "threads": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "complete"
+   },
+   "data": {
+    "records": [
+     {
+      "allocation_neighborhood": {
+       "allocation_base": "0x0000000030000000",
+       "entries": [
+        {
+         "allocation_base": "0x0000000020000000",
+         "base_address": "0x0000000020000000",
+         "distance": 268431360,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "preceding",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000030000000",
+         "base_address": "0x0000000030000000",
+         "distance": 0,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_EXECUTE_READWRITE",
+         "relation": "anchor",
+         "size": 8192,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000040000000",
+         "base_address": "0x0000000040000000",
+         "distance": 268427264,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "following",
+         "size": 4096,
+         "state": "MEM_COMMIT",
+         "type": "MEM_PRIVATE"
+        },
+        {
+         "allocation_base": "0x0000000050000000",
+         "base_address": "0x0000000050000000",
+         "distance": 536862720,
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "protection": "PAGE_READWRITE",
+         "relation": "following",
+         "size": 65536,
+         "state": "MEM_RESERVE",
+         "type": "MEM_PRIVATE"
+        }
+       ],
+       "section": {
+        "cap": 9,
+        "included": 4,
+        "limitations": [],
+        "name": "allocation",
+        "provenance": [
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 4,
+        "truncated": false
+       }
+      },
+      "anchor_address": "0x0000000030000400",
+      "anchor_pe_context": {
+       "anchor_address": "0x0000000030000400",
+       "classification": "private",
+       "declared_executable": null,
+       "declared_readable": null,
+       "declared_writable": null,
+       "live_protection": "PAGE_EXECUTE_READWRITE",
+       "module_base": null,
+       "module_owner": null,
+       "module_owner_truncated": false,
+       "module_rva": null,
+       "protection_matches_declared": null,
+       "region_base": "0x0000000030000000",
+       "region_type": "MEM_PRIVATE",
+       "registration": "unregistered",
+       "section": {
+        "cap": 1,
+        "included": 1,
+        "limitations": [],
+        "name": "anchor_pe_context",
+        "provenance": [
+         "pe_profile",
+         "modules",
+         "memory_info"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 1,
+        "truncated": false
+       },
+       "section_index": null,
+       "section_name": null,
+       "section_name_truncated": false
+      },
+      "anchor_source": "address",
+      "anchor_tid": null,
+      "artifact_id": null,
+      "exception_context": {
+       "entries": [],
+       "section": {
+        "cap": 4,
+        "included": 0,
+        "limitations": [
+         "the dump carries no ExceptionStream: no exception was evaluated"
+        ],
+        "name": "exception",
+        "provenance": [
+         "exception"
+        ],
+        "scope": "card",
+        "status": "missing",
+        "total": null,
+        "truncated": false
+       }
+      },
+      "extract_read_clamped": null,
+      "extract_read_truncated": null,
+      "finding_details": {
+       "injected_pe": "Valid PE header at 0x30000000 outside any loaded module (type=MEM_PRIVATE)",
+       "ioc_strings": "2 IOC pattern(s) matched (1 network-protocol hit(s))",
+       "rwx_private": "Region 0x30000000 is PAGE_EXECUTE_READWRITE + MEM_PRIVATE",
+       "unbacked_thread": "TID 0x104 in region 0x30000000 has no module backing"
+      },
+      "findings": [
+       "rwx_private",
+       "unbacked_thread",
+       "ioc_strings",
+       "injected_pe"
+      ],
+      "handle_correlation": {
+       "entries": [
+        {
+         "attributes": 0,
+         "granted_access": 1180063,
+         "handle": "0x000000000000000c",
+         "handle_count": 1,
+         "object_name": "\\Device\\NamedPipe\\msagent_12",
+         "object_name_truncated": false,
+         "pointer_count": 1,
+         "selection_reason": "object_name_in_anchor_strings",
+         "type_name": "File",
+         "type_name_truncated": false
+        }
+       ],
+       "section": {
+        "cap": 8,
+        "included": 1,
+        "limitations": [],
+        "name": "handle_correlation",
+        "provenance": [
+         "handles"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 1,
+        "truncated": false
+       }
+      },
+      "iat_correlation": null,
+      "instruction_context": {
+       "anchor_address": "0x0000000030000400",
+       "anchor_source": "card_anchor",
+       "architecture": "x64",
+       "branch_targets": [
+        {
+         "iat_classification_uncertain": false,
+         "iat_symbol": null,
+         "iat_symbol_truncated": false,
+         "instruction_address": "0x0000000030000406",
+         "kind": "direct",
+         "module_owner": null,
+         "module_owner_truncated": false,
+         "region_type": "MEM_PRIVATE",
+         "registration": "unregistered",
+         "resolved_target_address": null,
+         "section_name": null,
+         "section_name_truncated": false,
+         "target_address": "0x0000000030000478"
+        }
+       ],
+       "branch_targets_total": 1,
+       "branch_targets_truncated": false,
+       "bytes_read": 512,
+       "decoder_state": "decode_error",
+       "instructions": [
+        {
+         "address": "0x0000000030000400",
+         "branch_kind": "none",
+         "is_anchor": true,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 3,
+         "text": "push r12",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000030000403",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 3,
+         "text": "and byte ptr [rax + 0x74], ch",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000030000406",
+         "branch_kind": "direct",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": true,
+         "is_return": false,
+         "size": 2,
+         "text": "je 0x30000478",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000030000408",
+         "branch_kind": "none",
+         "is_anchor": false,
+         "is_call": false,
+         "is_jump": false,
+         "is_return": false,
+         "size": 2,
+         "text": "cmp ch, byte ptr [rdi]",
+         "text_truncated": false
+        }
+       ],
+       "section": {
+        "cap": 48,
+        "included": 4,
+        "limitations": [
+         "linear decoding stopped at 0x3000040a, 10 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 502 byte(s) were not decoded",
+         "the region holds more than the 512-byte decode window: instructions past it were not evaluated"
+        ],
+        "name": "instruction_context",
+        "provenance": [
+         "report_content_scan",
+         "disasm",
+         "pe_profile"
+        ],
+        "scope": "card",
+        "status": "partial",
+        "total": null,
+        "truncated": false
+       },
+       "window_base": "0x0000000030000400"
+      },
+      "ioc_strings": [
+       {
+        "address": "0x0000000030000400",
+        "context_base_address": "0x0000000030000380",
+        "context_hex": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000047455420687474703a2f2f63322e6578616d706c652e746573742f626561636f6e3f69643d3720485454502f312e31000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "context_hit_offset": 128,
+        "encoding": "ASCII",
+        "is_network_pattern": true,
+        "offset": 1024,
+        "text": "GET http://c2.example.test/beacon?id=7 HTTP/1.1"
+       },
+       {
+        "address": "0x0000000030000480",
+        "context_base_address": null,
+        "context_hex": null,
+        "context_hit_offset": null,
+        "encoding": "UTF16",
+        "is_network_pattern": false,
+        "offset": 1152,
+        "text": "\\\\.\\pipe\\msagent_12"
+       }
+      ],
+      "notable_strings": [
+       {
+        "address": "0x0000000030000500",
+        "encoding": "ASCII",
+        "matched_grep": null,
+        "offset": 1280,
+        "text": "User-Agent: Mozilla/5.0 (synthetic)"
+       }
+      ],
+      "other_threads_in_region": [
+       {
+        "backing_module": null,
+        "backing_module_base": null,
+        "backing_module_end": null,
+        "dump_flags_state": "resolved",
+        "ip": "0x0000000030000100",
+        "ip_context_conflict": false,
+        "ip_reg": "RIP",
+        "kernel_time_100ns": 0,
+        "module_context": "unregistered",
+        "region_membership": "start_and_current",
+        "start_address": "0x0000000030000100",
+        "start_address_state": "recorded",
+        "tid": 260,
+        "user_time_100ns": 0
+       }
+      ],
+      "region": {
+       "base_address": "0x0000000030000000",
+       "file_offset": 19264,
+       "has_injected_pe": true,
+       "is_rwx_private": true,
+       "module_context": "unregistered",
+       "module_owner": null,
+       "mz_header_detected": true,
+       "pe_header_state": "ok",
+       "protect": "PAGE_EXECUTE_READWRITE",
+       "protection_suspicious": true,
+       "size": 8192,
+       "type": "MEM_PRIVATE"
+      },
+      "string_context": {
+       "anchor_address": "0x0000000030000400",
+       "bytes_read": 8192,
+       "distance_anchor_address": "0x0000000030000400",
+       "entries": [
+        {
+         "address": "0x0000000030000400",
+         "distance": 0,
+         "encoding": "ASCII",
+         "offset": 1024,
+         "selection_reason": "ioc_pattern",
+         "text": "GET http://c2.example.test/beacon?id=7 HTTP/1.1",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000030000480",
+         "distance": 128,
+         "encoding": "UTF16",
+         "offset": 1152,
+         "selection_reason": "ioc_pattern",
+         "text": "\\\\.\\pipe\\msagent_12",
+         "text_truncated": false
+        },
+        {
+         "address": "0x0000000030000500",
+         "distance": 256,
+         "encoding": "ASCII",
+         "offset": 1280,
+         "selection_reason": "adjacent_to_anchor",
+         "text": "User-Agent: Mozilla/5.0 (synthetic)",
+         "text_truncated": false
+        }
+       ],
+       "examined_base_address": "0x0000000030000000",
+       "examined_size": 8192,
+       "query_text": null,
+       "requested_bytes": 8192,
+       "section": {
+        "cap": 12,
+        "included": 3,
+        "limitations": [],
+        "name": "string_context",
+        "provenance": [
+         "report_content_scan"
+        ],
+        "scope": "card",
+        "status": "complete",
+        "total": 3,
+        "truncated": false
+       },
+       "total_strings": 3
+      },
+      "string_hit": null,
+      "string_scan": {
+       "ascii_count": 2,
+       "bytes_read": 8192,
+       "clamped": false,
+       "requested_bytes": 8192,
+       "total": 3,
+       "truncated": false,
+       "utf16_count": 1
+      },
+      "string_scan_error": null,
+      "thread": null,
+      "thread_region_correlation_excluded": false,
+      "verdict": "HIGH_CONFIDENCE_MALICIOUS"
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "report",
+   "summary": {
+    "card_count": 1,
+    "cards_skipped_for_budget": 0,
+    "clamped_regions": 0,
+    "hits_image": null,
+    "hits_image_registration_unavailable": null,
+    "hits_mapped": null,
+    "hits_private": null,
+    "hits_region_type_unavailable": null,
+    "hits_sharing_a_region": 0,
+    "hits_skipped_for_budget": 0,
+    "hits_unregistered_image": null,
+    "image_hit_modules": [],
+    "mode": "addr",
+    "pe_context": {
+     "conflict_count": 0,
+     "consistent_count": 10,
+     "entry_point_rva": 4096,
+     "entry_point_va": "0x00007ff600001000",
+     "image_base": "0x00007ff600000000",
+     "machine": 34404,
+     "machine_name": "AMD64",
+     "module_match": "resolved",
+     "not_applicable_count": 17,
+     "observations": [],
+     "pe32_plus": true,
+     "preferred_image_base": "0x00007ff600000000",
+     "section": {
+      "cap": 16,
+      "included": 0,
+      "limitations": [],
+      "name": "pe_context",
+      "provenance": [
+       "pe_profile",
+       "pe_correlation"
+      ],
+      "scope": "process",
+      "status": "complete",
+      "total": 0,
+      "truncated": false
+     },
+     "section_count": 1,
+     "size_of_image": 12288,
+     "time_date_stamp": 1600000000,
+     "unavailable_count": 2
+    },
+    "process_enrichment": {
+     "command_line": "\"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+     "command_line_truncated": false,
+     "environment": {
+      "entries": [
+       {
+        "name": "COMPUTERNAME",
+        "truncated": false,
+        "value": "HOST-SYNTH"
+       },
+       {
+        "name": "USERNAME",
+        "truncated": false,
+        "value": "analyst"
+       },
+       {
+        "name": "PROCESSOR_ARCHITECTURE",
+        "truncated": false,
+        "value": "AMD64"
+       }
+      ],
+      "section": {
+       "cap": 7,
+       "included": 3,
+       "limitations": [],
+       "name": "environment",
+       "provenance": [
+        "environment_block"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 3,
+       "truncated": false
+      }
+     },
+     "handles": {
+      "by_type": [
+       {
+        "count": 2,
+        "type_name": "File",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Event",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Key",
+        "type_name_truncated": false
+       },
+       {
+        "count": 1,
+        "type_name": "Section",
+        "type_name_truncated": false
+       }
+      ],
+      "section": {
+       "cap": 12,
+       "included": 4,
+       "limitations": [],
+       "name": "handles",
+       "provenance": [
+        "handles"
+       ],
+       "scope": "process",
+       "status": "complete",
+       "total": 4,
+       "truncated": false
+      },
+      "total_handles": 5
+     },
+     "identity_conflicts": [],
+     "identity_conflicts_total": 0,
+     "image_base_address": "0x00007ff600000000",
+     "module_match_state": "resolved",
+     "path_source": "peb",
+     "pid": 4242,
+     "process_name": "app.exe",
+     "process_name_truncated": false,
+     "process_path": "C:\\Program Files\\Sample\\app.exe",
+     "process_path_truncated": false,
+     "process_start_utc": null,
+     "section": {
+      "cap": 1,
+      "included": 1,
+      "limitations": [
+       "no process start time resolved from MiscInfoStream"
+      ],
+      "name": "process",
+      "provenance": [
+       "misc_info",
+       "peb",
+       "modules"
+      ],
+      "scope": "process",
+      "status": "partial",
+      "total": 1,
+      "truncated": false
+     },
+     "token": {
+      "detail": "the dump declares no TokenStream: no token or privilege evidence was captured",
+      "parser_state": null,
+      "status": "unavailable",
+      "stream_present": false
+     }
+    },
+    "query_addr": "0x30000400",
+    "query_string": null,
+    "query_tid": null,
+    "skipped_unreadable_regions": 0,
+    "total_hits": null,
+    "truncated_regions": 0
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "  [\u00b7] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=b1e78e29b51cf439\u2026)",
+  "",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  dumpex TRIAGE REPORT",
+  "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+  "  File : sample.dmp",
+  "  Addr : 0x30000400",
+  "",
+  "ASSESSMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  HIGH CONFIDENCE MALICIOUS \u2014 4 independent indicators",
+  "",
+  "  \u25ba Anomalous memory protection (RWX + MEM_PRIVATE)",
+  "    Region 0x30000000 is PAGE_EXECUTE_READWRITE + MEM_PRIVATE",
+  "  \u25ba Unbacked thread execution (start addr outside all known modules)",
+  "    TID 0x104 in region 0x30000000 has no module backing",
+  "  \u25ba IOC string pattern(s) matched in region",
+  "    2 IOC pattern(s) matched (1 network-protocol hit(s))",
+  "  \u25ba Injected PE (valid PE header outside any loaded module, in private or executable memory)",
+  "    Valid PE header at 0x30000000 outside any loaded module (type=MEM_PRIVATE)",
+  "",
+  "  Next:",
+  "    - Anomalous memory protection (RWX + MEM_PRIVATE): correlate this region against its instruction and IAT context, and consider extracting it for offline analysis",
+  "    - Unbacked thread execution (start addr outside all known modules): correlate this thread's start address against loaded modules and recent allocations",
+  "    - IOC string pattern(s) matched in region: review the adjacent byte context and any network correlation for these matches before treating them as confirmed",
+  "    - Injected PE (valid PE header outside any loaded module, in private or executable memory): cross-check the anchor's PE placement and IAT correlation against the module it does not match",
+  "",
+  "COVERAGE SUMMARY",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Status: COMPLETE  (core report coverage \u2014 see below for optional-enrichment gaps)",
+  "  Known evidence gaps:",
+  "    [~] Exception context: the dump carries no ExceptionStream: no exception was evaluated",
+  "    [~] Instruction context: linear decoding stopped at 0x3000040a, 10 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 502 byte(s) were not decoded",
+  "    [~] Instruction context: the region holds more than the 512-byte decode window: instructions past it were not evaluated",
+  "    [~] Process identity: no process start time resolved from MiscInfoStream",
+  "    [~] Token: the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "ANCHOR CONTEXT",
+  "==================================================",
+  "MEMORY REGION AT TARGET ADDRESS",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Region base (VA)         0x0000000030000000  \u2190 process virtual address",
+  "  Region base (file offset) 0x4b40  \u2190 byte offset inside .dmp",
+  "  Physical addr (RAM)      not recorded in minidumps",
+  "  IOC addr = base + offset see formula per string below",
+  "  Region Size              0x2000  (8 KB)",
+  "  Protection             PAGE_EXECUTE_READWRITE",
+  "  Type                   MEM_PRIVATE",
+  "  Module Owner           none \u2014 unregistered memory",
+  "",
+  "  [!] RWX + MEM_PRIVATE \u2014 classic shellcode/injection marker",
+  "  [!] Valid PE header outside any loaded module",
+  "",
+  "OTHER THREADS WITH A START OR CURRENT IP IN THIS REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  TID=0x104       StartAddr=0x30000100  CurrentIP=0x30000100 (RIP)  via=start_and_current  StartAddr\u2192NOT IN ANY MODULE \u26a0",
+  "",
+  "ANCHOR PLACEMENT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Placement          private",
+  "  Owning module      (no module)   unregistered",
+  "  Live protection    PAGE_EXECUTE_READWRITE",
+  "",
+  "",
+  "KEY EVIDENCE",
+  "==================================================",
+  "STRINGS IN REGION",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Scanning 8 KB  (ASCII + UTF-16LE, min_len=6)",
+  "",
+  "  [!] 2 IOC match(es):",
+  "    [ASCII]        GET http://c2.example.test/beacon?id=7 HTTP/1.1",
+  "      VA  = region base 0x0000000030000000  +  offset 0x400  =  0x0000000030000400",
+  "      DMP = file offset 0x4f40",
+  "    \u21b3 Network pattern \u2014 \u00b1128 byte context:",
+  "    0x0000000030000380  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000390  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003a0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003b0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003c0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003d0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003e0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x00000000300003f0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000400  47 45 54 20 68 74 74 70 3a 2f 2f 63 32 2e 65 78   GET http://c2.ex",
+  "    0x0000000030000410  61 6d 70 6c 65 2e 74 65 73 74 2f 62 65 61 63 6f   ample.test/beaco",
+  "    0x0000000030000420  6e 3f 69 64 3d 37 20 48 54 54 50 2f 31 2e 31 00   n?id=7 HTTP/1.1.",
+  "    0x0000000030000430  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000440  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000450  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000460  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "    0x0000000030000470  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................",
+  "",
+  "    [UTF16]        \\\\.\\pipe\\msagent_12",
+  "      VA  = region base 0x0000000030000000  +  offset 0x480  =  0x0000000030000480",
+  "      DMP = file offset 0x4fc0",
+  "",
+  "  [\u00b7] 1 notable string (len > 20) retained -- use --verbose for the ADDITIONAL RETAINED STRINGS section",
+  "",
+  "  Total: 3 strings  (ASCII: 2  UTF-16LE: 1)",
+  "",
+  "STRING CONTEXT AROUND THE ANCHOR",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Examined 0x30000000 + 8192 of 8192 requested byte(s); 3 string(s) extracted",
+  "  [\u00b7] 2 further retained entries are already shown in full under STRINGS IN REGION (not repeated here).",
+  "  [\u00b7] 1 retained entry selected by proximity alone (no IOC or query match) -- routine background, held for --verbose",
+  "  Proximity is layout: an adjacent string is not a reference to the anchor.",
+  "",
+  "",
+  "CORRELATION",
+  "==================================================",
+  "EXCEPTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  [\u00b7] No exception evidence was evaluated.",
+  "  Exception state is execution evidence, not a maliciousness finding.",
+  "  evidence: not evaluated",
+  "  [~] the dump carries no ExceptionStream: no exception was evaluated",
+  "",
+  "INSTRUCTION CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Window at 0x0000000030000400 (card_anchor, x64); 512 byte(s) read; decoder: decode_error",
+  "  Decode ended at    0x000000003000040a   10/512 byte(s) decoded",
+  "  \u25ba 0x0000000030000400  push r12",
+  "    0x0000000030000403  and byte ptr [rax + 0x74], ch",
+  "    0x0000000030000406  je 0x30000478",
+  "    0x0000000030000408  cmp ch, byte ptr [rdi]",
+  "  Branch targets",
+  "    direct               0x0000000030000478  MEM_PRIVATE (unregistered)",
+  "  Rows are a linear decode from the anchor in byte order, not an executed path;",
+  "  bytes after a branch may be data the code reads rather than instructions.",
+  "  Instruction context names no function, argument, or call stack.",
+  "  evidence: partial   kept: 4",
+  "  [~] linear decoding stopped at 0x3000040a, 10 of 512 byte(s) in: an invalid opcode there, not the 512-byte cap. The remaining 502 byte(s) were not decoded",
+  "  [~] the region holds more than the 512-byte decode window: instructions past it were not evaluated",
+  "",
+  "CORRELATED HANDLES",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  \u25ba  0x000000000000000c  File             \\Device\\NamedPipe\\msagent_12",
+  "  A shared name is two captures of the same text, not proof of use.",
+  "  Full inventory: --handles",
+  "",
+  "",
+  "ADDITIONAL CONTEXT",
+  "==================================================",
+  "ALLOCATION NEIGHBORHOOD",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Allocation base        0x0000000030000000",
+  "    0x0000000020000000        4 KB  PAGE_READWRITE           MEM_PRIVATE    preceding gap 0xffff000",
+  "  \u25ba 0x0000000030000000        8 KB  PAGE_EXECUTE_READWRITE   MEM_PRIVATE    anchor adjacent",
+  "    0x0000000040000000        4 KB  PAGE_READWRITE           MEM_PRIVATE    following gap 0xfffe000",
+  "    0x0000000050000000       64 KB  PAGE_READWRITE           MEM_PRIVATE    following gap 0x1fffe000",
+  "  Adjacency is memory layout, not a relationship to the anchor.",
+  "",
+  "",
+  "PROCESS CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  PID                    4242",
+  "  Process                app.exe",
+  "  Path                   C:\\Program Files\\Sample\\app.exe  \u2190 from peb",
+  "  Command Line           \"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+  "  evidence: partial   kept: 1 of 1",
+  "  [~] no process start time resolved from MiscInfoStream",
+  "",
+  "  Session (allowlisted environment)",
+  "    Captured                 COMPUTERNAME  USERNAME  PROCESSOR_ARCHITECTURE",
+  "    [\u00b7] values not shown \u2014 use --verbose for them; --json carries the same retained set",
+  "",
+  "  Handles",
+  "    Total                    5",
+  "    By type                  File=2  Event=1  Key=1  Section=1",
+  "",
+  "  Token",
+  "    Capability               unavailable",
+  "    the dump declares no TokenStream: no token or privilege evidence was captured",
+  "",
+  "",
+  "MAIN IMAGE PE CONTEXT",
+  "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "  Image base           0x00007ff600000000",
+  "  Machine              AMD64",
+  "  Correlation          10 consistent  0 conflict  2 unavailable  17 not applicable",
+  "  A structural conflict is a lead for review, not a maliciousness finding.",
+  "",
+  "",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

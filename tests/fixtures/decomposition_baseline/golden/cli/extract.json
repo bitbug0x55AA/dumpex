@@ -1,0 +1,157 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--extract",
+  "0x30000000",
+  "-s",
+  "0x80",
+  "-o",
+  "<TMP>/out.bin",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [
+   {
+    "description": "Bytes extracted from 0x30000000",
+    "id": "extract_output",
+    "kind": "extracted_region",
+    "path": "<TMP>/out.bin",
+    "sha256": "4d12c68d6aa59d52495cbb5eda8d1bd64c3573118e651eb3bc7ed009cc02fba9",
+    "size_bytes": 128
+   }
+  ],
+  "diagnostics": {
+   "errors": [],
+   "warnings": [
+    {
+     "code": "EXTRACT_MZ_HEADER_DETECTED",
+     "message": "MZ header detected in the extracted bytes \u2014 not independently confirmed as an injected PE (too little of the header was captured to structurally validate)",
+     "severity": "warning"
+    }
+   ]
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "path": "<TMP>/sample.dmp",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "extract_0x30000000",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "output": "<TMP>/out.bin",
+     "verbose": false
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": null,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "requested_region",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     }
+    ],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "A structural PE parse over the extracted bytes' MZ-prefixed header still could not confirm or rule out an injected PE (a required header offset fell past what was actually examined)"
+    ],
+    "sources": {
+     "memory_info": {
+      "detail": null,
+      "record_count": 9,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "requested_region": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "auto_sized": false,
+      "bytes_read": 128,
+      "mz_header_detected": true,
+      "pe_header_state": "short_read",
+      "requested_address": "0x0000000030000000",
+      "requested_size": 128
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "extract",
+   "summary": {
+    "count": 1
+   }
+  }
+ },
+ "output_file": {
+  "sha256": "4d12c68d6aa59d52495cbb5eda8d1bd64c3573118e651eb3bc7ed009cc02fba9",
+  "size": 128
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "[*] Reading 0x80 bytes from 0x30000000 ...",
+  "  [~] A structural PE parse over the extracted bytes' MZ-prefixed header still could not confirm or rule out an injected PE (a required header offset fell past what was actually examined)",
+  "[!] MZ header detected in the extracted bytes \u2014 not independently confirmed as an injected PE (too little of the header was captured to structurally validate)",
+  "[+] Saved \u2192 <TMP>/out.bin  (128 bytes  sha256=4d12c68d6aa59d52495cbb5eda8d1bd64c3573118e651eb3bc7ed009cc02fba9)",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

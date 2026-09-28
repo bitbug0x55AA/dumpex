@@ -1,0 +1,1058 @@
+{
+ "argv": [
+  "<TMP>/sample.dmp",
+  "--process",
+  "--verbose",
+  "--redact-paths",
+  "--json",
+  "<TMP>/out.json"
+ ],
+ "exit_code": 3,
+ "json": {
+  "artifacts": [],
+  "diagnostics": {
+   "errors": [],
+   "warnings": []
+  },
+  "meta": {
+   "evidence": [
+    {
+     "file_name": "sample.dmp",
+     "id": "primary",
+     "role": "primary",
+     "sha256": "169ddd8c36a41fb7bc5de9455ff73a59607284cf0562ef8454f34694dbb770e9",
+     "size_bytes": 35776
+    }
+   ],
+   "execution": {
+    "analyst": null,
+    "case_id": null,
+    "command": "process",
+    "duration_seconds": 0.0,
+    "finished_at": "2024-01-01T00:00:00Z",
+    "options": {
+     "verbose": true
+    },
+    "started_at": "2024-01-01T00:00:00Z"
+   },
+   "runtime": {
+    "minidump_version": "<VERSION>",
+    "python_version": "<VERSION>",
+    "pyyaml_version": "<VERSION>",
+    "yara_version": "<VERSION>"
+   },
+   "schema_version": "2.20",
+   "tool": {
+    "name": "dumpex",
+    "version": "<VERSION>"
+   }
+  },
+  "result": {
+   "coverage": {
+    "limitations": [
+     {
+      "affected_count": null,
+      "available_fields": [],
+      "budget_consumed": null,
+      "budget_limit": null,
+      "code": "PROCESS_START_TIME_INVALID",
+      "counterpart_source": null,
+      "detail": null,
+      "related_sources": [],
+      "related_tids": [],
+      "scope": null,
+      "source": "misc_info",
+      "targets": [],
+      "thread_id": null,
+      "unavailable_fields": []
+     }
+    ],
+    "missed_bytes": {
+     "bytes": 0,
+     "complete": true,
+     "distinct_ranges": 0,
+     "eligible_bytes": null,
+     "quantified_gaps": 0,
+     "state": "exact",
+     "unquantified_gaps": 0,
+     "unscanned_fraction": null,
+     "unscanned_pass_bytes": 0
+    },
+    "reasons": [
+     "MiscInfo's ProcessCreateTime is not a valid 32-bit timestamp"
+    ],
+    "sources": {
+     "iat": {
+      "detail": null,
+      "record_count": 0,
+      "state": "present_empty"
+     },
+     "main_image": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "misc_info": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "modules": {
+      "detail": null,
+      "record_count": 2,
+      "state": "present"
+     },
+     "peb": {
+      "detail": null,
+      "record_count": 1,
+      "state": "present"
+     },
+     "process_identity": {
+      "detail": null,
+      "record_count": 4,
+      "state": "present"
+     }
+    },
+    "status": "partial"
+   },
+   "data": {
+    "records": [
+     {
+      "command_line": "\"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+      "iat": {
+       "diagnostics": [],
+       "dll_count": 0,
+       "entries": [],
+       "entry_count": 0,
+       "has_entries": false,
+       "import_directory_present": false,
+       "import_directory_size": null,
+       "import_directory_va": null,
+       "table_present": false,
+       "table_size": null,
+       "table_va": null
+      },
+      "identity_evidence": {
+       "diagnostics": [],
+       "main_image_pe": {
+        "checked": true,
+        "reason": null,
+        "valid": true
+       },
+       "misc_info_claim": {
+        "pid": 4242,
+        "process_create_time_utc": null,
+        "raw_pid": null,
+        "raw_process_create_time": null
+       },
+       "module_claim": {
+        "base_address": "0x00007ff600000000",
+        "match_state": "resolved",
+        "name": "app.exe",
+        "name_matched_candidate": null,
+        "name_matched_candidate_ambiguous": false,
+        "path": "C:\\Program Files\\Sample\\app.exe"
+       },
+       "peb_claim": {
+        "image_base_address": "0x00007ff600000000",
+        "image_path": "C:\\Program Files\\Sample\\app.exe",
+        "name": "app.exe",
+        "raw_command_line": null,
+        "raw_image_base_address": null,
+        "raw_image_path": null
+       },
+       "selected_path_source": "peb"
+      },
+      "image_base_address": "0x00007ff600000000",
+      "pe_image": {
+       "acquisition": {
+        "bounded_stop": null,
+        "capture_overlapping": false,
+        "captured_bytes": 4096,
+        "components": {
+         "coff_header": "complete",
+         "directory_array": "complete",
+         "directory_descriptors": "complete",
+         "dos_header": "complete",
+         "optional_header": "complete",
+         "section_table": "complete"
+        },
+        "highest_completed_stage": "sections",
+        "read_bytes": 432,
+        "read_target_bytes": 432,
+        "region_table": "enumerated",
+        "requested_bytes": 4096,
+        "requested_stage": "sections",
+        "segment_table": "enumerated",
+        "target_io_short": false,
+        "unexamined": []
+       },
+       "actual_base": "0x00007ff600000000",
+       "checksum": 0,
+       "coff_characteristics": 34,
+       "collected": true,
+       "correlated": true,
+       "declared_section_count": 1,
+       "decoded_section_count": 1,
+       "directories": [
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 0,
+         "name": "EXPORT",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 1,
+         "name": "IMPORT",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 2,
+         "name": "RESOURCE",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 3,
+         "name": "EXCEPTION",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 4,
+         "name": "SECURITY",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "file_offset"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 5,
+         "name": "BASERELOC",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 6,
+         "name": "DEBUG",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 7,
+         "name": "ARCHITECTURE",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 8,
+         "name": "GLOBALPTR",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 9,
+         "name": "TLS",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 10,
+         "name": "LOAD_CONFIG",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 11,
+         "name": "BOUND_IMPORT",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 12,
+         "name": "IAT",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 13,
+         "name": "DELAY_IMPORT",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 14,
+         "name": "COM_DESCRIPTOR",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        },
+        {
+         "bytes_read": 8,
+         "capture_state": null,
+         "containing_section_index": null,
+         "descriptor_state": "declared_absent",
+         "index": 15,
+         "name": "RESERVED",
+         "present": false,
+         "size": 0,
+         "value": 0,
+         "value_kind": "rva"
+        }
+       ],
+       "directory_summary": {
+        "declared_count": 16,
+        "declared_count_raw": 16,
+        "readable_count": 16,
+        "unprojected_count": 0
+       },
+       "dll_characteristics": 0,
+       "entry_point": {
+        "capture_state": "complete",
+        "region_protection": "PAGE_EXECUTE_READ",
+        "region_state": "MEM_COMMIT",
+        "region_type": "MEM_IMAGE",
+        "rva": 4096,
+        "section_index": 0,
+        "section_name": ".text",
+        "va": "0x00007ff600001000",
+        "va_overflow": false
+       },
+       "file_alignment": 512,
+       "format": "PE32+",
+       "machine": 34404,
+       "machine_name": "AMD64",
+       "module_identity": {
+        "form": "path",
+        "truncated": false,
+        "value": "C:\\Program Files\\Sample\\app.exe"
+       },
+       "module_match": "resolved",
+       "observation_coverage": {
+        "conflict": 0,
+        "consistent": 10,
+        "not_applicable": 17,
+        "total": 29,
+        "unavailable": 2
+       },
+       "observations": [
+        {
+         "name": "base_vs_preferred",
+         "operands": {
+          "actual_base": 140694538682368,
+          "preferred_image_base": 140694538682368,
+          "relocation_delta": 0
+         },
+         "reason": "delta_recorded",
+         "sources": [
+          "profile.source:peb_image_base",
+          "profile.optional_header"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "relocation_expected",
+         "operands": {
+          "basereloc_present": false,
+          "relocation_delta": 0,
+          "relocs_stripped": false
+         },
+         "reason": "zero_delta",
+         "sources": [
+          "profile.source:peb_image_base",
+          "profile.optional_header"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "machine_vs_format",
+         "operands": {
+          "is_pe32_plus": true,
+          "machine": 34404,
+          "machine_name": "AMD64"
+         },
+         "reason": "format_matches_machine",
+         "sources": [
+          "profile.coff_header",
+          "profile.optional_header"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "entry_point_in_section",
+         "operands": {
+          "address_of_entry_point": 4096,
+          "containing_section_index": 0,
+          "section_table_state": "complete"
+         },
+         "reason": "entry_point_in_decoded_section",
+         "sources": [
+          "profile.optional_header",
+          "profile.section_table"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "size_vs_image_extent",
+         "operands": {
+          "captured_extent_bytes": 8192,
+          "mapped_extent_bytes": 12288,
+          "size_of_image": 12288
+         },
+         "reason": "short_capture",
+         "sources": [
+          "profile.source:peb_image_base",
+          "profile.optional_header",
+          "memory_info",
+          "memory_segments"
+         ],
+         "state": "unavailable"
+        },
+        {
+         "name": "size_vs_modulelist",
+         "operands": {
+          "modulelist_size": 12288,
+          "section_alignment": 4096,
+          "size_of_image": 12288
+         },
+         "reason": "size_matches_modulelist",
+         "sources": [
+          "profile.optional_header",
+          "module_list"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "size_vs_section_extent",
+         "operands": {
+          "section_extent": 8192,
+          "section_table_state": "complete",
+          "size_of_image": 12288
+         },
+         "reason": "size_covers_section_extent",
+         "sources": [
+          "profile.optional_header",
+          "profile.section_table"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "identity_time_date_stamp",
+         "operands": {
+          "header_value": 1600000000,
+          "module_list_value": 1600000000
+         },
+         "reason": "identity_matches",
+         "sources": [
+          "profile.coff_header",
+          "module_list"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "identity_check_sum",
+         "operands": {
+          "header_value": 0,
+          "module_list_value": 4660
+         },
+         "reason": "header_checksum_absent",
+         "sources": [
+          "profile.optional_header",
+          "module_list"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "identity_machine",
+         "operands": {
+          "machine": 34404,
+          "machine_name": "AMD64"
+         },
+         "reason": "machine_no_independent_source",
+         "sources": [
+          "profile.coff_header"
+         ],
+         "state": "unavailable"
+        },
+        {
+         "name": "section_range_overflow",
+         "operands": {
+          "actual_base": 140694538682368,
+          "section_index": 0,
+          "virtual_address": 4096,
+          "virtual_size": 4096
+         },
+         "reason": "section_range_representable",
+         "sources": [
+          "profile.source:peb_image_base",
+          "profile.section_table"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "section_image_bound",
+         "operands": {
+          "section_index": 0,
+          "size_of_image": 12288,
+          "virtual_address": 4096,
+          "virtual_size": 4096
+         },
+         "reason": "section_within_image_bound",
+         "sources": [
+          "profile.optional_header",
+          "profile.section_table"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "section_overlap",
+         "operands": {
+          "section_index": 0,
+          "virtual_address": 4096,
+          "virtual_size": 4096
+         },
+         "reason": "section_disjoint_from_others",
+         "sources": [
+          "profile.section_table"
+         ],
+         "state": "consistent"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 0,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 1,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 2,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 3,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 4,
+          "size": 0,
+          "value": 0,
+          "value_kind": "file_offset"
+         },
+         "reason": "file_offset_semantics",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 5,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 6,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 7,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 8,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 9,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 10,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 11,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 12,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 13,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 14,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        },
+        {
+         "name": "directory_image_bound",
+         "operands": {
+          "index": 15,
+          "size": 0,
+          "size_of_image": 12288,
+          "value": 0
+         },
+         "reason": "directory_declared_absent",
+         "sources": [
+          "profile.directory_descriptors"
+         ],
+         "state": "not_applicable"
+        }
+       ],
+       "preferred_image_base": "0x00007ff600000000",
+       "relocation": {
+        "basereloc_descriptor_state": "declared_absent",
+        "basereloc_present": false,
+        "delta": 0,
+        "dynamic_base": false,
+        "relocs_stripped": false
+       },
+       "section_alignment": 4096,
+       "sections": [
+        {
+         "capture_state": "complete",
+         "characteristics": 1610612768,
+         "declared_executable": true,
+         "declared_readable": true,
+         "declared_writable": false,
+         "live_protections": [
+          "PAGE_EXECUTE_READ"
+         ],
+         "mapped_base_address": "0x00007ff600001000",
+         "mapped_size": 4096,
+         "name": ".text",
+         "section_index": 0,
+         "size_of_raw_data": 4096,
+         "virtual_address": 4096,
+         "virtual_size": 4096
+        }
+       ],
+       "size_of_headers": 1024,
+       "size_of_image": 12288,
+       "source_kind": "peb_image_base",
+       "structural_state": "complete",
+       "subsystem": 3,
+       "time_date_stamp": 1600000000,
+       "unavailable_reason": null
+      },
+      "peb_extended": {
+       "being_debugged": 0,
+       "dll_path": "C:\\Windows\\System32",
+       "peb_address": "0x000000007ffdf000",
+       "standard_error": "0x000000000000000c",
+       "standard_input": "0x0000000000000004",
+       "standard_output": "0x0000000000000008",
+       "window_title": "Sample App"
+      },
+      "pid": 4242,
+      "process_name": "app.exe",
+      "process_path": "C:\\Program Files\\Sample\\app.exe",
+      "process_start_utc": null
+     }
+    ]
+   },
+   "execution_status": "completed",
+   "kind": "process",
+   "summary": {
+    "count": 1
+   }
+  }
+ },
+ "stderr": [
+  ""
+ ],
+ "stdout": [
+  "",
+  "\u2550\u2550\u2550 PROCESS \u2550\u2550\u2550",
+  "  [~] MiscInfo's ProcessCreateTime is not a valid 32-bit timestamp",
+  "",
+  "  Process Name           app.exe",
+  "  PID                    4242 (0x1092)",
+  "  Path                   C:\\Program Files\\Sample\\app.exe",
+  "  Command Line           \"C:\\Program Files\\Sample\\app.exe\" --serve --port 8443",
+  "  Start Time (UTC)       (unknown)",
+  "  Image Base             0x00007ff600000000",
+  "",
+  "  Main Image PE",
+  "    Architecture     AMD64 / PE32+",
+  "    Actual Base      0x00007ff600000000",
+  "    Preferred Base   0x00007ff600000000",
+  "    Relocation       not required -- loaded at the preferred base",
+  "    Image Size       0x3000 (12288 bytes), 1 section(s)",
+  "    Entry Point      RVA 0x1000 -> 0x00007ff600001000 (.text; PAGE_EXECUTE_READ; capture complete)",
+  "    Loader Record    a module is registered at this image base",
+  "    Structure        complete -- every header structure was read in full",
+  "    Consistency      10 consistent, 0 conflicting, 2 unavailable, 17 not applicable",
+  "    Scope            structural main-image checks only; this does not establish",
+  "                     that the process is benign",
+  "    [??] image size vs. mapped memory: unavailable -- the dump captured only part of the mapping, so the declared size cannot be compared against it",
+  "",
+  "    Sections                                     [--verbose only]",
+  "      #   Name        RVA+Size            Mapped At             R/W/X  Live Protection         Capture",
+  "      0   .text       0x1000+0x1000       0x00007ff600001000    R-X    PAGE_EXECUTE_READ       complete",
+  "      R/W/X is what the section header declares; Live Protection is what the dump recorded",
+  "      for the memory it is mapped over. PAGE_EXECUTE_WRITECOPY is ordinary loader context.",
+  "",
+  "    Data Directories                             [--verbose only]",
+  "      #   Directory         Presence        Addressing   Start       Size        Descriptor        Content",
+  "      0   EXPORT            absent          image RVA    --          --          declared absent   (n/a)",
+  "      1   IMPORT            absent          image RVA    --          --          declared absent   (n/a)",
+  "      2   RESOURCE          absent          image RVA    --          --          declared absent   (n/a)",
+  "      3   EXCEPTION         absent          image RVA    --          --          declared absent   (n/a)",
+  "      4   SECURITY          absent          file offset  --          --          declared absent   (n/a)",
+  "      5   BASERELOC         absent          image RVA    --          --          declared absent   (n/a)",
+  "      6   DEBUG             absent          image RVA    --          --          declared absent   (n/a)",
+  "      7   ARCHITECTURE      absent          image RVA    --          --          declared absent   (n/a)",
+  "      8   GLOBALPTR         absent          image RVA    --          --          declared absent   (n/a)",
+  "      9   TLS               absent          image RVA    --          --          declared absent   (n/a)",
+  "      10  LOAD_CONFIG       absent          image RVA    --          --          declared absent   (n/a)",
+  "      11  BOUND_IMPORT      absent          image RVA    --          --          declared absent   (n/a)",
+  "      12  IAT               absent          image RVA    --          --          declared absent   (n/a)",
+  "      13  DELAY_IMPORT      absent          image RVA    --          --          declared absent   (n/a)",
+  "      14  COM_DESCRIPTOR    absent          image RVA    --          --          declared absent   (n/a)",
+  "      15  RESERVED          absent          image RVA    --          --          declared absent   (n/a)",
+  "      Start and Size are the descriptor's own two declared fields, and Addressing says which",
+  "      address space Start is in. -- is a field the image declares nothing in. Descriptor is how",
+  "      much of the descriptor was read; Content, how much of what it points at.",
+  "",
+  "    Relocation Evidence                          [--verbose only]",
+  "      Distance                 none -- loaded at the preferred base",
+  "      Stripped                 the header does not declare relocations stripped",
+  "      Dynamic base             the header does not opt in to being loaded anywhere",
+  "      Directory                the image declares no base-relocation directory",
+  "      Descriptor               declared absent",
+  "",
+  "    Consistency Checks                           [--verbose only]",
+  "      [OK] load address vs. preferred base: the load address and the preferred base are both recorded",
+  "           evidence: the PEB-reported image base, the image's optional header",
+  "      [OK] relocation evidence: the image is loaded at its preferred base, so no relocation was needed",
+  "           evidence: the PEB-reported image base, the image's optional header",
+  "      [OK] architecture vs. header format: the header format is the one this architecture fixes",
+  "           evidence: the image's COFF header, the image's optional header",
+  "      [OK] entry point placement: the entry point falls inside a decoded section",
+  "           evidence: the image's optional header, the image's section table",
+  "      [??] image size vs. mapped memory: unavailable -- the dump captured only part of the mapping, so the declared size cannot be compared against it",
+  "           evidence: the PEB-reported image base, the image's optional header, the dump's memory region table, the dump's memory segment table",
+  "      [OK] image size vs. loader record: the declared image size matches the loader's own record",
+  "           evidence: the image's optional header, the loader's module list",
+  "      [OK] image size vs. section table: every decoded section fits inside the declared image size",
+  "           evidence: the image's optional header, the image's section table",
+  "      [OK] timestamp vs. loader record: the header value and the loader's own record agree",
+  "           evidence: the image's COFF header, the loader's module list",
+  "      [--] checksum vs. loader record: not applicable -- the header carries no checksum, which is ordinary for a linked image",
+  "           evidence: the image's optional header, the loader's module list",
+  "      [??] architecture vs. a second source: unavailable -- the dump carries no second source for this image's architecture",
+  "           evidence: the image's COFF header",
+  "      [OK] section 0 (.text): the section's address range is representable at this load address",
+  "           evidence: the PEB-reported image base, the image's section table",
+  "      [OK] section 0 (.text): the section fits inside the declared image size",
+  "           evidence: the image's optional header, the image's section table",
+  "      [OK] section 0 (.text): the section shares no address with another section",
+  "           evidence: the image's section table",
+  "      [--] directory 0 (EXPORT): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 1 (IMPORT): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 2 (RESOURCE): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 3 (EXCEPTION): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 4 (SECURITY): not applicable -- this directory is addressed by file offset, not by image RVA, so it is not part of the mapping",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 5 (BASERELOC): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 6 (DEBUG): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 7 (ARCHITECTURE): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 8 (GLOBALPTR): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 9 (TLS): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 10 (LOAD_CONFIG): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 11 (BOUND_IMPORT): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 12 (IAT): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 13 (DELAY_IMPORT): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 14 (COM_DESCRIPTOR): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "      [--] directory 15 (RESERVED): not applicable -- the image declares this directory absent",
+  "           evidence: the image's data directory descriptors",
+  "",
+  "    Header Acquisition                           [--verbose only]",
+  "      Requested window         0x1000 bytes at the image base",
+  "      Captured in that window  0x1000 bytes",
+  "      Required for parsing     0x1b0 bytes",
+  "      Required bytes present   yes",
+  "      Segment table            walked in full",
+  "      Region table             walked in full",
+  "      Parsing                  completed through the section table, as requested",
+  "      Header components        read in full: DOS header, COFF header, optional header, directory array, directory descriptors, section table",
+  "      Named as                 C:\\Program Files\\Sample\\app.exe (path from the PEB-reported image base)",
+  "",
+  "  Import Address Table",
+  "    (none -- this image declares no imports)",
+  "",
+  "  Identity Verification                            [--verbose only]",
+  "    Selected path    C:\\Program Files\\Sample\\app.exe",
+  "    Selected name    app.exe",
+  "    Source           PEB (ProcessParameters.ImagePathName)",
+  "    Image base       0x00007ff600000000 (source: PEB)",
+  "",
+  "    [OK] PEB image base is registered in ModuleList",
+  "         0x00007ff600000000 -> app.exe",
+  "    [OK] PEB and ModuleList process names agree",
+  "    [OK] a valid PE header was found at the PEB image base",
+  "    [OK] no competing module shares this process name",
+  "",
+  "    Raw claims       PEB                              ModuleList",
+  "    path             C:\\Program Files\\Sample\\app.exe  C:\\Program Files\\Sample\\app.exe",
+  "    name             app.exe                          app.exe",
+  "    image base       0x00007ff600000000               0x00007ff600000000 (resolved)",
+  "",
+  "  Extended PEB",
+  "    PEB Address        0x000000007ffdf000",
+  "    BeingDebugged      0",
+  "    WindowTitle        Sample App",
+  "    DllPath            C:\\Windows\\System32",
+  "    StandardInput      0x0000000000000004",
+  "    StandardOutput     0x0000000000000008",
+  "    StandardError      0x000000000000000c",
+  "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
+  ""
+ ]
+}

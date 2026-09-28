@@ -1,0 +1,6012 @@
+{
+ "dumpex.core.memory": {
+  "baseline_definitions": [
+   [
+    "SYSTEM_RANGE",
+    "value"
+   ],
+   [
+    "parse_hex_or_int",
+    "def"
+   ],
+   [
+    "prot_str",
+    "def"
+   ],
+   [
+    "MAX_HANDLE_DESCRIPTORS",
+    "value"
+   ],
+   [
+    "MAX_HANDLE_STRING_BYTES",
+    "value"
+   ],
+   [
+    "_DESCRIPTOR_PROBE_BYTES",
+    "value"
+   ],
+   [
+    "HandleDescriptorLayoutError",
+    "class"
+   ],
+   [
+    "_descriptor_class_size",
+    "def"
+   ],
+   [
+    "_HANDLE_DESCRIPTOR_LAYOUT_CACHE",
+    "value"
+   ],
+   [
+    "_handle_descriptor_layout",
+    "def"
+   ],
+   [
+    "HandleStreamFramingError",
+    "class"
+   ],
+   [
+    "ParsedHandleDescriptor",
+    "class"
+   ],
+   [
+    "_BoundedDescriptorReader",
+    "class"
+   ],
+   [
+    "ParsedHandleDataStream",
+    "class"
+   ],
+   [
+    "HandleStreamContractError",
+    "class"
+   ],
+   [
+    "declared_descriptor_count",
+    "def"
+   ],
+   [
+    "truncated_descriptor_count",
+    "def"
+   ],
+   [
+    "_read_handle_string",
+    "def"
+   ],
+   [
+    "parse_handle_stream",
+    "def"
+   ],
+   [
+    "MAX_THREAD_INFO_ENTRIES",
+    "value"
+   ],
+   [
+    "MAX_THREAD_INFO_RAW_BYTES",
+    "value"
+   ],
+   [
+    "_THREAD_INFO_LIST_HEADER_SIZE",
+    "value"
+   ],
+   [
+    "_THREAD_INFO_ENTRY_SIZE",
+    "value"
+   ],
+   [
+    "_THREAD_INFO_MIN_ENTRY_SIZE",
+    "value"
+   ],
+   [
+    "_THREAD_INFO_MAX_ENTRY_SIZE",
+    "value"
+   ],
+   [
+    "_THREAD_INFO_LAYOUT",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_ERROR_THREAD",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_WRITING_THREAD",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_EXITED_THREAD",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_INVALID_INFO",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_INVALID_CONTEXT",
+    "value"
+   ],
+   [
+    "DUMP_FLAG_INVALID_TEB",
+    "value"
+   ],
+   [
+    "_DUMP_FLAG_TAGS",
+    "value"
+   ],
+   [
+    "_DUMP_FLAGS_INFO_INVALID",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_RESOLVED",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_UNRESOLVED",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_ABSENT",
+    "value"
+   ],
+   [
+    "START_ADDRESS_RECORDED",
+    "value"
+   ],
+   [
+    "START_ADDRESS_INVALID",
+    "value"
+   ],
+   [
+    "START_ADDRESS_UNVERIFIED",
+    "value"
+   ],
+   [
+    "START_ADDRESS_ABSENT",
+    "value"
+   ],
+   [
+    "ThreadInfoStreamFramingError",
+    "class"
+   ],
+   [
+    "ParsedThreadInfo",
+    "class"
+   ],
+   [
+    "ParsedThreadInfoList",
+    "class"
+   ],
+   [
+    "parse_thread_info_stream",
+    "def"
+   ],
+   [
+    "declared_thread_info_count",
+    "def"
+   ],
+   [
+    "truncated_thread_info_count",
+    "def"
+   ],
+   [
+    "_parse_thread_info_entry",
+    "def"
+   ],
+   [
+    "_is_real_thread_info",
+    "def"
+   ],
+   [
+    "dump_flags_value",
+    "def"
+   ],
+   [
+    "dump_flags_state",
+    "def"
+   ],
+   [
+    "dump_flags_tags",
+    "def"
+   ],
+   [
+    "recorded_start_address",
+    "def"
+   ],
+   [
+    "_STREAM_DISPATCH",
+    "value"
+   ],
+   [
+    "DISPATCHED_STREAM_TYPES",
+    "value"
+   ],
+   [
+    "STREAM_ATTR_NAMES",
+    "value"
+   ],
+   [
+    "_HEADER_UNION_OFFSET",
+    "value"
+   ],
+   [
+    "_HEADER_UNION_SIZE",
+    "value"
+   ],
+   [
+    "_HEADER_FLAGS_SIZE",
+    "value"
+   ],
+   [
+    "_HEADER_TAIL_SIZE",
+    "value"
+   ],
+   [
+    "_correct_header_union",
+    "def"
+   ],
+   [
+    "_parse_directory_entry",
+    "def"
+   ],
+   [
+    "open_dump",
+    "def"
+   ],
+   [
+    "stream_failure",
+    "def"
+   ],
+   [
+    "has_stream_directory",
+    "def"
+   ],
+   [
+    "directory_truncated_count",
+    "def"
+   ],
+   [
+    "UNPARSED_HANDLE_STREAM_DETAIL",
+    "value"
+   ],
+   [
+    "handle_stream_evidence",
+    "def"
+   ],
+   [
+    "observe_stream",
+    "def"
+   ],
+   [
+    "RegionReadError",
+    "class"
+   ],
+   [
+    "read_region",
+    "def"
+   ],
+   [
+    "clamped_reader",
+    "def"
+   ],
+   [
+    "read_region_clamped",
+    "def"
+   ],
+   [
+    "read_region_spanning",
+    "def"
+   ],
+   [
+    "get_modules",
+    "def"
+   ],
+   [
+    "get_thread_infos",
+    "def"
+   ],
+   [
+    "RawThreadInfo",
+    "class"
+   ],
+   [
+    "get_memory_regions",
+    "def"
+   ],
+   [
+    "get_thread_contexts",
+    "def"
+   ],
+   [
+    "ip_context_conflict_for",
+    "def"
+   ],
+   [
+    "enriched_thread_contexts",
+    "def"
+   ],
+   [
+    "group_regions_by_allocation",
+    "def"
+   ],
+   [
+    "get_handles",
+    "def"
+   ],
+   [
+    "module_name_only",
+    "def"
+   ],
+   [
+    "addr_to_module",
+    "def"
+   ],
+   [
+    "_memory_segments",
+    "def"
+   ],
+   [
+    "get_memory_segments",
+    "def"
+   ],
+   [
+    "va_to_file_offset",
+    "def"
+   ],
+   [
+    "_segments_by_va",
+    "def"
+   ],
+   [
+    "va_range_captured_bytes",
+    "def"
+   ],
+   [
+    "addr_label",
+    "def"
+   ],
+   [
+    "MAX_REGION_READ",
+    "value"
+   ],
+   [
+    "_resolve_size",
+    "def"
+   ],
+   [
+    "_get_region_at",
+    "def"
+   ],
+   [
+    "_extract_strings_from_data",
+    "def"
+   ],
+   [
+    "_hexdump_context",
+    "def"
+   ],
+   [
+    "INDICATOR_DIMS",
+    "value"
+   ],
+   [
+    "VERDICT_CLEAN",
+    "value"
+   ],
+   [
+    "VERDICT_SUSPICIOUS",
+    "value"
+   ],
+   [
+    "VERDICT_LIKELY_MALICIOUS",
+    "value"
+   ],
+   [
+    "VERDICT_HIGH_CONFIDENCE_MALICIOUS",
+    "value"
+   ],
+   [
+    "verdict_for",
+    "def"
+   ],
+   [
+    "_verdict",
+    "def"
+   ],
+   [
+    "StringSearchStats",
+    "class"
+   ],
+   [
+    "_search_string_in_memory",
+    "def"
+   ],
+   [
+    "_IOC_ENC_ASCII",
+    "value"
+   ],
+   [
+    "_IOC_ENC_ASCII_URL",
+    "value"
+   ],
+   [
+    "_IOC_ENC_UTF16",
+    "value"
+   ],
+   [
+    "IOC_STRING_ENCODING_WIDTHS",
+    "value"
+   ],
+   [
+    "_extract_ioc_strings",
+    "def"
+   ]
+  ],
+  "family_consumers": {},
+  "global_resolution": {
+   "ParsedHandleDataStream.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "ParsedHandleDescriptor.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "ParsedThreadInfo.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "ParsedThreadInfoList.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "RawThreadInfo.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_BoundedDescriptorReader.__init__": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_BoundedDescriptorReader.read": {
+    "globals": [
+     "HandleDescriptorLayoutError"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_BoundedDescriptorReader.tell": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_correct_header_union": {
+    "globals": [
+     "MINIDUMP_TYPE",
+     "_HEADER_TAIL_SIZE",
+     "_HEADER_UNION_OFFSET",
+     "_HEADER_UNION_SIZE"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_descriptor_class_size": {
+    "globals": [
+     "HandleDescriptorLayoutError",
+     "_DESCRIPTOR_PROBE_BYTES",
+     "io"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_extract_ioc_strings": {
+    "globals": [
+     "_IOC_ENC_ASCII",
+     "_IOC_ENC_ASCII_URL",
+     "_IOC_ENC_UTF16",
+     "re"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_extract_strings_from_data": {
+    "globals": [
+     "re"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_get_region_at": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_handle_descriptor_layout": {
+    "globals": [
+     "HandleDescriptorLayoutError",
+     "MINIDUMP_HANDLE_DESCRIPTOR",
+     "MINIDUMP_HANDLE_DESCRIPTOR_2",
+     "_HANDLE_DESCRIPTOR_LAYOUT_CACHE",
+     "_descriptor_class_size"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_hexdump_context": {
+    "globals": [
+     "DIM",
+     "YELLOW"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_is_real_thread_info": {
+    "globals": [
+     "RawThreadInfo"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_memory_segments": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_parse_directory_entry": {
+    "globals": [
+     "MINIDUMP_DIRECTORY",
+     "MINIDUMP_LOCATION_DESCRIPTOR",
+     "MINIDUMP_STREAM_TYPE"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_parse_thread_info_entry": {
+    "globals": [
+     "DumpFlags",
+     "ParsedThreadInfo",
+     "_THREAD_INFO_LAYOUT"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_read_handle_string": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "_resolve_size": {
+    "globals": [
+     "MAX_REGION_READ",
+     "get_memory_regions"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_search_string_in_memory": {
+    "globals": [
+     "MAX_REGION_READ",
+     "StringSearchStats",
+     "get_memory_regions",
+     "prot_str",
+     "read_region"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_segments_by_va": {
+    "globals": [
+     "_memory_segments"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "_verdict": {
+    "globals": [
+     "GREEN",
+     "RED",
+     "VERDICT_CLEAN",
+     "VERDICT_LIKELY_MALICIOUS",
+     "VERDICT_SUSPICIOUS",
+     "YELLOW",
+     "verdict_for"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "addr_label": {
+    "globals": [
+     "DIM",
+     "va_to_file_offset"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "addr_to_module": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "clamped_reader": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "declared_descriptor_count": {
+    "globals": [
+     "HandleStreamContractError"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "declared_thread_info_count": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "directory_truncated_count": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "dump_flags_state": {
+    "globals": [
+     "DUMP_FLAGS_ABSENT",
+     "DUMP_FLAGS_RESOLVED",
+     "DUMP_FLAGS_UNRESOLVED",
+     "_is_real_thread_info",
+     "dump_flags_value"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "dump_flags_tags": {
+    "globals": [
+     "_DUMP_FLAG_TAGS",
+     "dump_flags_value"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "dump_flags_value": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "enriched_thread_contexts": {
+    "globals": [
+     "get_thread_contexts",
+     "get_thread_infos",
+     "ip_context_conflict_for",
+     "recorded_start_address"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "get_handles": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "get_memory_regions": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "get_memory_segments": {
+    "globals": [
+     "_memory_segments"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "get_modules": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "get_thread_contexts": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "get_thread_infos": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "group_regions_by_allocation": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "handle_stream_evidence": {
+    "globals": [
+     "MINIDUMP_STREAM_TYPE",
+     "UNPARSED_HANDLE_STREAM_DETAIL",
+     "has_stream_directory",
+     "stream_failure"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "has_stream_directory": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "ip_context_conflict_for": {
+    "globals": [
+     "DUMP_FLAG_INVALID_CONTEXT",
+     "_is_real_thread_info",
+     "dump_flags_value"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "module_name_only": {
+    "globals": [
+     "ntpath"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "observe_stream": {
+    "globals": [
+     "SourceObservation",
+     "SourceState",
+     "stream_failure"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "open_dump": {
+    "globals": [
+     "CONTEXT",
+     "DIM",
+     "MinidumpFile",
+     "MinidumpHeader",
+     "PEB",
+     "PROCESSOR_ARCHITECTURE",
+     "RED",
+     "WOW64_CONTEXT",
+     "_STREAM_DISPATCH",
+     "_correct_header_union",
+     "_parse_directory_entry",
+     "os",
+     "sys"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "parse_handle_stream": {
+    "globals": [
+     "HandleDescriptorLayoutError",
+     "HandleStreamFramingError",
+     "MAX_HANDLE_DESCRIPTORS",
+     "MINIDUMP_HANDLE_DATA_STREAM",
+     "MINIDUMP_HANDLE_DESCRIPTOR",
+     "MINIDUMP_HANDLE_DESCRIPTOR_2",
+     "ParsedHandleDataStream",
+     "ParsedHandleDescriptor",
+     "_BoundedDescriptorReader",
+     "_handle_descriptor_layout",
+     "_read_handle_string",
+     "io"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "parse_hex_or_int": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "parse_thread_info_stream": {
+    "globals": [
+     "MAX_THREAD_INFO_ENTRIES",
+     "MAX_THREAD_INFO_RAW_BYTES",
+     "MINIDUMP_THREAD_INFO_LIST",
+     "ParsedThreadInfoList",
+     "ThreadInfoStreamFramingError",
+     "_THREAD_INFO_ENTRY_SIZE",
+     "_THREAD_INFO_LIST_HEADER_SIZE",
+     "_THREAD_INFO_MAX_ENTRY_SIZE",
+     "_THREAD_INFO_MIN_ENTRY_SIZE",
+     "_parse_thread_info_entry",
+     "io"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "prot_str": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "read_region": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "read_region_clamped": {
+    "globals": [
+     "clamped_reader"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "read_region_spanning": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "recorded_start_address": {
+    "globals": [
+     "START_ADDRESS_ABSENT",
+     "START_ADDRESS_INVALID",
+     "START_ADDRESS_RECORDED",
+     "START_ADDRESS_UNVERIFIED",
+     "_DUMP_FLAGS_INFO_INVALID",
+     "_is_real_thread_info",
+     "dump_flags_value"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "stream_failure": {
+    "globals": [],
+    "module": "dumpex.core.memory"
+   },
+   "truncated_descriptor_count": {
+    "globals": [
+     "HandleStreamContractError",
+     "declared_descriptor_count"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "truncated_thread_info_count": {
+    "globals": [
+     "declared_thread_info_count"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "va_range_captured_bytes": {
+    "globals": [
+     "_segments_by_va",
+     "bisect"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "va_to_file_offset": {
+    "globals": [
+     "_memory_segments"
+    ],
+    "module": "dumpex.core.memory"
+   },
+   "verdict_for": {
+    "globals": [
+     "VERDICT_CLEAN",
+     "VERDICT_HIGH_CONFIDENCE_MALICIOUS",
+     "VERDICT_LIKELY_MALICIOUS",
+     "VERDICT_SUSPICIOUS"
+    ],
+    "module": "dumpex.core.memory"
+   }
+  },
+  "legacy_defines": [
+   "SYSTEM_RANGE",
+   "parse_hex_or_int",
+   "prot_str",
+   "MAX_HANDLE_DESCRIPTORS",
+   "MAX_HANDLE_STRING_BYTES",
+   "_DESCRIPTOR_PROBE_BYTES",
+   "HandleDescriptorLayoutError",
+   "_descriptor_class_size",
+   "_HANDLE_DESCRIPTOR_LAYOUT_CACHE",
+   "_handle_descriptor_layout",
+   "HandleStreamFramingError",
+   "ParsedHandleDescriptor",
+   "_BoundedDescriptorReader",
+   "ParsedHandleDataStream",
+   "HandleStreamContractError",
+   "declared_descriptor_count",
+   "truncated_descriptor_count",
+   "_read_handle_string",
+   "parse_handle_stream",
+   "MAX_THREAD_INFO_ENTRIES",
+   "MAX_THREAD_INFO_RAW_BYTES",
+   "_THREAD_INFO_LIST_HEADER_SIZE",
+   "_THREAD_INFO_ENTRY_SIZE",
+   "_THREAD_INFO_MIN_ENTRY_SIZE",
+   "_THREAD_INFO_MAX_ENTRY_SIZE",
+   "_THREAD_INFO_LAYOUT",
+   "DUMP_FLAG_ERROR_THREAD",
+   "DUMP_FLAG_WRITING_THREAD",
+   "DUMP_FLAG_EXITED_THREAD",
+   "DUMP_FLAG_INVALID_INFO",
+   "DUMP_FLAG_INVALID_CONTEXT",
+   "DUMP_FLAG_INVALID_TEB",
+   "_DUMP_FLAG_TAGS",
+   "_DUMP_FLAGS_INFO_INVALID",
+   "DUMP_FLAGS_RESOLVED",
+   "DUMP_FLAGS_UNRESOLVED",
+   "DUMP_FLAGS_ABSENT",
+   "START_ADDRESS_RECORDED",
+   "START_ADDRESS_INVALID",
+   "START_ADDRESS_UNVERIFIED",
+   "START_ADDRESS_ABSENT",
+   "ThreadInfoStreamFramingError",
+   "ParsedThreadInfo",
+   "ParsedThreadInfoList",
+   "parse_thread_info_stream",
+   "declared_thread_info_count",
+   "truncated_thread_info_count",
+   "_parse_thread_info_entry",
+   "_is_real_thread_info",
+   "dump_flags_value",
+   "dump_flags_state",
+   "dump_flags_tags",
+   "recorded_start_address",
+   "_STREAM_DISPATCH",
+   "DISPATCHED_STREAM_TYPES",
+   "STREAM_ATTR_NAMES",
+   "_HEADER_UNION_OFFSET",
+   "_HEADER_UNION_SIZE",
+   "_HEADER_FLAGS_SIZE",
+   "_HEADER_TAIL_SIZE",
+   "_correct_header_union",
+   "_parse_directory_entry",
+   "open_dump",
+   "stream_failure",
+   "has_stream_directory",
+   "directory_truncated_count",
+   "UNPARSED_HANDLE_STREAM_DETAIL",
+   "handle_stream_evidence",
+   "observe_stream",
+   "RegionReadError",
+   "read_region",
+   "clamped_reader",
+   "read_region_clamped",
+   "read_region_spanning",
+   "get_modules",
+   "get_thread_infos",
+   "RawThreadInfo",
+   "get_memory_regions",
+   "get_thread_contexts",
+   "ip_context_conflict_for",
+   "enriched_thread_contexts",
+   "group_regions_by_allocation",
+   "get_handles",
+   "module_name_only",
+   "addr_to_module",
+   "_memory_segments",
+   "get_memory_segments",
+   "va_to_file_offset",
+   "_segments_by_va",
+   "va_range_captured_bytes",
+   "addr_label",
+   "MAX_REGION_READ",
+   "_resolve_size",
+   "_get_region_at",
+   "_extract_strings_from_data",
+   "_hexdump_context",
+   "INDICATOR_DIMS",
+   "VERDICT_CLEAN",
+   "VERDICT_SUSPICIOUS",
+   "VERDICT_LIKELY_MALICIOUS",
+   "VERDICT_HIGH_CONFIDENCE_MALICIOUS",
+   "verdict_for",
+   "_verdict",
+   "StringSearchStats",
+   "_search_string_in_memory",
+   "_IOC_ENC_ASCII",
+   "_IOC_ENC_ASCII_URL",
+   "_IOC_ENC_UTF16",
+   "IOC_STRING_ENCODING_WIDTHS",
+   "_extract_ioc_strings"
+  ],
+  "legacy_imports": {
+   "CONTEXT": "minidump.streams.ContextStream:CONTEXT",
+   "CommentStreamA": "minidump.streams:CommentStreamA",
+   "CommentStreamW": "minidump.streams:CommentStreamW",
+   "DIM": "dumpex.ui.colors:DIM",
+   "DumpFlags": "minidump.streams.ThreadInfoListStream:DumpFlags",
+   "ExceptionList": "minidump.streams:ExceptionList",
+   "GREEN": "dumpex.ui.colors:GREEN",
+   "MINIDUMP_DIRECTORY": "minidump.directory:MINIDUMP_DIRECTORY",
+   "MINIDUMP_HANDLE_DATA_STREAM": "minidump.streams.HandleDataStream:MINIDUMP_HANDLE_DATA_STREAM",
+   "MINIDUMP_HANDLE_DESCRIPTOR": "minidump.streams.HandleDataStream:MINIDUMP_HANDLE_DESCRIPTOR",
+   "MINIDUMP_HANDLE_DESCRIPTOR_2": "minidump.streams.HandleDataStream:MINIDUMP_HANDLE_DESCRIPTOR_2",
+   "MINIDUMP_LOCATION_DESCRIPTOR": "minidump.common_structs:MINIDUMP_LOCATION_DESCRIPTOR",
+   "MINIDUMP_STREAM_TYPE": "minidump.constants:MINIDUMP_STREAM_TYPE",
+   "MINIDUMP_THREAD_INFO_LIST": "minidump.streams.ThreadInfoListStream:MINIDUMP_THREAD_INFO_LIST",
+   "MINIDUMP_TYPE": "minidump.constants:MINIDUMP_TYPE",
+   "MinidumpFile": "minidump.minidumpfile:MinidumpFile",
+   "MinidumpHeader": "minidump.header:MinidumpHeader",
+   "MinidumpMemory64List": "minidump.streams:MinidumpMemory64List",
+   "MinidumpMemoryInfoList": "minidump.streams:MinidumpMemoryInfoList",
+   "MinidumpMemoryList": "minidump.streams:MinidumpMemoryList",
+   "MinidumpMiscInfo": "minidump.streams:MinidumpMiscInfo",
+   "MinidumpModuleList": "minidump.streams:MinidumpModuleList",
+   "MinidumpSystemInfo": "minidump.streams:MinidumpSystemInfo",
+   "MinidumpThreadExList": "minidump.streams:MinidumpThreadExList",
+   "MinidumpThreadList": "minidump.streams:MinidumpThreadList",
+   "MinidumpUnloadedModuleList": "minidump.streams:MinidumpUnloadedModuleList",
+   "NamedTuple": "typing:NamedTuple",
+   "PEB": "minidump.structures.peb:PEB",
+   "PROCESSOR_ARCHITECTURE": "minidump.streams.SystemInfoStream:PROCESSOR_ARCHITECTURE",
+   "Path": "pathlib:Path",
+   "RED": "dumpex.ui.colors:RED",
+   "SourceObservation": "dumpex.output.coverage:SourceObservation",
+   "SourceState": "dumpex.output.coverage:SourceState",
+   "WOW64_CONTEXT": "minidump.streams.ContextStream:WOW64_CONTEXT",
+   "YELLOW": "dumpex.ui.colors:YELLOW",
+   "bisect": "bisect",
+   "io": "io",
+   "ntpath": "ntpath",
+   "os": "os",
+   "re": "re",
+   "sys": "sys"
+  },
+  "owners": {
+   "DISPATCHED_STREAM_TYPES": "dumpex.core.memory",
+   "DUMP_FLAGS_ABSENT": "dumpex.core.memory",
+   "DUMP_FLAGS_RESOLVED": "dumpex.core.memory",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.core.memory",
+   "DUMP_FLAG_ERROR_THREAD": "dumpex.core.memory",
+   "DUMP_FLAG_EXITED_THREAD": "dumpex.core.memory",
+   "DUMP_FLAG_INVALID_CONTEXT": "dumpex.core.memory",
+   "DUMP_FLAG_INVALID_INFO": "dumpex.core.memory",
+   "DUMP_FLAG_INVALID_TEB": "dumpex.core.memory",
+   "DUMP_FLAG_WRITING_THREAD": "dumpex.core.memory",
+   "HandleDescriptorLayoutError": "dumpex.core.memory",
+   "HandleStreamContractError": "dumpex.core.memory",
+   "HandleStreamFramingError": "dumpex.core.memory",
+   "INDICATOR_DIMS": "dumpex.core.memory",
+   "IOC_STRING_ENCODING_WIDTHS": "dumpex.core.memory",
+   "MAX_HANDLE_DESCRIPTORS": "dumpex.core.memory",
+   "MAX_HANDLE_STRING_BYTES": "dumpex.core.memory",
+   "MAX_REGION_READ": "dumpex.core.memory",
+   "MAX_THREAD_INFO_ENTRIES": "dumpex.core.memory",
+   "MAX_THREAD_INFO_RAW_BYTES": "dumpex.core.memory",
+   "ParsedHandleDataStream": "dumpex.core.memory",
+   "ParsedHandleDescriptor": "dumpex.core.memory",
+   "ParsedThreadInfo": "dumpex.core.memory",
+   "ParsedThreadInfoList": "dumpex.core.memory",
+   "RawThreadInfo": "dumpex.core.memory",
+   "RegionReadError": "dumpex.core.memory",
+   "START_ADDRESS_ABSENT": "dumpex.core.memory",
+   "START_ADDRESS_INVALID": "dumpex.core.memory",
+   "START_ADDRESS_RECORDED": "dumpex.core.memory",
+   "START_ADDRESS_UNVERIFIED": "dumpex.core.memory",
+   "STREAM_ATTR_NAMES": "dumpex.core.memory",
+   "SYSTEM_RANGE": "dumpex.core.memory",
+   "StringSearchStats": "dumpex.core.memory",
+   "ThreadInfoStreamFramingError": "dumpex.core.memory",
+   "UNPARSED_HANDLE_STREAM_DETAIL": "dumpex.core.memory",
+   "VERDICT_CLEAN": "dumpex.core.memory",
+   "VERDICT_HIGH_CONFIDENCE_MALICIOUS": "dumpex.core.memory",
+   "VERDICT_LIKELY_MALICIOUS": "dumpex.core.memory",
+   "VERDICT_SUSPICIOUS": "dumpex.core.memory",
+   "_BoundedDescriptorReader": "dumpex.core.memory",
+   "_DESCRIPTOR_PROBE_BYTES": "dumpex.core.memory",
+   "_DUMP_FLAGS_INFO_INVALID": "dumpex.core.memory",
+   "_DUMP_FLAG_TAGS": "dumpex.core.memory",
+   "_HANDLE_DESCRIPTOR_LAYOUT_CACHE": "dumpex.core.memory",
+   "_HEADER_FLAGS_SIZE": "dumpex.core.memory",
+   "_HEADER_TAIL_SIZE": "dumpex.core.memory",
+   "_HEADER_UNION_OFFSET": "dumpex.core.memory",
+   "_HEADER_UNION_SIZE": "dumpex.core.memory",
+   "_IOC_ENC_ASCII": "dumpex.core.memory",
+   "_IOC_ENC_ASCII_URL": "dumpex.core.memory",
+   "_IOC_ENC_UTF16": "dumpex.core.memory",
+   "_STREAM_DISPATCH": "dumpex.core.memory",
+   "_THREAD_INFO_ENTRY_SIZE": "dumpex.core.memory",
+   "_THREAD_INFO_LAYOUT": "dumpex.core.memory",
+   "_THREAD_INFO_LIST_HEADER_SIZE": "dumpex.core.memory",
+   "_THREAD_INFO_MAX_ENTRY_SIZE": "dumpex.core.memory",
+   "_THREAD_INFO_MIN_ENTRY_SIZE": "dumpex.core.memory",
+   "_correct_header_union": "dumpex.core.memory",
+   "_descriptor_class_size": "dumpex.core.memory",
+   "_extract_ioc_strings": "dumpex.core.memory",
+   "_extract_strings_from_data": "dumpex.core.memory",
+   "_get_region_at": "dumpex.core.memory",
+   "_handle_descriptor_layout": "dumpex.core.memory",
+   "_hexdump_context": "dumpex.core.memory",
+   "_is_real_thread_info": "dumpex.core.memory",
+   "_memory_segments": "dumpex.core.memory",
+   "_parse_directory_entry": "dumpex.core.memory",
+   "_parse_thread_info_entry": "dumpex.core.memory",
+   "_read_handle_string": "dumpex.core.memory",
+   "_resolve_size": "dumpex.core.memory",
+   "_search_string_in_memory": "dumpex.core.memory",
+   "_segments_by_va": "dumpex.core.memory",
+   "_verdict": "dumpex.core.memory",
+   "addr_label": "dumpex.core.memory",
+   "addr_to_module": "dumpex.core.memory",
+   "clamped_reader": "dumpex.core.memory",
+   "declared_descriptor_count": "dumpex.core.memory",
+   "declared_thread_info_count": "dumpex.core.memory",
+   "directory_truncated_count": "dumpex.core.memory",
+   "dump_flags_state": "dumpex.core.memory",
+   "dump_flags_tags": "dumpex.core.memory",
+   "dump_flags_value": "dumpex.core.memory",
+   "enriched_thread_contexts": "dumpex.core.memory",
+   "get_handles": "dumpex.core.memory",
+   "get_memory_regions": "dumpex.core.memory",
+   "get_memory_segments": "dumpex.core.memory",
+   "get_modules": "dumpex.core.memory",
+   "get_thread_contexts": "dumpex.core.memory",
+   "get_thread_infos": "dumpex.core.memory",
+   "group_regions_by_allocation": "dumpex.core.memory",
+   "handle_stream_evidence": "dumpex.core.memory",
+   "has_stream_directory": "dumpex.core.memory",
+   "ip_context_conflict_for": "dumpex.core.memory",
+   "module_name_only": "dumpex.core.memory",
+   "observe_stream": "dumpex.core.memory",
+   "open_dump": "dumpex.core.memory",
+   "parse_handle_stream": "dumpex.core.memory",
+   "parse_hex_or_int": "dumpex.core.memory",
+   "parse_thread_info_stream": "dumpex.core.memory",
+   "prot_str": "dumpex.core.memory",
+   "read_region": "dumpex.core.memory",
+   "read_region_clamped": "dumpex.core.memory",
+   "read_region_spanning": "dumpex.core.memory",
+   "recorded_start_address": "dumpex.core.memory",
+   "stream_failure": "dumpex.core.memory",
+   "truncated_descriptor_count": "dumpex.core.memory",
+   "truncated_thread_info_count": "dumpex.core.memory",
+   "va_range_captured_bytes": "dumpex.core.memory",
+   "va_to_file_offset": "dumpex.core.memory",
+   "verdict_for": "dumpex.core.memory"
+  },
+  "private_unexported": [
+   "_BoundedDescriptorReader",
+   "_DUMP_FLAGS_INFO_INVALID",
+   "_DUMP_FLAG_TAGS",
+   "_HEADER_FLAGS_SIZE",
+   "_HEADER_TAIL_SIZE",
+   "_HEADER_UNION_OFFSET",
+   "_HEADER_UNION_SIZE",
+   "_IOC_ENC_ASCII",
+   "_IOC_ENC_ASCII_URL",
+   "_IOC_ENC_UTF16",
+   "_THREAD_INFO_ENTRY_SIZE",
+   "_THREAD_INFO_LAYOUT",
+   "_THREAD_INFO_LIST_HEADER_SIZE",
+   "_THREAD_INFO_MAX_ENTRY_SIZE",
+   "_THREAD_INFO_MIN_ENTRY_SIZE",
+   "_correct_header_union",
+   "_hexdump_context",
+   "_parse_directory_entry",
+   "_parse_thread_info_entry",
+   "_segments_by_va"
+  ],
+  "runtime_state_initializers": {
+   "_HANDLE_DESCRIPTOR_LAYOUT_CACHE": "None"
+  }
+ },
+ "dumpex.output.coverage": {
+  "baseline_definitions": [
+   [
+    "ExecutionStatus",
+    "class"
+   ],
+   [
+    "EXECUTION_COMPLETED",
+    "value"
+   ],
+   [
+    "EXECUTION_PARTIAL",
+    "value"
+   ],
+   [
+    "EXECUTION_FAILED",
+    "value"
+   ],
+   [
+    "SourceState",
+    "class"
+   ],
+   [
+    "SOURCE_ABSENT",
+    "value"
+   ],
+   [
+    "SOURCE_PRESENT_EMPTY",
+    "value"
+   ],
+   [
+    "SOURCE_PRESENT",
+    "value"
+   ],
+   [
+    "SOURCE_FAILED",
+    "value"
+   ],
+   [
+    "_require_non_empty_str",
+    "def"
+   ],
+   [
+    "_require_optional_str",
+    "def"
+   ],
+   [
+    "_require_optional_positive_int",
+    "def"
+   ],
+   [
+    "_require_optional_nonnegative_int",
+    "def"
+   ],
+   [
+    "_require_positive_int",
+    "def"
+   ],
+   [
+    "_UINT64_MAX",
+    "value"
+   ],
+   [
+    "_require_uint64",
+    "def"
+   ],
+   [
+    "_require_optional_uint64",
+    "def"
+   ],
+   [
+    "_normalize_tuple",
+    "def"
+   ],
+   [
+    "_normalize_non_empty_str_tuple",
+    "def"
+   ],
+   [
+    "SourceObservation",
+    "class"
+   ],
+   [
+    "observe_source",
+    "def"
+   ],
+   [
+    "LimitationCode",
+    "class"
+   ],
+   [
+    "LIMITATION_SOURCE_ABSENT",
+    "value"
+   ],
+   [
+    "LIMITATION_SOURCE_FAILED",
+    "value"
+   ],
+   [
+    "LIMITATION_SOURCE_KEY_MISMATCH",
+    "value"
+   ],
+   [
+    "ScanTargetKind",
+    "class"
+   ],
+   [
+    "SCAN_TARGET_MEMORY_REGION",
+    "value"
+   ],
+   [
+    "SCAN_TARGET_MEMORY_SEGMENT",
+    "value"
+   ],
+   [
+    "_hex_address",
+    "def"
+   ],
+   [
+    "_format_bytes",
+    "def"
+   ],
+   [
+    "_format_scaled_bytes",
+    "def"
+   ],
+   [
+    "ScanTarget",
+    "class"
+   ],
+   [
+    "_normalize_scan_target_tuple",
+    "def"
+   ],
+   [
+    "_TARGET_PREVIEW_LIMIT",
+    "value"
+   ],
+   [
+    "scan_target_noun",
+    "def"
+   ],
+   [
+    "format_scan_target_preview",
+    "def"
+   ],
+   [
+    "MemoryGapKind",
+    "class"
+   ],
+   [
+    "MissedBytesState",
+    "class"
+   ],
+   [
+    "MissedBytes",
+    "class"
+   ],
+   [
+    "_pass_key",
+    "def"
+   ],
+   [
+    "_limitation_gap_count",
+    "def"
+   ],
+   [
+    "_unexamined_range",
+    "def"
+   ],
+   [
+    "_union_length",
+    "def"
+   ],
+   [
+    "summarize_missed_bytes",
+    "def"
+   ],
+   [
+    "combine_missed_bytes",
+    "def"
+   ],
+   [
+    "format_unscanned_percent",
+    "def"
+   ],
+   [
+    "_eligible_scale_clause",
+    "def"
+   ],
+   [
+    "format_missed_bytes_clause",
+    "def"
+   ],
+   [
+    "summarize_limitation",
+    "def"
+   ],
+   [
+    "_stated_as_bytes",
+    "def"
+   ],
+   [
+    "_has_unexamined_bytes",
+    "def"
+   ],
+   [
+    "unstated_gaps",
+    "def"
+   ],
+   [
+    "format_evidence_gap_clause",
+    "def"
+   ],
+   [
+    "_PID_SOURCES_ABSENT_SOURCES",
+    "value"
+   ],
+   [
+    "_SOURCE_DISPLAY_NAMES",
+    "value"
+   ],
+   [
+    "_display_name",
+    "def"
+   ],
+   [
+    "display_source_name",
+    "def"
+   ],
+   [
+    "_render_present_in_but_missing_from",
+    "def"
+   ],
+   [
+    "_CodeSpec",
+    "class"
+   ],
+   [
+    "_render_source_absent",
+    "def"
+   ],
+   [
+    "_render_source_failed",
+    "def"
+   ],
+   [
+    "_validate_source_failed_fields",
+    "def"
+   ],
+   [
+    "_render_source_key_mismatch",
+    "def"
+   ],
+   [
+    "_render_source_group_absent",
+    "def"
+   ],
+   [
+    "_render_module_classification_unavailable",
+    "def"
+   ],
+   [
+    "_render_report_module_context_unavailable",
+    "def"
+   ],
+   [
+    "_render_extract_module_context_unavailable",
+    "def"
+   ],
+   [
+    "_render_extract_memory_info_unavailable",
+    "def"
+   ],
+   [
+    "_render_report_pe_header_validation_incomplete",
+    "def"
+   ],
+   [
+    "_render_report_string_scan_incomplete",
+    "def"
+   ],
+   [
+    "_render_report_string_scan_truncated",
+    "def"
+   ],
+   [
+    "_with_optional_target_preview",
+    "def"
+   ],
+   [
+    "_render_pe_header_read_failed",
+    "def"
+   ],
+   [
+    "_render_pe_header_short_read",
+    "def"
+   ],
+   [
+    "_render_budget_clause",
+    "def"
+   ],
+   [
+    "_render_pe_header_scan_truncated",
+    "def"
+   ],
+   [
+    "_render_pe_header_scan_not_started",
+    "def"
+   ],
+   [
+    "_render_pe_header_evidence_capped",
+    "def"
+   ],
+   [
+    "_render_thread_context_partial",
+    "def"
+   ],
+   [
+    "_render_module_header_read_failed",
+    "def"
+   ],
+   [
+    "_render_module_header_parse_failed",
+    "def"
+   ],
+   [
+    "_render_stomping_reference_missing",
+    "def"
+   ],
+   [
+    "_render_stomping_reference_mismatch",
+    "def"
+   ],
+   [
+    "_render_stomping_reference_read_failed",
+    "def"
+   ],
+   [
+    "_render_stomping_section_memory_read_failed",
+    "def"
+   ],
+   [
+    "_render_stomping_short_read",
+    "def"
+   ],
+   [
+    "_render_stomping_relocation_failed",
+    "def"
+   ],
+   [
+    "_render_scan_region_oversized_skipped",
+    "def"
+   ],
+   [
+    "_render_scan_region_read_failed",
+    "def"
+   ],
+   [
+    "_render_scan_region_short_read",
+    "def"
+   ],
+   [
+    "_render_scan_region_evaluation_truncated",
+    "def"
+   ],
+   [
+    "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS",
+    "value"
+   ],
+   [
+    "_render_scan_region_search_incomplete",
+    "def"
+   ],
+   [
+    "_validate_scan_region_search_incomplete_fields",
+    "def"
+   ],
+   [
+    "_TARGETED_SCAN_SOURCE",
+    "value"
+   ],
+   [
+    "_render_targeted_source_not_evaluated",
+    "def"
+   ],
+   [
+    "_TARGETED_SOURCE_NOT_APPLICABLE_REASONS",
+    "value"
+   ],
+   [
+    "_render_targeted_source_not_applicable",
+    "def"
+   ],
+   [
+    "_validate_targeted_source_not_applicable_fields",
+    "def"
+   ],
+   [
+    "_render_scan_items_unaccounted",
+    "def"
+   ],
+   [
+    "_SCAN_BUDGET_EXHAUSTED_REASONS",
+    "value"
+   ],
+   [
+    "_render_scan_budget_exhausted",
+    "def"
+   ],
+   [
+    "_validate_scan_budget_exhausted_fields",
+    "def"
+   ],
+   [
+    "_render_cs_beacon_scan_budget_exhausted",
+    "def"
+   ],
+   [
+    "_require_optional_affected_count_and_targets",
+    "def"
+   ],
+   [
+    "_validate_cs_beacon_scan_budget_exhausted_fields",
+    "def"
+   ],
+   [
+    "_render_yara_rule_compile_failed",
+    "def"
+   ],
+   [
+    "_render_yara_match_failed",
+    "def"
+   ],
+   [
+    "_render_yara_match_timed_out",
+    "def"
+   ],
+   [
+    "_render_yara_hit_cap_reached",
+    "def"
+   ],
+   [
+    "_render_yara_scan_budget_exhausted",
+    "def"
+   ],
+   [
+    "_render_yara_match_context_unverified",
+    "def"
+   ],
+   [
+    "_render_encoding_all_regions_filtered",
+    "def"
+   ],
+   [
+    "_compose",
+    "def"
+   ],
+   [
+    "_require_positive_affected_count",
+    "def"
+   ],
+   [
+    "_PE_SCAN_BUDGET_KINDS",
+    "value"
+   ],
+   [
+    "_YARA_BUDGET_KINDS",
+    "value"
+   ],
+   [
+    "_CS_BEACON_BUDGET_KINDS",
+    "value"
+   ],
+   [
+    "_validate_optional_budget_fields",
+    "def"
+   ],
+   [
+    "_require_optional_targets_matching_count",
+    "def"
+   ],
+   [
+    "_validate_pe_scan_gap_fields",
+    "def"
+   ],
+   [
+    "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS",
+    "value"
+   ],
+   [
+    "_validate_scan_region_oversized_skipped_fields",
+    "def"
+   ],
+   [
+    "_render_pid_sources_absent",
+    "def"
+   ],
+   [
+    "_render_pid_thread_list_fallback",
+    "def"
+   ],
+   [
+    "_render_pid_exception_tid_fallback",
+    "def"
+   ],
+   [
+    "_render_pid_no_usable_fallback",
+    "def"
+   ],
+   [
+    "_render_iat_directory_table_incomplete",
+    "def"
+   ],
+   [
+    "_render_iat_descriptor_read_failed",
+    "def"
+   ],
+   [
+    "_render_iat_descriptor_short_read",
+    "def"
+   ],
+   [
+    "_render_iat_thunk_read_failed",
+    "def"
+   ],
+   [
+    "_render_iat_thunk_short_read",
+    "def"
+   ],
+   [
+    "_render_iat_name_read_failed",
+    "def"
+   ],
+   [
+    "_render_iat_entries_truncated",
+    "def"
+   ],
+   [
+    "_IAT_TRUNCATION_SCOPES",
+    "value"
+   ],
+   [
+    "_validate_iat_entries_truncated_fields",
+    "def"
+   ],
+   [
+    "_render_environment_architecture_unsupported",
+    "def"
+   ],
+   [
+    "_render_environment_block_unreadable",
+    "def"
+   ],
+   [
+    "_ENV_TRUNCATION_SCOPES",
+    "value"
+   ],
+   [
+    "_ENV_TRUNCATION_BUDGET_SCOPES",
+    "value"
+   ],
+   [
+    "_render_environment_block_truncated",
+    "def"
+   ],
+   [
+    "_validate_environment_architecture_unsupported_fields",
+    "def"
+   ],
+   [
+    "_validate_environment_block_unreadable_fields",
+    "def"
+   ],
+   [
+    "_render_sysinfo_dump_file_unreadable",
+    "def"
+   ],
+   [
+    "_validate_sysinfo_dump_file_unreadable_fields",
+    "def"
+   ],
+   [
+    "_validate_environment_block_truncated_fields",
+    "def"
+   ],
+   [
+    "_render_handle_descriptor_invalid",
+    "def"
+   ],
+   [
+    "_render_handle_string_read_failed",
+    "def"
+   ],
+   [
+    "_render_handle_stream_truncated",
+    "def"
+   ],
+   [
+    "_render_thread_start_address_unavailable",
+    "def"
+   ],
+   [
+    "_render_thread_info_stream_truncated",
+    "def"
+   ],
+   [
+    "_render_profile_stream_state_ambiguous",
+    "def"
+   ],
+   [
+    "_render_profile_directory_truncated",
+    "def"
+   ],
+   [
+    "_render_profile_memory_content_fallback",
+    "def"
+   ],
+   [
+    "_require_nonempty_detail",
+    "def"
+   ],
+   [
+    "_render_fixed_text",
+    "def"
+   ],
+   [
+    "_summary_fixed_text",
+    "def"
+   ],
+   [
+    "_summary_source_absent",
+    "def"
+   ],
+   [
+    "_summary_source_failed",
+    "def"
+   ],
+   [
+    "_summary_source_key_mismatch",
+    "def"
+   ],
+   [
+    "_summary_source_group_absent",
+    "def"
+   ],
+   [
+    "_summary_handle_stream_truncated",
+    "def"
+   ],
+   [
+    "_summary_thread_start_address_unavailable",
+    "def"
+   ],
+   [
+    "_summary_thread_info_stream_truncated",
+    "def"
+   ],
+   [
+    "_summary_thread_context_partial",
+    "def"
+   ],
+   [
+    "_summary_counted",
+    "def"
+   ],
+   [
+    "_summary_scan_region_oversized_skipped",
+    "def"
+   ],
+   [
+    "_summary_scan_items_unaccounted",
+    "def"
+   ],
+   [
+    "_summary_scan_budget_exhausted",
+    "def"
+   ],
+   [
+    "_summary_yara_hit_cap_reached",
+    "def"
+   ],
+   [
+    "_summary_yara_scan_budget_exhausted",
+    "def"
+   ],
+   [
+    "_summary_targeted_source_not_evaluated",
+    "def"
+   ],
+   [
+    "_validate_source_absent_fields",
+    "def"
+   ],
+   [
+    "_validate_source_absent_against_sources",
+    "def"
+   ],
+   [
+    "_validate_pid_thread_list_fallback_fields",
+    "def"
+   ],
+   [
+    "_validate_pid_exception_tid_fallback_fields",
+    "def"
+   ],
+   [
+    "_validate_report_pe_header_validation_incomplete_fields",
+    "def"
+   ],
+   [
+    "_validate_report_string_scan_incomplete_fields",
+    "def"
+   ],
+   [
+    "_validate_report_string_scan_truncated_fields",
+    "def"
+   ],
+   [
+    "_validate_source_key_mismatch_against_sources",
+    "def"
+   ],
+   [
+    "_validate_pid_thread_list_fallback_against_sources",
+    "def"
+   ],
+   [
+    "_validate_pid_exception_tid_fallback_against_sources",
+    "def"
+   ],
+   [
+    "_CODE_SPECS",
+    "value"
+   ],
+   [
+    "_FIXED_SOURCE_CODES",
+    "value"
+   ],
+   [
+    "_validate_alternate_sources",
+    "def"
+   ],
+   [
+    "_ABSENT_CAPABLE_CODES",
+    "value"
+   ],
+   [
+    "_GROUP_EVALUATION_CODES",
+    "value"
+   ],
+   [
+    "_CALLER_BUILDABLE_COMPLETENESS_CODES",
+    "value"
+   ],
+   [
+    "_SINGLE_SOURCE_EVALUATION_CODES",
+    "value"
+   ],
+   [
+    "_STRUCTURED_FIELD_DEFAULTS",
+    "value"
+   ],
+   [
+    "CoverageLimitation",
+    "class"
+   ],
+   [
+    "render_limitation",
+    "def"
+   ],
+   [
+    "CoverageStatus",
+    "class"
+   ],
+   [
+    "COVERAGE_COMPLETE",
+    "value"
+   ],
+   [
+    "COVERAGE_PARTIAL",
+    "value"
+   ],
+   [
+    "COVERAGE_NOT_EVALUATED",
+    "value"
+   ],
+   [
+    "CoverageReport",
+    "class"
+   ],
+   [
+    "SourceRequirement",
+    "class"
+   ],
+   [
+    "EvaluationRequirement",
+    "class"
+   ],
+   [
+    "_completeness_check_source_name",
+    "def"
+   ],
+   [
+    "_completeness_check_counterpart",
+    "def"
+   ],
+   [
+    "_validate_build_coverage_report_inputs",
+    "def"
+   ],
+   [
+    "_validate_limitation_against_sources",
+    "def"
+   ],
+   [
+    "_derive_required_source_limitation",
+    "def"
+   ],
+   [
+    "build_coverage_report",
+    "def"
+   ],
+   [
+    "combine_coverage_reports",
+    "def"
+   ],
+   [
+    "EXIT_OK",
+    "value"
+   ],
+   [
+    "EXIT_PARTIAL",
+    "value"
+   ],
+   [
+    "EXIT_NOT_EVALUATED",
+    "value"
+   ],
+   [
+    "exit_code_for",
+    "def"
+   ]
+  ],
+  "family_consumers": {
+   "CoverageReport": {
+    "dumpex/output/records.py": [
+     "from"
+    ]
+   },
+   "SourceObservation": {
+    "dumpex/core/memory.py": [
+     "from"
+    ]
+   },
+   "SourceState": {
+    "dumpex/core/memory.py": [
+     "from"
+    ]
+   }
+  },
+  "global_resolution": {
+   "CoverageLimitation.__post_init__": {
+    "globals": [
+     "LimitationCode",
+     "_CODE_SPECS",
+     "_STRUCTURED_FIELD_DEFAULTS",
+     "_normalize_non_empty_str_tuple",
+     "_normalize_scan_target_tuple",
+     "_normalize_tuple",
+     "_require_non_empty_str",
+     "_require_optional_nonnegative_int",
+     "_require_optional_positive_int",
+     "_require_optional_str"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "CoverageLimitation.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "CoverageReport.__post_init__": {
+    "globals": [
+     "CoverageStatus",
+     "MissedBytes",
+     "_normalize_non_empty_str_tuple",
+     "_require_optional_nonnegative_int"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "CoverageReport.missed_bytes": {
+    "globals": [
+     "CoverageStatus",
+     "summarize_missed_bytes"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "CoverageReport.reasons": {
+    "globals": [
+     "render_limitation"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "EvaluationRequirement.__post_init__": {
+    "globals": [
+     "LimitationCode",
+     "_CODE_SPECS",
+     "_FIXED_SOURCE_CODES",
+     "_GROUP_EVALUATION_CODES",
+     "_SINGLE_SOURCE_EVALUATION_CODES"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.__post_init__": {
+    "globals": [
+     "_require_optional_nonnegative_int"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.complete": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.gap_count": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.state": {
+    "globals": [
+     "MissedBytesState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.to_dict": {
+    "globals": [
+     "MissedBytesState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "MissedBytes.unscanned_fraction": {
+    "globals": [
+     "MissedBytesState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "ScanTarget.__post_init__": {
+    "globals": [
+     "ScanTargetKind",
+     "_require_optional_nonnegative_int",
+     "_require_optional_positive_int",
+     "_require_optional_str",
+     "_require_optional_uint64",
+     "_require_positive_int",
+     "_require_uint64"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "ScanTarget.capture_state": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "ScanTarget.describe": {
+    "globals": [
+     "_format_bytes",
+     "_hex_address"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "ScanTarget.to_dict": {
+    "globals": [
+     "_hex_address"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "ScanTarget.unexamined_bytes": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "SourceObservation.__post_init__": {
+    "globals": [
+     "SourceState",
+     "_require_non_empty_str",
+     "_require_optional_str"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "SourceObservation.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "SourceRequirement.__post_init__": {
+    "globals": [
+     "LimitationCode",
+     "_ABSENT_CAPABLE_CODES",
+     "_FIXED_SOURCE_CODES",
+     "_require_optional_nonnegative_int"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_completeness_check_counterpart": {
+    "globals": [
+     "CoverageLimitation",
+     "SourceRequirement"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_completeness_check_source_name": {
+    "globals": [
+     "CoverageLimitation",
+     "SourceRequirement"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_compose": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_derive_required_source_limitation": {
+    "globals": [
+     "CoverageLimitation",
+     "LimitationCode",
+     "SourceRequirement",
+     "SourceState",
+     "_validate_limitation_against_sources"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_display_name": {
+    "globals": [
+     "_SOURCE_DISPLAY_NAMES"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_eligible_scale_clause": {
+    "globals": [
+     "_format_scaled_bytes",
+     "format_unscanned_percent"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_format_bytes": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_format_scaled_bytes": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_has_unexamined_bytes": {
+    "globals": [
+     "_unexamined_range"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_hex_address": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_limitation_gap_count": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_normalize_non_empty_str_tuple": {
+    "globals": [
+     "_normalize_tuple"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_normalize_scan_target_tuple": {
+    "globals": [
+     "ScanTarget",
+     "_normalize_tuple"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_normalize_tuple": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_pass_key": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_budget_clause": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_cs_beacon_scan_budget_exhausted": {
+    "globals": [
+     "_render_budget_clause",
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_encoding_all_regions_filtered": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_environment_architecture_unsupported": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_environment_block_truncated": {
+    "globals": [
+     "_ENV_TRUNCATION_BUDGET_SCOPES"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_environment_block_unreadable": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_extract_memory_info_unavailable": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_extract_module_context_unavailable": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_fixed_text": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_handle_descriptor_invalid": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_handle_stream_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_handle_string_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_descriptor_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_descriptor_short_read": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_directory_table_incomplete": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_entries_truncated": {
+    "globals": [
+     "_render_budget_clause"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_name_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_thunk_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_iat_thunk_short_read": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_module_classification_unavailable": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_module_header_parse_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_module_header_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pe_header_evidence_capped": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pe_header_read_failed": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pe_header_scan_not_started": {
+    "globals": [
+     "_render_budget_clause",
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pe_header_scan_truncated": {
+    "globals": [
+     "_render_budget_clause",
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pe_header_short_read": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pid_exception_tid_fallback": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pid_no_usable_fallback": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pid_sources_absent": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_pid_thread_list_fallback": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_present_in_but_missing_from": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_profile_directory_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_profile_memory_content_fallback": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_profile_stream_state_ambiguous": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_report_module_context_unavailable": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_report_pe_header_validation_incomplete": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_report_string_scan_incomplete": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_report_string_scan_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_budget_exhausted": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_items_unaccounted": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_region_evaluation_truncated": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_region_oversized_skipped": {
+    "globals": [
+     "format_scan_target_preview",
+     "scan_target_noun"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_region_read_failed": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_region_search_incomplete": {
+    "globals": [
+     "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_scan_region_short_read": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_source_absent": {
+    "globals": [
+     "_display_name",
+     "_render_present_in_but_missing_from"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_source_failed": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_source_group_absent": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_source_key_mismatch": {
+    "globals": [
+     "_display_name",
+     "_render_present_in_but_missing_from"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_reference_mismatch": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_reference_missing": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_reference_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_relocation_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_section_memory_read_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_stomping_short_read": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_sysinfo_dump_file_unreadable": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_targeted_source_not_applicable": {
+    "globals": [
+     "_TARGETED_SOURCE_NOT_APPLICABLE_REASONS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_targeted_source_not_evaluated": {
+    "globals": [
+     "_TARGETED_SCAN_SOURCE",
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_thread_context_partial": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_thread_info_stream_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_thread_start_address_unavailable": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_hit_cap_reached": {
+    "globals": [
+     "_render_budget_clause",
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_match_context_unverified": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_match_failed": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_match_timed_out": {
+    "globals": [
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_rule_compile_failed": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_render_yara_scan_budget_exhausted": {
+    "globals": [
+     "_render_budget_clause",
+     "_with_optional_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_non_empty_str": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_nonempty_detail": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_affected_count_and_targets": {
+    "globals": [
+     "_require_positive_affected_count"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_nonnegative_int": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_positive_int": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_str": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_targets_matching_count": {
+    "globals": [
+     "_require_positive_affected_count"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_optional_uint64": {
+    "globals": [
+     "_require_uint64"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_positive_affected_count": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_positive_int": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_require_uint64": {
+    "globals": [
+     "_UINT64_MAX"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_stated_as_bytes": {
+    "globals": [
+     "MemoryGapKind",
+     "_CODE_SPECS",
+     "_has_unexamined_bytes"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_counted": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_fixed_text": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_handle_stream_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_scan_budget_exhausted": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_scan_items_unaccounted": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_scan_region_oversized_skipped": {
+    "globals": [
+     "scan_target_noun"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_source_absent": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_source_failed": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_source_group_absent": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_source_key_mismatch": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_targeted_source_not_evaluated": {
+    "globals": [
+     "_TARGETED_SCAN_SOURCE",
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_thread_context_partial": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_thread_info_stream_truncated": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_thread_start_address_unavailable": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_yara_hit_cap_reached": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_summary_yara_scan_budget_exhausted": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_unexamined_range": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_union_length": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_alternate_sources": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_build_coverage_report_inputs": {
+    "globals": [
+     "CoverageLimitation",
+     "_CALLER_BUILDABLE_COMPLETENESS_CODES",
+     "_completeness_check_counterpart",
+     "_completeness_check_source_name",
+     "_validate_limitation_against_sources"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_cs_beacon_scan_budget_exhausted_fields": {
+    "globals": [
+     "_CS_BEACON_BUDGET_KINDS",
+     "_require_non_empty_str",
+     "_require_optional_affected_count_and_targets",
+     "_validate_optional_budget_fields"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_environment_architecture_unsupported_fields": {
+    "globals": [
+     "_require_non_empty_str"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_environment_block_truncated_fields": {
+    "globals": [
+     "_ENV_TRUNCATION_BUDGET_SCOPES",
+     "_ENV_TRUNCATION_SCOPES"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_environment_block_unreadable_fields": {
+    "globals": [
+     "_require_non_empty_str"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_iat_entries_truncated_fields": {
+    "globals": [
+     "_IAT_TRUNCATION_SCOPES"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_limitation_against_sources": {
+    "globals": [
+     "_CODE_SPECS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_optional_budget_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_pe_scan_gap_fields": {
+    "globals": [
+     "_PE_SCAN_BUDGET_KINDS",
+     "_require_optional_targets_matching_count",
+     "_validate_optional_budget_fields"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_pid_exception_tid_fallback_against_sources": {
+    "globals": [
+     "SourceState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_pid_exception_tid_fallback_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_pid_thread_list_fallback_against_sources": {
+    "globals": [
+     "SourceState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_pid_thread_list_fallback_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_report_pe_header_validation_incomplete_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_report_string_scan_incomplete_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_report_string_scan_truncated_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_scan_budget_exhausted_fields": {
+    "globals": [
+     "_SCAN_BUDGET_EXHAUSTED_REASONS",
+     "_require_optional_affected_count_and_targets"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_scan_region_oversized_skipped_fields": {
+    "globals": [
+     "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS",
+     "_require_positive_affected_count"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_scan_region_search_incomplete_fields": {
+    "globals": [
+     "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS",
+     "_require_positive_affected_count"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_source_absent_against_sources": {
+    "globals": [
+     "SourceState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_source_absent_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_source_failed_fields": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_source_key_mismatch_against_sources": {
+    "globals": [
+     "SourceState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_sysinfo_dump_file_unreadable_fields": {
+    "globals": [
+     "_require_non_empty_str"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_validate_targeted_source_not_applicable_fields": {
+    "globals": [
+     "_TARGETED_SCAN_SOURCE",
+     "_TARGETED_SOURCE_NOT_APPLICABLE_REASONS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "_with_optional_target_preview": {
+    "globals": [
+     "format_scan_target_preview"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "build_coverage_report": {
+    "globals": [
+     "CoverageLimitation",
+     "CoverageReport",
+     "CoverageStatus",
+     "EvaluationRequirement",
+     "LimitationCode",
+     "SourceRequirement",
+     "SourceState",
+     "_completeness_check_source_name",
+     "_derive_required_source_limitation",
+     "_validate_build_coverage_report_inputs",
+     "_validate_limitation_against_sources"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "combine_coverage_reports": {
+    "globals": [
+     "CoverageReport",
+     "CoverageStatus",
+     "_CODE_SPECS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "combine_missed_bytes": {
+    "globals": [
+     "summarize_missed_bytes"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "display_source_name": {
+    "globals": [
+     "_display_name"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "exit_code_for": {
+    "globals": [
+     "CoverageStatus",
+     "EXIT_NOT_EVALUATED",
+     "EXIT_OK",
+     "EXIT_PARTIAL"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "format_evidence_gap_clause": {
+    "globals": [
+     "summarize_limitation"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "format_missed_bytes_clause": {
+    "globals": [
+     "_eligible_scale_clause",
+     "_format_scaled_bytes"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "format_scan_target_preview": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "format_unscanned_percent": {
+    "globals": [],
+    "module": "dumpex.output.coverage"
+   },
+   "observe_source": {
+    "globals": [
+     "SourceObservation",
+     "SourceState"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "render_limitation": {
+    "globals": [
+     "_CODE_SPECS"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "scan_target_noun": {
+    "globals": [
+     "ScanTargetKind"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "summarize_limitation": {
+    "globals": [
+     "_CODE_SPECS",
+     "render_limitation"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "summarize_missed_bytes": {
+    "globals": [
+     "MemoryGapKind",
+     "MissedBytes",
+     "_CODE_SPECS",
+     "_limitation_gap_count",
+     "_pass_key",
+     "_unexamined_range",
+     "_union_length"
+    ],
+    "module": "dumpex.output.coverage"
+   },
+   "unstated_gaps": {
+    "globals": [
+     "_stated_as_bytes"
+    ],
+    "module": "dumpex.output.coverage"
+   }
+  },
+  "legacy_defines": [
+   "ExecutionStatus",
+   "EXECUTION_COMPLETED",
+   "EXECUTION_PARTIAL",
+   "EXECUTION_FAILED",
+   "SourceState",
+   "SOURCE_ABSENT",
+   "SOURCE_PRESENT_EMPTY",
+   "SOURCE_PRESENT",
+   "SOURCE_FAILED",
+   "_require_non_empty_str",
+   "_require_optional_str",
+   "_require_optional_positive_int",
+   "_require_optional_nonnegative_int",
+   "_require_positive_int",
+   "_UINT64_MAX",
+   "_require_uint64",
+   "_require_optional_uint64",
+   "_normalize_tuple",
+   "_normalize_non_empty_str_tuple",
+   "SourceObservation",
+   "observe_source",
+   "LimitationCode",
+   "LIMITATION_SOURCE_ABSENT",
+   "LIMITATION_SOURCE_FAILED",
+   "LIMITATION_SOURCE_KEY_MISMATCH",
+   "ScanTargetKind",
+   "SCAN_TARGET_MEMORY_REGION",
+   "SCAN_TARGET_MEMORY_SEGMENT",
+   "_hex_address",
+   "_format_bytes",
+   "_format_scaled_bytes",
+   "ScanTarget",
+   "_normalize_scan_target_tuple",
+   "_TARGET_PREVIEW_LIMIT",
+   "scan_target_noun",
+   "format_scan_target_preview",
+   "MemoryGapKind",
+   "MissedBytesState",
+   "MissedBytes",
+   "_pass_key",
+   "_limitation_gap_count",
+   "_unexamined_range",
+   "_union_length",
+   "summarize_missed_bytes",
+   "combine_missed_bytes",
+   "format_unscanned_percent",
+   "_eligible_scale_clause",
+   "format_missed_bytes_clause",
+   "summarize_limitation",
+   "_stated_as_bytes",
+   "_has_unexamined_bytes",
+   "unstated_gaps",
+   "format_evidence_gap_clause",
+   "_PID_SOURCES_ABSENT_SOURCES",
+   "_SOURCE_DISPLAY_NAMES",
+   "_display_name",
+   "display_source_name",
+   "_render_present_in_but_missing_from",
+   "_CodeSpec",
+   "_render_source_absent",
+   "_render_source_failed",
+   "_validate_source_failed_fields",
+   "_render_source_key_mismatch",
+   "_render_source_group_absent",
+   "_render_module_classification_unavailable",
+   "_render_report_module_context_unavailable",
+   "_render_extract_module_context_unavailable",
+   "_render_extract_memory_info_unavailable",
+   "_render_report_pe_header_validation_incomplete",
+   "_render_report_string_scan_incomplete",
+   "_render_report_string_scan_truncated",
+   "_with_optional_target_preview",
+   "_render_pe_header_read_failed",
+   "_render_pe_header_short_read",
+   "_render_budget_clause",
+   "_render_pe_header_scan_truncated",
+   "_render_pe_header_scan_not_started",
+   "_render_pe_header_evidence_capped",
+   "_render_thread_context_partial",
+   "_render_module_header_read_failed",
+   "_render_module_header_parse_failed",
+   "_render_stomping_reference_missing",
+   "_render_stomping_reference_mismatch",
+   "_render_stomping_reference_read_failed",
+   "_render_stomping_section_memory_read_failed",
+   "_render_stomping_short_read",
+   "_render_stomping_relocation_failed",
+   "_render_scan_region_oversized_skipped",
+   "_render_scan_region_read_failed",
+   "_render_scan_region_short_read",
+   "_render_scan_region_evaluation_truncated",
+   "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS",
+   "_render_scan_region_search_incomplete",
+   "_validate_scan_region_search_incomplete_fields",
+   "_TARGETED_SCAN_SOURCE",
+   "_render_targeted_source_not_evaluated",
+   "_TARGETED_SOURCE_NOT_APPLICABLE_REASONS",
+   "_render_targeted_source_not_applicable",
+   "_validate_targeted_source_not_applicable_fields",
+   "_render_scan_items_unaccounted",
+   "_SCAN_BUDGET_EXHAUSTED_REASONS",
+   "_render_scan_budget_exhausted",
+   "_validate_scan_budget_exhausted_fields",
+   "_render_cs_beacon_scan_budget_exhausted",
+   "_require_optional_affected_count_and_targets",
+   "_validate_cs_beacon_scan_budget_exhausted_fields",
+   "_render_yara_rule_compile_failed",
+   "_render_yara_match_failed",
+   "_render_yara_match_timed_out",
+   "_render_yara_hit_cap_reached",
+   "_render_yara_scan_budget_exhausted",
+   "_render_yara_match_context_unverified",
+   "_render_encoding_all_regions_filtered",
+   "_compose",
+   "_require_positive_affected_count",
+   "_PE_SCAN_BUDGET_KINDS",
+   "_YARA_BUDGET_KINDS",
+   "_CS_BEACON_BUDGET_KINDS",
+   "_validate_optional_budget_fields",
+   "_require_optional_targets_matching_count",
+   "_validate_pe_scan_gap_fields",
+   "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS",
+   "_validate_scan_region_oversized_skipped_fields",
+   "_render_pid_sources_absent",
+   "_render_pid_thread_list_fallback",
+   "_render_pid_exception_tid_fallback",
+   "_render_pid_no_usable_fallback",
+   "_render_iat_directory_table_incomplete",
+   "_render_iat_descriptor_read_failed",
+   "_render_iat_descriptor_short_read",
+   "_render_iat_thunk_read_failed",
+   "_render_iat_thunk_short_read",
+   "_render_iat_name_read_failed",
+   "_render_iat_entries_truncated",
+   "_IAT_TRUNCATION_SCOPES",
+   "_validate_iat_entries_truncated_fields",
+   "_render_environment_architecture_unsupported",
+   "_render_environment_block_unreadable",
+   "_ENV_TRUNCATION_SCOPES",
+   "_ENV_TRUNCATION_BUDGET_SCOPES",
+   "_render_environment_block_truncated",
+   "_validate_environment_architecture_unsupported_fields",
+   "_validate_environment_block_unreadable_fields",
+   "_render_sysinfo_dump_file_unreadable",
+   "_validate_sysinfo_dump_file_unreadable_fields",
+   "_validate_environment_block_truncated_fields",
+   "_render_handle_descriptor_invalid",
+   "_render_handle_string_read_failed",
+   "_render_handle_stream_truncated",
+   "_render_thread_start_address_unavailable",
+   "_render_thread_info_stream_truncated",
+   "_render_profile_stream_state_ambiguous",
+   "_render_profile_directory_truncated",
+   "_render_profile_memory_content_fallback",
+   "_require_nonempty_detail",
+   "_render_fixed_text",
+   "_summary_fixed_text",
+   "_summary_source_absent",
+   "_summary_source_failed",
+   "_summary_source_key_mismatch",
+   "_summary_source_group_absent",
+   "_summary_handle_stream_truncated",
+   "_summary_thread_start_address_unavailable",
+   "_summary_thread_info_stream_truncated",
+   "_summary_thread_context_partial",
+   "_summary_counted",
+   "_summary_scan_region_oversized_skipped",
+   "_summary_scan_items_unaccounted",
+   "_summary_scan_budget_exhausted",
+   "_summary_yara_hit_cap_reached",
+   "_summary_yara_scan_budget_exhausted",
+   "_summary_targeted_source_not_evaluated",
+   "_validate_source_absent_fields",
+   "_validate_source_absent_against_sources",
+   "_validate_pid_thread_list_fallback_fields",
+   "_validate_pid_exception_tid_fallback_fields",
+   "_validate_report_pe_header_validation_incomplete_fields",
+   "_validate_report_string_scan_incomplete_fields",
+   "_validate_report_string_scan_truncated_fields",
+   "_validate_source_key_mismatch_against_sources",
+   "_validate_pid_thread_list_fallback_against_sources",
+   "_validate_pid_exception_tid_fallback_against_sources",
+   "_CODE_SPECS",
+   "_FIXED_SOURCE_CODES",
+   "_validate_alternate_sources",
+   "_ABSENT_CAPABLE_CODES",
+   "_GROUP_EVALUATION_CODES",
+   "_CALLER_BUILDABLE_COMPLETENESS_CODES",
+   "_SINGLE_SOURCE_EVALUATION_CODES",
+   "_STRUCTURED_FIELD_DEFAULTS",
+   "CoverageLimitation",
+   "render_limitation",
+   "CoverageStatus",
+   "COVERAGE_COMPLETE",
+   "COVERAGE_PARTIAL",
+   "COVERAGE_NOT_EVALUATED",
+   "CoverageReport",
+   "SourceRequirement",
+   "EvaluationRequirement",
+   "_completeness_check_source_name",
+   "_completeness_check_counterpart",
+   "_validate_build_coverage_report_inputs",
+   "_validate_limitation_against_sources",
+   "_derive_required_source_limitation",
+   "build_coverage_report",
+   "combine_coverage_reports",
+   "EXIT_OK",
+   "EXIT_PARTIAL",
+   "EXIT_NOT_EVALUATED",
+   "exit_code_for"
+  ],
+  "legacy_imports": {
+   "Callable": "typing:Callable",
+   "Enum": "enum:Enum",
+   "Optional": "typing:Optional",
+   "dataclass": "dataclasses:dataclass",
+   "field": "dataclasses:field"
+  },
+  "owners": {
+   "COVERAGE_COMPLETE": "dumpex.output.coverage",
+   "COVERAGE_NOT_EVALUATED": "dumpex.output.coverage",
+   "COVERAGE_PARTIAL": "dumpex.output.coverage",
+   "CoverageLimitation": "dumpex.output.coverage",
+   "CoverageReport": "dumpex.output.coverage",
+   "CoverageStatus": "dumpex.output.coverage",
+   "EXECUTION_COMPLETED": "dumpex.output.coverage",
+   "EXECUTION_FAILED": "dumpex.output.coverage",
+   "EXECUTION_PARTIAL": "dumpex.output.coverage",
+   "EXIT_NOT_EVALUATED": "dumpex.output.coverage",
+   "EXIT_OK": "dumpex.output.coverage",
+   "EXIT_PARTIAL": "dumpex.output.coverage",
+   "EvaluationRequirement": "dumpex.output.coverage",
+   "ExecutionStatus": "dumpex.output.coverage",
+   "LIMITATION_SOURCE_ABSENT": "dumpex.output.coverage",
+   "LIMITATION_SOURCE_FAILED": "dumpex.output.coverage",
+   "LIMITATION_SOURCE_KEY_MISMATCH": "dumpex.output.coverage",
+   "LimitationCode": "dumpex.output.coverage",
+   "MemoryGapKind": "dumpex.output.coverage",
+   "MissedBytes": "dumpex.output.coverage",
+   "MissedBytesState": "dumpex.output.coverage",
+   "SCAN_TARGET_MEMORY_REGION": "dumpex.output.coverage",
+   "SCAN_TARGET_MEMORY_SEGMENT": "dumpex.output.coverage",
+   "SOURCE_ABSENT": "dumpex.output.coverage",
+   "SOURCE_FAILED": "dumpex.output.coverage",
+   "SOURCE_PRESENT": "dumpex.output.coverage",
+   "SOURCE_PRESENT_EMPTY": "dumpex.output.coverage",
+   "ScanTarget": "dumpex.output.coverage",
+   "ScanTargetKind": "dumpex.output.coverage",
+   "SourceObservation": "dumpex.output.coverage",
+   "SourceRequirement": "dumpex.output.coverage",
+   "SourceState": "dumpex.output.coverage",
+   "_ABSENT_CAPABLE_CODES": "dumpex.output.coverage",
+   "_CALLER_BUILDABLE_COMPLETENESS_CODES": "dumpex.output.coverage",
+   "_CODE_SPECS": "dumpex.output.coverage",
+   "_CS_BEACON_BUDGET_KINDS": "dumpex.output.coverage",
+   "_CodeSpec": "dumpex.output.coverage",
+   "_ENV_TRUNCATION_BUDGET_SCOPES": "dumpex.output.coverage",
+   "_ENV_TRUNCATION_SCOPES": "dumpex.output.coverage",
+   "_FIXED_SOURCE_CODES": "dumpex.output.coverage",
+   "_GROUP_EVALUATION_CODES": "dumpex.output.coverage",
+   "_IAT_TRUNCATION_SCOPES": "dumpex.output.coverage",
+   "_PE_SCAN_BUDGET_KINDS": "dumpex.output.coverage",
+   "_PID_SOURCES_ABSENT_SOURCES": "dumpex.output.coverage",
+   "_SCAN_BUDGET_EXHAUSTED_REASONS": "dumpex.output.coverage",
+   "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS": "dumpex.output.coverage",
+   "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS": "dumpex.output.coverage",
+   "_SINGLE_SOURCE_EVALUATION_CODES": "dumpex.output.coverage",
+   "_SOURCE_DISPLAY_NAMES": "dumpex.output.coverage",
+   "_STRUCTURED_FIELD_DEFAULTS": "dumpex.output.coverage",
+   "_TARGETED_SCAN_SOURCE": "dumpex.output.coverage",
+   "_TARGETED_SOURCE_NOT_APPLICABLE_REASONS": "dumpex.output.coverage",
+   "_TARGET_PREVIEW_LIMIT": "dumpex.output.coverage",
+   "_UINT64_MAX": "dumpex.output.coverage",
+   "_YARA_BUDGET_KINDS": "dumpex.output.coverage",
+   "_completeness_check_counterpart": "dumpex.output.coverage",
+   "_completeness_check_source_name": "dumpex.output.coverage",
+   "_compose": "dumpex.output.coverage",
+   "_derive_required_source_limitation": "dumpex.output.coverage",
+   "_display_name": "dumpex.output.coverage",
+   "_eligible_scale_clause": "dumpex.output.coverage",
+   "_format_bytes": "dumpex.output.coverage",
+   "_format_scaled_bytes": "dumpex.output.coverage",
+   "_has_unexamined_bytes": "dumpex.output.coverage",
+   "_hex_address": "dumpex.output.coverage",
+   "_limitation_gap_count": "dumpex.output.coverage",
+   "_normalize_non_empty_str_tuple": "dumpex.output.coverage",
+   "_normalize_scan_target_tuple": "dumpex.output.coverage",
+   "_normalize_tuple": "dumpex.output.coverage",
+   "_pass_key": "dumpex.output.coverage",
+   "_render_budget_clause": "dumpex.output.coverage",
+   "_render_cs_beacon_scan_budget_exhausted": "dumpex.output.coverage",
+   "_render_encoding_all_regions_filtered": "dumpex.output.coverage",
+   "_render_environment_architecture_unsupported": "dumpex.output.coverage",
+   "_render_environment_block_truncated": "dumpex.output.coverage",
+   "_render_environment_block_unreadable": "dumpex.output.coverage",
+   "_render_extract_memory_info_unavailable": "dumpex.output.coverage",
+   "_render_extract_module_context_unavailable": "dumpex.output.coverage",
+   "_render_fixed_text": "dumpex.output.coverage",
+   "_render_handle_descriptor_invalid": "dumpex.output.coverage",
+   "_render_handle_stream_truncated": "dumpex.output.coverage",
+   "_render_handle_string_read_failed": "dumpex.output.coverage",
+   "_render_iat_descriptor_read_failed": "dumpex.output.coverage",
+   "_render_iat_descriptor_short_read": "dumpex.output.coverage",
+   "_render_iat_directory_table_incomplete": "dumpex.output.coverage",
+   "_render_iat_entries_truncated": "dumpex.output.coverage",
+   "_render_iat_name_read_failed": "dumpex.output.coverage",
+   "_render_iat_thunk_read_failed": "dumpex.output.coverage",
+   "_render_iat_thunk_short_read": "dumpex.output.coverage",
+   "_render_module_classification_unavailable": "dumpex.output.coverage",
+   "_render_module_header_parse_failed": "dumpex.output.coverage",
+   "_render_module_header_read_failed": "dumpex.output.coverage",
+   "_render_pe_header_evidence_capped": "dumpex.output.coverage",
+   "_render_pe_header_read_failed": "dumpex.output.coverage",
+   "_render_pe_header_scan_not_started": "dumpex.output.coverage",
+   "_render_pe_header_scan_truncated": "dumpex.output.coverage",
+   "_render_pe_header_short_read": "dumpex.output.coverage",
+   "_render_pid_exception_tid_fallback": "dumpex.output.coverage",
+   "_render_pid_no_usable_fallback": "dumpex.output.coverage",
+   "_render_pid_sources_absent": "dumpex.output.coverage",
+   "_render_pid_thread_list_fallback": "dumpex.output.coverage",
+   "_render_present_in_but_missing_from": "dumpex.output.coverage",
+   "_render_profile_directory_truncated": "dumpex.output.coverage",
+   "_render_profile_memory_content_fallback": "dumpex.output.coverage",
+   "_render_profile_stream_state_ambiguous": "dumpex.output.coverage",
+   "_render_report_module_context_unavailable": "dumpex.output.coverage",
+   "_render_report_pe_header_validation_incomplete": "dumpex.output.coverage",
+   "_render_report_string_scan_incomplete": "dumpex.output.coverage",
+   "_render_report_string_scan_truncated": "dumpex.output.coverage",
+   "_render_scan_budget_exhausted": "dumpex.output.coverage",
+   "_render_scan_items_unaccounted": "dumpex.output.coverage",
+   "_render_scan_region_evaluation_truncated": "dumpex.output.coverage",
+   "_render_scan_region_oversized_skipped": "dumpex.output.coverage",
+   "_render_scan_region_read_failed": "dumpex.output.coverage",
+   "_render_scan_region_search_incomplete": "dumpex.output.coverage",
+   "_render_scan_region_short_read": "dumpex.output.coverage",
+   "_render_source_absent": "dumpex.output.coverage",
+   "_render_source_failed": "dumpex.output.coverage",
+   "_render_source_group_absent": "dumpex.output.coverage",
+   "_render_source_key_mismatch": "dumpex.output.coverage",
+   "_render_stomping_reference_mismatch": "dumpex.output.coverage",
+   "_render_stomping_reference_missing": "dumpex.output.coverage",
+   "_render_stomping_reference_read_failed": "dumpex.output.coverage",
+   "_render_stomping_relocation_failed": "dumpex.output.coverage",
+   "_render_stomping_section_memory_read_failed": "dumpex.output.coverage",
+   "_render_stomping_short_read": "dumpex.output.coverage",
+   "_render_sysinfo_dump_file_unreadable": "dumpex.output.coverage",
+   "_render_targeted_source_not_applicable": "dumpex.output.coverage",
+   "_render_targeted_source_not_evaluated": "dumpex.output.coverage",
+   "_render_thread_context_partial": "dumpex.output.coverage",
+   "_render_thread_info_stream_truncated": "dumpex.output.coverage",
+   "_render_thread_start_address_unavailable": "dumpex.output.coverage",
+   "_render_yara_hit_cap_reached": "dumpex.output.coverage",
+   "_render_yara_match_context_unverified": "dumpex.output.coverage",
+   "_render_yara_match_failed": "dumpex.output.coverage",
+   "_render_yara_match_timed_out": "dumpex.output.coverage",
+   "_render_yara_rule_compile_failed": "dumpex.output.coverage",
+   "_render_yara_scan_budget_exhausted": "dumpex.output.coverage",
+   "_require_non_empty_str": "dumpex.output.coverage",
+   "_require_nonempty_detail": "dumpex.output.coverage",
+   "_require_optional_affected_count_and_targets": "dumpex.output.coverage",
+   "_require_optional_nonnegative_int": "dumpex.output.coverage",
+   "_require_optional_positive_int": "dumpex.output.coverage",
+   "_require_optional_str": "dumpex.output.coverage",
+   "_require_optional_targets_matching_count": "dumpex.output.coverage",
+   "_require_optional_uint64": "dumpex.output.coverage",
+   "_require_positive_affected_count": "dumpex.output.coverage",
+   "_require_positive_int": "dumpex.output.coverage",
+   "_require_uint64": "dumpex.output.coverage",
+   "_stated_as_bytes": "dumpex.output.coverage",
+   "_summary_counted": "dumpex.output.coverage",
+   "_summary_fixed_text": "dumpex.output.coverage",
+   "_summary_handle_stream_truncated": "dumpex.output.coverage",
+   "_summary_scan_budget_exhausted": "dumpex.output.coverage",
+   "_summary_scan_items_unaccounted": "dumpex.output.coverage",
+   "_summary_scan_region_oversized_skipped": "dumpex.output.coverage",
+   "_summary_source_absent": "dumpex.output.coverage",
+   "_summary_source_failed": "dumpex.output.coverage",
+   "_summary_source_group_absent": "dumpex.output.coverage",
+   "_summary_source_key_mismatch": "dumpex.output.coverage",
+   "_summary_targeted_source_not_evaluated": "dumpex.output.coverage",
+   "_summary_thread_context_partial": "dumpex.output.coverage",
+   "_summary_thread_info_stream_truncated": "dumpex.output.coverage",
+   "_summary_thread_start_address_unavailable": "dumpex.output.coverage",
+   "_summary_yara_hit_cap_reached": "dumpex.output.coverage",
+   "_summary_yara_scan_budget_exhausted": "dumpex.output.coverage",
+   "_unexamined_range": "dumpex.output.coverage",
+   "_union_length": "dumpex.output.coverage",
+   "_validate_alternate_sources": "dumpex.output.coverage",
+   "_validate_build_coverage_report_inputs": "dumpex.output.coverage",
+   "_validate_cs_beacon_scan_budget_exhausted_fields": "dumpex.output.coverage",
+   "_validate_environment_architecture_unsupported_fields": "dumpex.output.coverage",
+   "_validate_environment_block_truncated_fields": "dumpex.output.coverage",
+   "_validate_environment_block_unreadable_fields": "dumpex.output.coverage",
+   "_validate_iat_entries_truncated_fields": "dumpex.output.coverage",
+   "_validate_limitation_against_sources": "dumpex.output.coverage",
+   "_validate_optional_budget_fields": "dumpex.output.coverage",
+   "_validate_pe_scan_gap_fields": "dumpex.output.coverage",
+   "_validate_pid_exception_tid_fallback_against_sources": "dumpex.output.coverage",
+   "_validate_pid_exception_tid_fallback_fields": "dumpex.output.coverage",
+   "_validate_pid_thread_list_fallback_against_sources": "dumpex.output.coverage",
+   "_validate_pid_thread_list_fallback_fields": "dumpex.output.coverage",
+   "_validate_report_pe_header_validation_incomplete_fields": "dumpex.output.coverage",
+   "_validate_report_string_scan_incomplete_fields": "dumpex.output.coverage",
+   "_validate_report_string_scan_truncated_fields": "dumpex.output.coverage",
+   "_validate_scan_budget_exhausted_fields": "dumpex.output.coverage",
+   "_validate_scan_region_oversized_skipped_fields": "dumpex.output.coverage",
+   "_validate_scan_region_search_incomplete_fields": "dumpex.output.coverage",
+   "_validate_source_absent_against_sources": "dumpex.output.coverage",
+   "_validate_source_absent_fields": "dumpex.output.coverage",
+   "_validate_source_failed_fields": "dumpex.output.coverage",
+   "_validate_source_key_mismatch_against_sources": "dumpex.output.coverage",
+   "_validate_sysinfo_dump_file_unreadable_fields": "dumpex.output.coverage",
+   "_validate_targeted_source_not_applicable_fields": "dumpex.output.coverage",
+   "_with_optional_target_preview": "dumpex.output.coverage",
+   "build_coverage_report": "dumpex.output.coverage",
+   "combine_coverage_reports": "dumpex.output.coverage",
+   "combine_missed_bytes": "dumpex.output.coverage",
+   "display_source_name": "dumpex.output.coverage",
+   "exit_code_for": "dumpex.output.coverage",
+   "format_evidence_gap_clause": "dumpex.output.coverage",
+   "format_missed_bytes_clause": "dumpex.output.coverage",
+   "format_scan_target_preview": "dumpex.output.coverage",
+   "format_unscanned_percent": "dumpex.output.coverage",
+   "observe_source": "dumpex.output.coverage",
+   "render_limitation": "dumpex.output.coverage",
+   "scan_target_noun": "dumpex.output.coverage",
+   "summarize_limitation": "dumpex.output.coverage",
+   "summarize_missed_bytes": "dumpex.output.coverage",
+   "unstated_gaps": "dumpex.output.coverage"
+  },
+  "private_unexported": [
+   "_CS_BEACON_BUDGET_KINDS",
+   "_ENV_TRUNCATION_BUDGET_SCOPES",
+   "_PE_SCAN_BUDGET_KINDS",
+   "_PID_SOURCES_ABSENT_SOURCES",
+   "_SCAN_BUDGET_EXHAUSTED_REASONS",
+   "_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS",
+   "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS",
+   "_TARGETED_SCAN_SOURCE",
+   "_TARGET_PREVIEW_LIMIT",
+   "_UINT64_MAX",
+   "_YARA_BUDGET_KINDS",
+   "_completeness_check_counterpart",
+   "_completeness_check_source_name",
+   "_compose",
+   "_eligible_scale_clause",
+   "_format_scaled_bytes",
+   "_has_unexamined_bytes",
+   "_hex_address",
+   "_limitation_gap_count",
+   "_normalize_non_empty_str_tuple",
+   "_normalize_scan_target_tuple",
+   "_normalize_tuple",
+   "_pass_key",
+   "_render_budget_clause",
+   "_render_cs_beacon_scan_budget_exhausted",
+   "_render_encoding_all_regions_filtered",
+   "_render_environment_architecture_unsupported",
+   "_render_environment_block_truncated",
+   "_render_environment_block_unreadable",
+   "_render_extract_memory_info_unavailable",
+   "_render_extract_module_context_unavailable",
+   "_render_fixed_text",
+   "_render_handle_descriptor_invalid",
+   "_render_handle_stream_truncated",
+   "_render_handle_string_read_failed",
+   "_render_iat_descriptor_read_failed",
+   "_render_iat_descriptor_short_read",
+   "_render_iat_directory_table_incomplete",
+   "_render_iat_entries_truncated",
+   "_render_iat_name_read_failed",
+   "_render_iat_thunk_read_failed",
+   "_render_iat_thunk_short_read",
+   "_render_module_classification_unavailable",
+   "_render_module_header_parse_failed",
+   "_render_module_header_read_failed",
+   "_render_pe_header_evidence_capped",
+   "_render_pe_header_read_failed",
+   "_render_pe_header_scan_not_started",
+   "_render_pe_header_scan_truncated",
+   "_render_pe_header_short_read",
+   "_render_pid_exception_tid_fallback",
+   "_render_pid_no_usable_fallback",
+   "_render_pid_sources_absent",
+   "_render_pid_thread_list_fallback",
+   "_render_present_in_but_missing_from",
+   "_render_profile_directory_truncated",
+   "_render_profile_memory_content_fallback",
+   "_render_profile_stream_state_ambiguous",
+   "_render_report_module_context_unavailable",
+   "_render_report_pe_header_validation_incomplete",
+   "_render_report_string_scan_incomplete",
+   "_render_report_string_scan_truncated",
+   "_render_scan_budget_exhausted",
+   "_render_scan_items_unaccounted",
+   "_render_scan_region_evaluation_truncated",
+   "_render_scan_region_oversized_skipped",
+   "_render_scan_region_read_failed",
+   "_render_scan_region_search_incomplete",
+   "_render_scan_region_short_read",
+   "_render_source_absent",
+   "_render_source_failed",
+   "_render_source_group_absent",
+   "_render_source_key_mismatch",
+   "_render_stomping_reference_mismatch",
+   "_render_stomping_reference_missing",
+   "_render_stomping_reference_read_failed",
+   "_render_stomping_relocation_failed",
+   "_render_stomping_section_memory_read_failed",
+   "_render_stomping_short_read",
+   "_render_sysinfo_dump_file_unreadable",
+   "_render_targeted_source_not_applicable",
+   "_render_targeted_source_not_evaluated",
+   "_render_thread_context_partial",
+   "_render_thread_info_stream_truncated",
+   "_render_thread_start_address_unavailable",
+   "_render_yara_hit_cap_reached",
+   "_render_yara_match_context_unverified",
+   "_render_yara_match_failed",
+   "_render_yara_match_timed_out",
+   "_render_yara_rule_compile_failed",
+   "_render_yara_scan_budget_exhausted",
+   "_require_non_empty_str",
+   "_require_nonempty_detail",
+   "_require_optional_affected_count_and_targets",
+   "_require_optional_nonnegative_int",
+   "_require_optional_positive_int",
+   "_require_optional_str",
+   "_require_optional_targets_matching_count",
+   "_require_optional_uint64",
+   "_require_positive_affected_count",
+   "_require_positive_int",
+   "_require_uint64",
+   "_stated_as_bytes",
+   "_summary_counted",
+   "_summary_fixed_text",
+   "_summary_handle_stream_truncated",
+   "_summary_scan_budget_exhausted",
+   "_summary_scan_items_unaccounted",
+   "_summary_scan_region_oversized_skipped",
+   "_summary_source_absent",
+   "_summary_source_failed",
+   "_summary_source_group_absent",
+   "_summary_source_key_mismatch",
+   "_summary_targeted_source_not_evaluated",
+   "_summary_thread_context_partial",
+   "_summary_thread_info_stream_truncated",
+   "_summary_thread_start_address_unavailable",
+   "_summary_yara_hit_cap_reached",
+   "_summary_yara_scan_budget_exhausted",
+   "_unexamined_range",
+   "_union_length",
+   "_validate_build_coverage_report_inputs",
+   "_validate_cs_beacon_scan_budget_exhausted_fields",
+   "_validate_environment_architecture_unsupported_fields",
+   "_validate_environment_block_truncated_fields",
+   "_validate_environment_block_unreadable_fields",
+   "_validate_iat_entries_truncated_fields",
+   "_validate_limitation_against_sources",
+   "_validate_optional_budget_fields",
+   "_validate_pe_scan_gap_fields",
+   "_validate_pid_exception_tid_fallback_against_sources",
+   "_validate_pid_exception_tid_fallback_fields",
+   "_validate_pid_thread_list_fallback_against_sources",
+   "_validate_pid_thread_list_fallback_fields",
+   "_validate_report_pe_header_validation_incomplete_fields",
+   "_validate_report_string_scan_incomplete_fields",
+   "_validate_report_string_scan_truncated_fields",
+   "_validate_scan_budget_exhausted_fields",
+   "_validate_scan_region_oversized_skipped_fields",
+   "_validate_scan_region_search_incomplete_fields",
+   "_validate_source_absent_against_sources",
+   "_validate_source_absent_fields",
+   "_validate_source_failed_fields",
+   "_validate_source_key_mismatch_against_sources",
+   "_validate_sysinfo_dump_file_unreadable_fields",
+   "_validate_targeted_source_not_applicable_fields",
+   "_with_optional_target_preview"
+  ],
+  "runtime_state_initializers": {}
+ },
+ "dumpex.output.records": {
+  "baseline_definitions": [
+   [
+    "hex_address",
+    "def"
+   ],
+   [
+    "MemoryRegionRecord",
+    "class"
+   ],
+   [
+    "ModuleRecord",
+    "class"
+   ],
+   [
+    "MODULE_CONTEXT_RESOLVED",
+    "value"
+   ],
+   [
+    "MODULE_CONTEXT_UNREGISTERED",
+    "value"
+   ],
+   [
+    "MODULE_CONTEXT_UNAVAILABLE",
+    "value"
+   ],
+   [
+    "START_ADDRESS_RECORDED",
+    "value"
+   ],
+   [
+    "START_ADDRESS_INVALID",
+    "value"
+   ],
+   [
+    "START_ADDRESS_UNVERIFIED",
+    "value"
+   ],
+   [
+    "START_ADDRESS_ABSENT",
+    "value"
+   ],
+   [
+    "_START_ADDRESS_STATES",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_RESOLVED",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_UNRESOLVED",
+    "value"
+   ],
+   [
+    "DUMP_FLAGS_ABSENT",
+    "value"
+   ],
+   [
+    "_DUMP_FLAGS_STATES",
+    "value"
+   ],
+   [
+    "_START_ADDRESS_STATE_FLAGS_STATE",
+    "value"
+   ],
+   [
+    "_START_ADDRESS_STATES_WITH_ADDRESS",
+    "value"
+   ],
+   [
+    "_START_ADDRESS_STATES_WITHOUT_ADDRESS",
+    "value"
+   ],
+   [
+    "_require_thread_info_states",
+    "def"
+   ],
+   [
+    "ThreadRecord",
+    "class"
+   ],
+   [
+    "SysInfoRecord",
+    "class"
+   ],
+   [
+    "_require_nonneg_int",
+    "def"
+   ],
+   [
+    "_require_bool",
+    "def"
+   ],
+   [
+    "_require_hex_address",
+    "def"
+   ],
+   [
+    "_STRING_RECORD_ENCODINGS",
+    "value"
+   ],
+   [
+    "ExtractRecord",
+    "class"
+   ],
+   [
+    "StringRecord",
+    "class"
+   ],
+   [
+    "_HEX_ADDRESS_RE",
+    "value"
+   ],
+   [
+    "_require_optional_hex_address",
+    "def"
+   ],
+   [
+    "_require_optional_diff_str",
+    "def"
+   ],
+   [
+    "_require_optional_diff_int",
+    "def"
+   ],
+   [
+    "_require_optional_diff_bool",
+    "def"
+   ],
+   [
+    "MODULE_DIFF_ADDED",
+    "value"
+   ],
+   [
+    "MODULE_DIFF_REMOVED",
+    "value"
+   ],
+   [
+    "MODULE_DIFF_REBASED",
+    "value"
+   ],
+   [
+    "_MODULE_DIFF_CHANGE_TYPES",
+    "value"
+   ],
+   [
+    "ModuleDiffRecord",
+    "class"
+   ],
+   [
+    "THREAD_DIFF_ADDED",
+    "value"
+   ],
+   [
+    "THREAD_DIFF_REMOVED",
+    "value"
+   ],
+   [
+    "_THREAD_DIFF_CHANGE_TYPES",
+    "value"
+   ],
+   [
+    "_MODULE_CONTEXTS",
+    "value"
+   ],
+   [
+    "ThreadDiffRecord",
+    "class"
+   ],
+   [
+    "MEMORY_DIFF_ADDED",
+    "value"
+   ],
+   [
+    "MEMORY_DIFF_REMOVED",
+    "value"
+   ],
+   [
+    "MEMORY_DIFF_PROTECTION_CHANGED",
+    "value"
+   ],
+   [
+    "_MEMORY_DIFF_CHANGE_TYPES",
+    "value"
+   ],
+   [
+    "MemoryDiffRecord",
+    "class"
+   ],
+   [
+    "SEVERITY_WARNING",
+    "value"
+   ],
+   [
+    "SEVERITY_ERROR",
+    "value"
+   ],
+   [
+    "Diagnostic",
+    "class"
+   ],
+   [
+    "Artifact",
+    "class"
+   ],
+   [
+    "TRIAGE_ANCHOR_TID",
+    "value"
+   ],
+   [
+    "TRIAGE_ANCHOR_ADDRESS",
+    "value"
+   ],
+   [
+    "TRIAGE_ANCHOR_STRING_HIT",
+    "value"
+   ],
+   [
+    "TRIAGE_ANCHOR_TID_CURRENT_IP",
+    "value"
+   ],
+   [
+    "_TRIAGE_ANCHOR_SOURCES",
+    "value"
+   ],
+   [
+    "_TRIAGE_VERDICTS",
+    "value"
+   ],
+   [
+    "_TRIAGE_FINDING_KEYS",
+    "value"
+   ],
+   [
+    "REGION_MEMBERSHIP_START",
+    "value"
+   ],
+   [
+    "REGION_MEMBERSHIP_CURRENT",
+    "value"
+   ],
+   [
+    "REGION_MEMBERSHIP_START_AND_CURRENT",
+    "value"
+   ],
+   [
+    "_REGION_MEMBERSHIP_REASONS",
+    "value"
+   ],
+   [
+    "ReportThreadInfo",
+    "class"
+   ],
+   [
+    "_PE_HEADER_STATES",
+    "value"
+   ],
+   [
+    "ReportRegionInfo",
+    "class"
+   ],
+   [
+    "ReportIocString",
+    "class"
+   ],
+   [
+    "ENRICHMENT_MISSING",
+    "value"
+   ],
+   [
+    "ENRICHMENT_PARTIAL",
+    "value"
+   ],
+   [
+    "ENRICHMENT_COMPLETE",
+    "value"
+   ],
+   [
+    "_ENRICHMENT_STATES",
+    "value"
+   ],
+   [
+    "ENRICHMENT_SCOPE_PROCESS",
+    "value"
+   ],
+   [
+    "ENRICHMENT_SCOPE_CARD",
+    "value"
+   ],
+   [
+    "_ENRICHMENT_SCOPES",
+    "value"
+   ],
+   [
+    "EnrichmentSection",
+    "class"
+   ],
+   [
+    "_require_enrichment_section",
+    "def"
+   ],
+   [
+    "_require_optional_bounded_text",
+    "def"
+   ],
+   [
+    "_require_bounded_text",
+    "def"
+   ],
+   [
+    "ENRICHMENT_TEXT_CAP",
+    "value"
+   ],
+   [
+    "ReportEnvironmentValue",
+    "class"
+   ],
+   [
+    "ReportEnvironmentSummary",
+    "class"
+   ],
+   [
+    "ReportHandleTypeCount",
+    "class"
+   ],
+   [
+    "ReportHandleSummary",
+    "class"
+   ],
+   [
+    "TOKEN_CAPABILITY_STATUSES",
+    "value"
+   ],
+   [
+    "ReportTokenCapability",
+    "class"
+   ],
+   [
+    "IDENTITY_CONFLICT_SEVERITIES",
+    "value"
+   ],
+   [
+    "ReportIdentityConflict",
+    "class"
+   ],
+   [
+    "ReportProcessEnrichment",
+    "class"
+   ],
+   [
+    "ACCESS_VIOLATION_TYPES",
+    "value"
+   ],
+   [
+    "ReportAddressContext",
+    "class"
+   ],
+   [
+    "EXCEPTION_SELECTION_REASONS",
+    "value"
+   ],
+   [
+    "ReportExceptionEntry",
+    "class"
+   ],
+   [
+    "ReportExceptionContext",
+    "class"
+   ],
+   [
+    "NEIGHBOR_RELATIONS",
+    "value"
+   ],
+   [
+    "ReportNeighborRegion",
+    "class"
+   ],
+   [
+    "ReportAllocationNeighborhood",
+    "class"
+   ],
+   [
+    "HANDLE_SELECTION_REASONS",
+    "value"
+   ],
+   [
+    "ReportCorrelatedHandle",
+    "class"
+   ],
+   [
+    "ReportHandleCorrelation",
+    "class"
+   ],
+   [
+    "STRING_CONTEXT_SELECTION_REASONS",
+    "value"
+   ],
+   [
+    "ReportStringContextEntry",
+    "class"
+   ],
+   [
+    "ReportStringContext",
+    "class"
+   ],
+   [
+    "PE_OBSERVATION_STATES",
+    "value"
+   ],
+   [
+    "PeObservationRecord",
+    "class"
+   ],
+   [
+    "PE_MODULE_MATCH_STATES",
+    "value"
+   ],
+   [
+    "ReportPeContext",
+    "class"
+   ],
+   [
+    "ANCHOR_PE_CLASSIFICATIONS",
+    "value"
+   ],
+   [
+    "ANCHOR_PE_REGISTRATIONS",
+    "value"
+   ],
+   [
+    "ReportAnchorPeContext",
+    "class"
+   ],
+   [
+    "INSTRUCTION_ANCHOR_SOURCES",
+    "value"
+   ],
+   [
+    "INSTRUCTION_DECODER_STATES",
+    "value"
+   ],
+   [
+    "INSTRUCTION_BRANCH_KINDS",
+    "value"
+   ],
+   [
+    "INSTRUCTION_LEAD_NAMES",
+    "value"
+   ],
+   [
+    "INSTRUCTION_LEAD_SIGNALS",
+    "value"
+   ],
+   [
+    "MAX_INSTRUCTION_LEAD_EVIDENCE",
+    "value"
+   ],
+   [
+    "MAX_INSTRUCTION_LEAD_LIMITATIONS",
+    "value"
+   ],
+   [
+    "BRANCH_TARGET_KINDS",
+    "value"
+   ],
+   [
+    "ReportInstructionLead",
+    "class"
+   ],
+   [
+    "ReportDecodedInstruction",
+    "class"
+   ],
+   [
+    "ReportBranchTarget",
+    "class"
+   ],
+   [
+    "ReportInstructionContext",
+    "class"
+   ],
+   [
+    "IAT_IMPORT_BY",
+    "value"
+   ],
+   [
+    "IAT_ENTRY_SELECTION_REASONS",
+    "value"
+   ],
+   [
+    "ReportIatCorrelatedEntry",
+    "class"
+   ],
+   [
+    "ReportIatCorrelation",
+    "class"
+   ],
+   [
+    "TriageCardRecord",
+    "class"
+   ],
+   [
+    "HUNTERS",
+    "value"
+   ],
+   [
+    "_HUNT_STATUSES",
+    "value"
+   ],
+   [
+    "_HUNT_VERDICT_LEVELS",
+    "value"
+   ],
+   [
+    "_HUNT_CONFIDENCES",
+    "value"
+   ],
+   [
+    "_HUNT_REVIEW_PRIORITIES",
+    "value"
+   ],
+   [
+    "_require_list_of",
+    "def"
+   ],
+   [
+    "_CAPTURE_STATES",
+    "value"
+   ],
+   [
+    "_COVERAGE_STATUSES",
+    "value"
+   ],
+   [
+    "_MEASUREMENT_UNITS",
+    "value"
+   ],
+   [
+    "TargetedMeasurement",
+    "class"
+   ],
+   [
+    "TargetedScopeRecord",
+    "class"
+   ],
+   [
+    "_require_optional_targeted_scope",
+    "def"
+   ],
+   [
+    "_targeted_scope_dict",
+    "def"
+   ],
+   [
+    "HuntRegionRef",
+    "class"
+   ],
+   [
+    "HuntThreadRef",
+    "class"
+   ],
+   [
+    "HuntThreadRegionHit",
+    "class"
+   ],
+   [
+    "HuntPeHeaderHit",
+    "class"
+   ],
+   [
+    "InjectionDetails",
+    "class"
+   ],
+   [
+    "HollowingDetails",
+    "class"
+   ],
+   [
+    "StompingDetails",
+    "class"
+   ],
+   [
+    "PipeDetails",
+    "class"
+   ],
+   [
+    "CsBeaconDetails",
+    "class"
+   ],
+   [
+    "YaraDetails",
+    "class"
+   ],
+   [
+    "ObfuscationDetails",
+    "class"
+   ],
+   [
+    "_HUNTER_DETAILS_TYPES",
+    "value"
+   ],
+   [
+    "HunterRecord",
+    "class"
+   ],
+   [
+    "_IMPORT_BY_VALUES",
+    "value"
+   ],
+   [
+    "_PROCESS_DIAGNOSTIC_SEVERITIES",
+    "value"
+   ],
+   [
+    "_require_optional_nonneg_int",
+    "def"
+   ],
+   [
+    "ImportEntryRecord",
+    "class"
+   ],
+   [
+    "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
+    "value"
+   ],
+   [
+    "ProcessDiagnosticRecord",
+    "class"
+   ],
+   [
+    "IatRecord",
+    "class"
+   ],
+   [
+    "PROCESS_PE_COMPONENT_STATES",
+    "value"
+   ],
+   [
+    "PROCESS_PE_COMPONENTS",
+    "value"
+   ],
+   [
+    "PROCESS_PE_STAGES",
+    "value"
+   ],
+   [
+    "PROCESS_PE_SOURCE_KINDS",
+    "value"
+   ],
+   [
+    "PROCESS_PE_FORMATS",
+    "value"
+   ],
+   [
+    "PROCESS_PE_CAPTURE_STATES",
+    "value"
+   ],
+   [
+    "PROCESS_PE_UNAVAILABLE_REASONS",
+    "value"
+   ],
+   [
+    "PROCESS_PE_TABLE_STATES",
+    "value"
+   ],
+   [
+    "PROCESS_PE_UNUSABLE_TABLE_STATES",
+    "value"
+   ],
+   [
+    "PROCESS_PE_VALUE_KINDS",
+    "value"
+   ],
+   [
+    "PROCESS_PE_IDENTITY_FORMS",
+    "value"
+   ],
+   [
+    "_require_optional_enum",
+    "def"
+   ],
+   [
+    "ProcessPeSectionRecord",
+    "class"
+   ],
+   [
+    "ProcessPeDirectoryRecord",
+    "class"
+   ],
+   [
+    "_ENTRY_POINT_RESOLVED_FIELDS",
+    "value"
+   ],
+   [
+    "ProcessPeEntryPointRecord",
+    "class"
+   ],
+   [
+    "ProcessPeAcquisitionRecord",
+    "class"
+   ],
+   [
+    "ProcessPeRecord",
+    "class"
+   ],
+   [
+    "ProcessRecord",
+    "class"
+   ],
+   [
+    "HANDLE_NAME_STATUSES",
+    "value"
+   ],
+   [
+    "HANDLE_NAME_STATUS_LABELS",
+    "value"
+   ],
+   [
+    "HANDLE_RESERVED_NAME_LABELS",
+    "value"
+   ],
+   [
+    "HANDLE_CAPTURED_NAME_SUFFIX",
+    "value"
+   ],
+   [
+    "handle_name_display",
+    "def"
+   ],
+   [
+    "HandleRecord",
+    "class"
+   ],
+   [
+    "StreamParserState",
+    "class"
+   ],
+   [
+    "_STREAM_PARSER_STATES",
+    "value"
+   ],
+   [
+    "_STREAM_STATE_FORBIDS_COUNT",
+    "value"
+   ],
+   [
+    "ProfileStreamEntry",
+    "class"
+   ],
+   [
+    "_require_optional_str",
+    "def"
+   ],
+   [
+    "ProfileMemoryCapture",
+    "class"
+   ],
+   [
+    "CapabilityStatus",
+    "class"
+   ],
+   [
+    "_CAPABILITY_STATUSES",
+    "value"
+   ],
+   [
+    "CapabilityDefinition",
+    "class"
+   ],
+   [
+    "CAPABILITY_REGISTRY",
+    "value"
+   ],
+   [
+    "CAPABILITY_IDS",
+    "value"
+   ],
+   [
+    "CAPABILITY_BY_ID",
+    "value"
+   ],
+   [
+    "CapabilityLimitationCode",
+    "class"
+   ],
+   [
+    "_CAPABILITY_LIMITATION_CODES",
+    "value"
+   ],
+   [
+    "_REQUIRED_LIMITATION_CODES",
+    "value"
+   ],
+   [
+    "_OPTIONAL_LIMITATION_CODES",
+    "value"
+   ],
+   [
+    "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES",
+    "value"
+   ],
+   [
+    "_TRUNCATED_LIMITATION_CODES",
+    "value"
+   ],
+   [
+    "CAPABILITY_SOURCE_DISPLAY_NAMES",
+    "value"
+   ],
+   [
+    "_CAPABILITY_LIMITATION_TEMPLATES",
+    "value"
+   ],
+   [
+    "render_capability_limitation",
+    "def"
+   ],
+   [
+    "CapabilityLimitation",
+    "class"
+   ],
+   [
+    "ProfileCapabilityEntry",
+    "class"
+   ],
+   [
+    "ProfileRecord",
+    "class"
+   ]
+  ],
+  "family_consumers": {},
+  "global_resolution": {
+   "Artifact.__post_init__": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "Artifact.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "CapabilityDefinition.required_sources": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "CapabilityLimitation.__post_init__": {
+    "globals": [
+     "_CAPABILITY_LIMITATION_CODES"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "CapabilityLimitation.to_dict": {
+    "globals": [
+     "render_capability_limitation"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "CsBeaconDetails.__post_init__": {
+    "globals": [
+     "_require_nonneg_int",
+     "_require_optional_targeted_scope"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "CsBeaconDetails.to_dict": {
+    "globals": [
+     "_targeted_scope_dict"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "Diagnostic.__post_init__": {
+    "globals": [
+     "SEVERITY_ERROR",
+     "SEVERITY_WARNING"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "Diagnostic.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "EnrichmentSection.__post_init__": {
+    "globals": [
+     "ENRICHMENT_COMPLETE",
+     "ENRICHMENT_MISSING",
+     "_ENRICHMENT_SCOPES",
+     "_ENRICHMENT_STATES",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "EnrichmentSection.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ExtractRecord.__post_init__": {
+    "globals": [
+     "_PE_HEADER_STATES",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ExtractRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HandleRecord.__post_init__": {
+    "globals": [
+     "HANDLE_NAME_STATUSES",
+     "_require_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HandleRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HollowingDetails.__post_init__": {
+    "globals": [
+     "_require_bool",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HollowingDetails.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HuntPeHeaderHit.__post_init__": {
+    "globals": [
+     "HuntRegionRef",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HuntPeHeaderHit.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HuntRegionRef.__post_init__": {
+    "globals": [
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HuntRegionRef.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HuntThreadRef.__post_init__": {
+    "globals": [
+     "_require_nonneg_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HuntThreadRef.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HuntThreadRegionHit.__post_init__": {
+    "globals": [
+     "HuntRegionRef",
+     "HuntThreadRef"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HuntThreadRegionHit.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "HunterRecord.__post_init__": {
+    "globals": [
+     "CoverageReport",
+     "HUNTERS",
+     "_HUNTER_DETAILS_TYPES",
+     "_HUNT_CONFIDENCES",
+     "_HUNT_REVIEW_PRIORITIES",
+     "_HUNT_STATUSES",
+     "_HUNT_VERDICT_LEVELS",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "HunterRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "IatRecord.__post_init__": {
+    "globals": [
+     "ImportEntryRecord",
+     "ProcessDiagnosticRecord",
+     "_require_nonneg_int",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "IatRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ImportEntryRecord.__post_init__": {
+    "globals": [
+     "_IMPORT_BY_VALUES",
+     "_require_optional_diff_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ImportEntryRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "InjectionDetails.__post_init__": {
+    "globals": [
+     "HuntPeHeaderHit",
+     "HuntRegionRef",
+     "HuntThreadRef",
+     "HuntThreadRegionHit",
+     "_require_hex_address",
+     "_require_list_of"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "InjectionDetails.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "MemoryDiffRecord.__post_init__": {
+    "globals": [
+     "MEMORY_DIFF_ADDED",
+     "MEMORY_DIFF_REMOVED",
+     "_HEX_ADDRESS_RE",
+     "_MEMORY_DIFF_CHANGE_TYPES",
+     "_require_optional_diff_bool",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "MemoryDiffRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "MemoryRegionRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ModuleDiffRecord.__post_init__": {
+    "globals": [
+     "MODULE_DIFF_ADDED",
+     "MODULE_DIFF_REMOVED",
+     "_MODULE_DIFF_CHANGE_TYPES",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ModuleDiffRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ModuleRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ObfuscationDetails.__post_init__": {
+    "globals": [
+     "_require_optional_targeted_scope"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ObfuscationDetails.to_dict": {
+    "globals": [
+     "_targeted_scope_dict"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "PeObservationRecord.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "PE_OBSERVATION_STATES",
+     "_require_bounded_text"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "PeObservationRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "PipeDetails.__post_init__": {
+    "globals": [
+     "_require_optional_targeted_scope"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "PipeDetails.to_dict": {
+    "globals": [
+     "_targeted_scope_dict"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessDiagnosticRecord.__post_init__": {
+    "globals": [
+     "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
+     "_PROCESS_DIAGNOSTIC_SEVERITIES"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessDiagnosticRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeAcquisitionRecord.__post_init__": {
+    "globals": [
+     "PROCESS_PE_COMPONENTS",
+     "PROCESS_PE_COMPONENT_STATES",
+     "PROCESS_PE_STAGES",
+     "PROCESS_PE_TABLE_STATES",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_enum",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeAcquisitionRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeDirectoryRecord.__post_init__": {
+    "globals": [
+     "PROCESS_PE_CAPTURE_STATES",
+     "PROCESS_PE_COMPONENT_STATES",
+     "PROCESS_PE_VALUE_KINDS",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_enum",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeDirectoryRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeEntryPointRecord.__post_init__": {
+    "globals": [
+     "PROCESS_PE_CAPTURE_STATES",
+     "_ENTRY_POINT_RESOLVED_FIELDS",
+     "_require_bool",
+     "_require_optional_enum",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeEntryPointRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord.__post_init__": {
+    "globals": [
+     "PROCESS_PE_COMPONENT_STATES",
+     "PROCESS_PE_FORMATS",
+     "PROCESS_PE_IDENTITY_FORMS",
+     "PROCESS_PE_SOURCE_KINDS",
+     "PROCESS_PE_UNAVAILABLE_REASONS",
+     "PeObservationRecord",
+     "ProcessPeAcquisitionRecord",
+     "ProcessPeDirectoryRecord",
+     "ProcessPeEntryPointRecord",
+     "ProcessPeSectionRecord",
+     "_MODULE_CONTEXTS",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_enum",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_collected": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_correlated": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_directory_summary": {
+    "globals": [
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_observation_coverage": {
+    "globals": [
+     "PE_OBSERVATION_STATES",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_relocation": {
+    "globals": [
+     "PROCESS_PE_COMPONENT_STATES",
+     "_require_bool",
+     "_require_optional_enum"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord._check_uncollected": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeRecord.uncollected": {
+    "globals": [
+     "ProcessPeEntryPointRecord"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeSectionRecord.__post_init__": {
+    "globals": [
+     "PROCESS_PE_CAPTURE_STATES",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_enum",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessPeSectionRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProcessRecord.__post_init__": {
+    "globals": [
+     "IatRecord",
+     "ProcessPeRecord",
+     "_require_optional_diff_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProcessRecord.to_dict": {
+    "globals": [
+     "copy"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProfileCapabilityEntry.__post_init__": {
+    "globals": [
+     "CAPABILITY_BY_ID",
+     "CAPABILITY_IDS",
+     "CapabilityLimitation",
+     "CapabilityLimitationCode",
+     "CapabilityStatus",
+     "_CAPABILITY_STATUSES",
+     "_OPTIONAL_LIMITATION_CODES",
+     "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES",
+     "_REQUIRED_LIMITATION_CODES",
+     "_TRUNCATED_LIMITATION_CODES"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProfileCapabilityEntry.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProfileMemoryCapture.__post_init__": {
+    "globals": [
+     "_require_bool",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProfileMemoryCapture.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProfileRecord.__post_init__": {
+    "globals": [
+     "CAPABILITY_IDS",
+     "ProfileCapabilityEntry",
+     "ProfileMemoryCapture",
+     "ProfileStreamEntry",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProfileRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ProfileStreamEntry.__post_init__": {
+    "globals": [
+     "StreamParserState",
+     "_STREAM_PARSER_STATES",
+     "_STREAM_STATE_FORBIDS_COUNT",
+     "_require_nonneg_int",
+     "_require_optional_nonneg_int",
+     "_require_optional_str"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ProfileStreamEntry.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportAddressContext.__post_init__": {
+    "globals": [
+     "_require_bool",
+     "_require_hex_address",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportAddressContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportAllocationNeighborhood.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ReportNeighborRegion",
+     "_require_enrichment_section",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportAllocationNeighborhood.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportAnchorPeContext.__post_init__": {
+    "globals": [
+     "ANCHOR_PE_CLASSIFICATIONS",
+     "ANCHOR_PE_REGISTRATIONS",
+     "ENRICHMENT_SCOPE_CARD",
+     "_require_bool",
+     "_require_enrichment_section",
+     "_require_hex_address",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportAnchorPeContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportBranchTarget.__post_init__": {
+    "globals": [
+     "ANCHOR_PE_REGISTRATIONS",
+     "BRANCH_TARGET_KINDS",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportBranchTarget.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportCorrelatedHandle.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "HANDLE_SELECTION_REASONS",
+     "_require_bool",
+     "_require_bounded_text",
+     "_require_hex_address",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportCorrelatedHandle.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportDecodedInstruction.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "INSTRUCTION_BRANCH_KINDS",
+     "_require_bool",
+     "_require_bounded_text",
+     "_require_hex_address",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportDecodedInstruction.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportEnvironmentSummary.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_PROCESS",
+     "ReportEnvironmentValue",
+     "_require_enrichment_section"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportEnvironmentSummary.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportEnvironmentValue.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "_require_bool",
+     "_require_bounded_text"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportEnvironmentValue.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportExceptionContext.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ReportExceptionEntry",
+     "_require_enrichment_section"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportExceptionContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportExceptionEntry.__post_init__": {
+    "globals": [
+     "ACCESS_VIOLATION_TYPES",
+     "EXCEPTION_SELECTION_REASONS",
+     "ReportAddressContext",
+     "_require_bool",
+     "_require_nonneg_int",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportExceptionEntry.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleCorrelation.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ReportCorrelatedHandle",
+     "_require_enrichment_section"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleCorrelation.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleSummary.__post_init__": {
+    "globals": [
+     "ENRICHMENT_MISSING",
+     "ENRICHMENT_SCOPE_PROCESS",
+     "ReportHandleTypeCount",
+     "_require_enrichment_section",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleSummary.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleTypeCount.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "_require_bool",
+     "_require_bounded_text",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportHandleTypeCount.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportIatCorrelatedEntry.__post_init__": {
+    "globals": [
+     "ANCHOR_PE_REGISTRATIONS",
+     "IAT_ENTRY_SELECTION_REASONS",
+     "IAT_IMPORT_BY",
+     "_require_bool",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportIatCorrelatedEntry.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportIatCorrelation.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ReportIatCorrelatedEntry",
+     "_require_bool",
+     "_require_enrichment_section",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportIatCorrelation.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportIdentityConflict.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "IDENTITY_CONFLICT_SEVERITIES",
+     "_require_bounded_text"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportIdentityConflict.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportInstructionContext.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ENRICHMENT_TEXT_CAP",
+     "INSTRUCTION_ANCHOR_SOURCES",
+     "INSTRUCTION_DECODER_STATES",
+     "MAX_INSTRUCTION_LEAD_LIMITATIONS",
+     "ReportBranchTarget",
+     "ReportDecodedInstruction",
+     "ReportInstructionLead",
+     "_require_bool",
+     "_require_bounded_text",
+     "_require_enrichment_section",
+     "_require_nonneg_int",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportInstructionContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportInstructionLead.__post_init__": {
+    "globals": [
+     "INSTRUCTION_LEAD_NAMES",
+     "INSTRUCTION_LEAD_SIGNALS",
+     "MAX_INSTRUCTION_LEAD_EVIDENCE",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_optional_bounded_text"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportIocString.__post_init__": {
+    "globals": [
+     "_STRING_RECORD_ENCODINGS",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportIocString.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportNeighborRegion.__post_init__": {
+    "globals": [
+     "NEIGHBOR_RELATIONS",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportNeighborRegion.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportPeContext.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_PROCESS",
+     "PE_MODULE_MATCH_STATES",
+     "PeObservationRecord",
+     "_require_bool",
+     "_require_enrichment_section",
+     "_require_nonneg_int",
+     "_require_optional_bounded_text",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportPeContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportProcessEnrichment.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_PROCESS",
+     "ENRICHMENT_TEXT_CAP",
+     "ReportEnvironmentSummary",
+     "ReportHandleSummary",
+     "ReportIdentityConflict",
+     "ReportTokenCapability",
+     "_MODULE_CONTEXTS",
+     "_require_bool",
+     "_require_enrichment_section",
+     "_require_nonneg_int",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportProcessEnrichment.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportRegionInfo.__post_init__": {
+    "globals": [
+     "MODULE_CONTEXT_RESOLVED",
+     "MODULE_CONTEXT_UNAVAILABLE",
+     "MODULE_CONTEXT_UNREGISTERED",
+     "_MODULE_CONTEXTS",
+     "_PE_HEADER_STATES",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str",
+     "has_executable_protection",
+     "is_private_memory_type"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportRegionInfo.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportStringContext.__post_init__": {
+    "globals": [
+     "ENRICHMENT_SCOPE_CARD",
+     "ENRICHMENT_TEXT_CAP",
+     "ReportStringContextEntry",
+     "_require_bounded_text",
+     "_require_enrichment_section",
+     "_require_hex_address",
+     "_require_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportStringContext.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportStringContextEntry.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "STRING_CONTEXT_SELECTION_REASONS",
+     "_STRING_RECORD_ENCODINGS",
+     "_require_bool",
+     "_require_bounded_text",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportStringContextEntry.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportThreadInfo.__post_init__": {
+    "globals": [
+     "MODULE_CONTEXT_RESOLVED",
+     "_MODULE_CONTEXTS",
+     "_REGION_MEMBERSHIP_REASONS",
+     "_require_nonneg_int",
+     "_require_optional_diff_int",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address",
+     "_require_thread_info_states"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportThreadInfo.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ReportTokenCapability.__post_init__": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP",
+     "TOKEN_CAPABILITY_STATUSES",
+     "_STREAM_PARSER_STATES",
+     "_require_bool",
+     "_require_bounded_text"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ReportTokenCapability.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "StompingDetails.__post_init__": {
+    "globals": [
+     "_require_optional_targeted_scope"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "StompingDetails.to_dict": {
+    "globals": [
+     "_targeted_scope_dict"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "StringRecord.__post_init__": {
+    "globals": [
+     "_STRING_RECORD_ENCODINGS",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_diff_bool"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "StringRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "SysInfoRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "TargetedMeasurement.__post_init__": {
+    "globals": [
+     "_MEASUREMENT_UNITS",
+     "_require_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "TargetedMeasurement.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "TargetedScopeRecord.__post_init__": {
+    "globals": [
+     "TargetedMeasurement",
+     "_CAPTURE_STATES",
+     "_COVERAGE_STATUSES",
+     "_require_hex_address",
+     "_require_optional_nonneg_int"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "TargetedScopeRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ThreadDiffRecord.__post_init__": {
+    "globals": [
+     "MODULE_CONTEXT_RESOLVED",
+     "THREAD_DIFF_ADDED",
+     "_MODULE_CONTEXTS",
+     "_THREAD_DIFF_CHANGE_TYPES",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ThreadDiffRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "ThreadRecord.__post_init__": {
+    "globals": [
+     "_require_optional_hex_address",
+     "_require_thread_info_states"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "ThreadRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "TriageCardRecord.__post_init__": {
+    "globals": [
+     "ReportAllocationNeighborhood",
+     "ReportAnchorPeContext",
+     "ReportExceptionContext",
+     "ReportHandleCorrelation",
+     "ReportIatCorrelation",
+     "ReportInstructionContext",
+     "ReportIocString",
+     "ReportRegionInfo",
+     "ReportStringContext",
+     "ReportThreadInfo",
+     "StringRecord",
+     "TRIAGE_ANCHOR_STRING_HIT",
+     "_STRING_RECORD_ENCODINGS",
+     "_TRIAGE_ANCHOR_SOURCES",
+     "_TRIAGE_FINDING_KEYS",
+     "_TRIAGE_VERDICTS",
+     "_require_bool",
+     "_require_hex_address",
+     "_require_nonneg_int",
+     "_require_optional_diff_str",
+     "_require_optional_hex_address"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "TriageCardRecord.to_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "YaraDetails.__post_init__": {
+    "globals": [
+     "_require_optional_targeted_scope"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "YaraDetails.to_dict": {
+    "globals": [
+     "_targeted_scope_dict"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_bool": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_bounded_text": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_enrichment_section": {
+    "globals": [
+     "EnrichmentSection"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_hex_address": {
+    "globals": [
+     "_HEX_ADDRESS_RE"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_list_of": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_nonneg_int": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_bounded_text": {
+    "globals": [
+     "ENRICHMENT_TEXT_CAP"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_diff_bool": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_diff_int": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_diff_str": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_enum": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_hex_address": {
+    "globals": [
+     "_HEX_ADDRESS_RE"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_nonneg_int": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_str": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "_require_optional_targeted_scope": {
+    "globals": [
+     "TargetedScopeRecord",
+     "_require_list_of"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_require_thread_info_states": {
+    "globals": [
+     "DUMP_FLAGS_ABSENT",
+     "START_ADDRESS_ABSENT",
+     "_DUMP_FLAGS_STATES",
+     "_START_ADDRESS_STATES",
+     "_START_ADDRESS_STATES_WITHOUT_ADDRESS",
+     "_START_ADDRESS_STATES_WITH_ADDRESS",
+     "_START_ADDRESS_STATE_FLAGS_STATE"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "_targeted_scope_dict": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "handle_name_display": {
+    "globals": [
+     "HANDLE_CAPTURED_NAME_SUFFIX",
+     "HANDLE_NAME_STATUS_LABELS",
+     "HANDLE_RESERVED_NAME_LABELS"
+    ],
+    "module": "dumpex.output.records"
+   },
+   "hex_address": {
+    "globals": [],
+    "module": "dumpex.output.records"
+   },
+   "render_capability_limitation": {
+    "globals": [
+     "CAPABILITY_SOURCE_DISPLAY_NAMES",
+     "_CAPABILITY_LIMITATION_TEMPLATES"
+    ],
+    "module": "dumpex.output.records"
+   }
+  },
+  "legacy_defines": [
+   "hex_address",
+   "MemoryRegionRecord",
+   "ModuleRecord",
+   "MODULE_CONTEXT_RESOLVED",
+   "MODULE_CONTEXT_UNREGISTERED",
+   "MODULE_CONTEXT_UNAVAILABLE",
+   "START_ADDRESS_RECORDED",
+   "START_ADDRESS_INVALID",
+   "START_ADDRESS_UNVERIFIED",
+   "START_ADDRESS_ABSENT",
+   "_START_ADDRESS_STATES",
+   "DUMP_FLAGS_RESOLVED",
+   "DUMP_FLAGS_UNRESOLVED",
+   "DUMP_FLAGS_ABSENT",
+   "_DUMP_FLAGS_STATES",
+   "_START_ADDRESS_STATE_FLAGS_STATE",
+   "_START_ADDRESS_STATES_WITH_ADDRESS",
+   "_START_ADDRESS_STATES_WITHOUT_ADDRESS",
+   "_require_thread_info_states",
+   "ThreadRecord",
+   "SysInfoRecord",
+   "_require_nonneg_int",
+   "_require_bool",
+   "_require_hex_address",
+   "_STRING_RECORD_ENCODINGS",
+   "ExtractRecord",
+   "StringRecord",
+   "_HEX_ADDRESS_RE",
+   "_require_optional_hex_address",
+   "_require_optional_diff_str",
+   "_require_optional_diff_int",
+   "_require_optional_diff_bool",
+   "MODULE_DIFF_ADDED",
+   "MODULE_DIFF_REMOVED",
+   "MODULE_DIFF_REBASED",
+   "_MODULE_DIFF_CHANGE_TYPES",
+   "ModuleDiffRecord",
+   "THREAD_DIFF_ADDED",
+   "THREAD_DIFF_REMOVED",
+   "_THREAD_DIFF_CHANGE_TYPES",
+   "_MODULE_CONTEXTS",
+   "ThreadDiffRecord",
+   "MEMORY_DIFF_ADDED",
+   "MEMORY_DIFF_REMOVED",
+   "MEMORY_DIFF_PROTECTION_CHANGED",
+   "_MEMORY_DIFF_CHANGE_TYPES",
+   "MemoryDiffRecord",
+   "SEVERITY_WARNING",
+   "SEVERITY_ERROR",
+   "Diagnostic",
+   "Artifact",
+   "TRIAGE_ANCHOR_TID",
+   "TRIAGE_ANCHOR_ADDRESS",
+   "TRIAGE_ANCHOR_STRING_HIT",
+   "TRIAGE_ANCHOR_TID_CURRENT_IP",
+   "_TRIAGE_ANCHOR_SOURCES",
+   "_TRIAGE_VERDICTS",
+   "_TRIAGE_FINDING_KEYS",
+   "REGION_MEMBERSHIP_START",
+   "REGION_MEMBERSHIP_CURRENT",
+   "REGION_MEMBERSHIP_START_AND_CURRENT",
+   "_REGION_MEMBERSHIP_REASONS",
+   "ReportThreadInfo",
+   "_PE_HEADER_STATES",
+   "ReportRegionInfo",
+   "ReportIocString",
+   "ENRICHMENT_MISSING",
+   "ENRICHMENT_PARTIAL",
+   "ENRICHMENT_COMPLETE",
+   "_ENRICHMENT_STATES",
+   "ENRICHMENT_SCOPE_PROCESS",
+   "ENRICHMENT_SCOPE_CARD",
+   "_ENRICHMENT_SCOPES",
+   "EnrichmentSection",
+   "_require_enrichment_section",
+   "_require_optional_bounded_text",
+   "_require_bounded_text",
+   "ENRICHMENT_TEXT_CAP",
+   "ReportEnvironmentValue",
+   "ReportEnvironmentSummary",
+   "ReportHandleTypeCount",
+   "ReportHandleSummary",
+   "TOKEN_CAPABILITY_STATUSES",
+   "ReportTokenCapability",
+   "IDENTITY_CONFLICT_SEVERITIES",
+   "ReportIdentityConflict",
+   "ReportProcessEnrichment",
+   "ACCESS_VIOLATION_TYPES",
+   "ReportAddressContext",
+   "EXCEPTION_SELECTION_REASONS",
+   "ReportExceptionEntry",
+   "ReportExceptionContext",
+   "NEIGHBOR_RELATIONS",
+   "ReportNeighborRegion",
+   "ReportAllocationNeighborhood",
+   "HANDLE_SELECTION_REASONS",
+   "ReportCorrelatedHandle",
+   "ReportHandleCorrelation",
+   "STRING_CONTEXT_SELECTION_REASONS",
+   "ReportStringContextEntry",
+   "ReportStringContext",
+   "PE_OBSERVATION_STATES",
+   "PeObservationRecord",
+   "PE_MODULE_MATCH_STATES",
+   "ReportPeContext",
+   "ANCHOR_PE_CLASSIFICATIONS",
+   "ANCHOR_PE_REGISTRATIONS",
+   "ReportAnchorPeContext",
+   "INSTRUCTION_ANCHOR_SOURCES",
+   "INSTRUCTION_DECODER_STATES",
+   "INSTRUCTION_BRANCH_KINDS",
+   "INSTRUCTION_LEAD_NAMES",
+   "INSTRUCTION_LEAD_SIGNALS",
+   "MAX_INSTRUCTION_LEAD_EVIDENCE",
+   "MAX_INSTRUCTION_LEAD_LIMITATIONS",
+   "BRANCH_TARGET_KINDS",
+   "ReportInstructionLead",
+   "ReportDecodedInstruction",
+   "ReportBranchTarget",
+   "ReportInstructionContext",
+   "IAT_IMPORT_BY",
+   "IAT_ENTRY_SELECTION_REASONS",
+   "ReportIatCorrelatedEntry",
+   "ReportIatCorrelation",
+   "TriageCardRecord",
+   "HUNTERS",
+   "_HUNT_STATUSES",
+   "_HUNT_VERDICT_LEVELS",
+   "_HUNT_CONFIDENCES",
+   "_HUNT_REVIEW_PRIORITIES",
+   "_require_list_of",
+   "_CAPTURE_STATES",
+   "_COVERAGE_STATUSES",
+   "_MEASUREMENT_UNITS",
+   "TargetedMeasurement",
+   "TargetedScopeRecord",
+   "_require_optional_targeted_scope",
+   "_targeted_scope_dict",
+   "HuntRegionRef",
+   "HuntThreadRef",
+   "HuntThreadRegionHit",
+   "HuntPeHeaderHit",
+   "InjectionDetails",
+   "HollowingDetails",
+   "StompingDetails",
+   "PipeDetails",
+   "CsBeaconDetails",
+   "YaraDetails",
+   "ObfuscationDetails",
+   "_HUNTER_DETAILS_TYPES",
+   "HunterRecord",
+   "_IMPORT_BY_VALUES",
+   "_PROCESS_DIAGNOSTIC_SEVERITIES",
+   "_require_optional_nonneg_int",
+   "ImportEntryRecord",
+   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
+   "ProcessDiagnosticRecord",
+   "IatRecord",
+   "PROCESS_PE_COMPONENT_STATES",
+   "PROCESS_PE_COMPONENTS",
+   "PROCESS_PE_STAGES",
+   "PROCESS_PE_SOURCE_KINDS",
+   "PROCESS_PE_FORMATS",
+   "PROCESS_PE_CAPTURE_STATES",
+   "PROCESS_PE_UNAVAILABLE_REASONS",
+   "PROCESS_PE_TABLE_STATES",
+   "PROCESS_PE_UNUSABLE_TABLE_STATES",
+   "PROCESS_PE_VALUE_KINDS",
+   "PROCESS_PE_IDENTITY_FORMS",
+   "_require_optional_enum",
+   "ProcessPeSectionRecord",
+   "ProcessPeDirectoryRecord",
+   "_ENTRY_POINT_RESOLVED_FIELDS",
+   "ProcessPeEntryPointRecord",
+   "ProcessPeAcquisitionRecord",
+   "ProcessPeRecord",
+   "ProcessRecord",
+   "HANDLE_NAME_STATUSES",
+   "HANDLE_NAME_STATUS_LABELS",
+   "HANDLE_RESERVED_NAME_LABELS",
+   "HANDLE_CAPTURED_NAME_SUFFIX",
+   "handle_name_display",
+   "HandleRecord",
+   "StreamParserState",
+   "_STREAM_PARSER_STATES",
+   "_STREAM_STATE_FORBIDS_COUNT",
+   "ProfileStreamEntry",
+   "_require_optional_str",
+   "ProfileMemoryCapture",
+   "CapabilityStatus",
+   "_CAPABILITY_STATUSES",
+   "CapabilityDefinition",
+   "CAPABILITY_REGISTRY",
+   "CAPABILITY_IDS",
+   "CAPABILITY_BY_ID",
+   "CapabilityLimitationCode",
+   "_CAPABILITY_LIMITATION_CODES",
+   "_REQUIRED_LIMITATION_CODES",
+   "_OPTIONAL_LIMITATION_CODES",
+   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES",
+   "_TRUNCATED_LIMITATION_CODES",
+   "CAPABILITY_SOURCE_DISPLAY_NAMES",
+   "_CAPABILITY_LIMITATION_TEMPLATES",
+   "render_capability_limitation",
+   "CapabilityLimitation",
+   "ProfileCapabilityEntry",
+   "ProfileRecord"
+  ],
+  "legacy_imports": {
+   "CoverageReport": "dumpex.output.coverage:CoverageReport",
+   "Enum": "enum:Enum",
+   "MappingProxyType": "types:MappingProxyType",
+   "copy": "copy",
+   "dataclass": "dataclasses:dataclass",
+   "field": "dataclasses:field",
+   "has_executable_protection": "dumpex.core.pe_utils:has_executable_protection",
+   "is_private_memory_type": "dumpex.core.pe_utils:is_private_memory_type",
+   "re": "re"
+  },
+  "owners": {
+   "ACCESS_VIOLATION_TYPES": "dumpex.output.records",
+   "ANCHOR_PE_CLASSIFICATIONS": "dumpex.output.records",
+   "ANCHOR_PE_REGISTRATIONS": "dumpex.output.records",
+   "Artifact": "dumpex.output.records",
+   "BRANCH_TARGET_KINDS": "dumpex.output.records",
+   "CAPABILITY_BY_ID": "dumpex.output.records",
+   "CAPABILITY_IDS": "dumpex.output.records",
+   "CAPABILITY_REGISTRY": "dumpex.output.records",
+   "CAPABILITY_SOURCE_DISPLAY_NAMES": "dumpex.output.records",
+   "CapabilityDefinition": "dumpex.output.records",
+   "CapabilityLimitation": "dumpex.output.records",
+   "CapabilityLimitationCode": "dumpex.output.records",
+   "CapabilityStatus": "dumpex.output.records",
+   "CsBeaconDetails": "dumpex.output.records",
+   "DUMP_FLAGS_ABSENT": "dumpex.output.records",
+   "DUMP_FLAGS_RESOLVED": "dumpex.output.records",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.output.records",
+   "Diagnostic": "dumpex.output.records",
+   "ENRICHMENT_COMPLETE": "dumpex.output.records",
+   "ENRICHMENT_MISSING": "dumpex.output.records",
+   "ENRICHMENT_PARTIAL": "dumpex.output.records",
+   "ENRICHMENT_SCOPE_CARD": "dumpex.output.records",
+   "ENRICHMENT_SCOPE_PROCESS": "dumpex.output.records",
+   "ENRICHMENT_TEXT_CAP": "dumpex.output.records",
+   "EXCEPTION_SELECTION_REASONS": "dumpex.output.records",
+   "EnrichmentSection": "dumpex.output.records",
+   "ExtractRecord": "dumpex.output.records",
+   "HANDLE_CAPTURED_NAME_SUFFIX": "dumpex.output.records",
+   "HANDLE_NAME_STATUSES": "dumpex.output.records",
+   "HANDLE_NAME_STATUS_LABELS": "dumpex.output.records",
+   "HANDLE_RESERVED_NAME_LABELS": "dumpex.output.records",
+   "HANDLE_SELECTION_REASONS": "dumpex.output.records",
+   "HUNTERS": "dumpex.output.records",
+   "HandleRecord": "dumpex.output.records",
+   "HollowingDetails": "dumpex.output.records",
+   "HuntPeHeaderHit": "dumpex.output.records",
+   "HuntRegionRef": "dumpex.output.records",
+   "HuntThreadRef": "dumpex.output.records",
+   "HuntThreadRegionHit": "dumpex.output.records",
+   "HunterRecord": "dumpex.output.records",
+   "IAT_ENTRY_SELECTION_REASONS": "dumpex.output.records",
+   "IAT_IMPORT_BY": "dumpex.output.records",
+   "IDENTITY_CONFLICT_SEVERITIES": "dumpex.output.records",
+   "INSTRUCTION_ANCHOR_SOURCES": "dumpex.output.records",
+   "INSTRUCTION_BRANCH_KINDS": "dumpex.output.records",
+   "INSTRUCTION_DECODER_STATES": "dumpex.output.records",
+   "INSTRUCTION_LEAD_NAMES": "dumpex.output.records",
+   "INSTRUCTION_LEAD_SIGNALS": "dumpex.output.records",
+   "IatRecord": "dumpex.output.records",
+   "ImportEntryRecord": "dumpex.output.records",
+   "InjectionDetails": "dumpex.output.records",
+   "MAX_INSTRUCTION_LEAD_EVIDENCE": "dumpex.output.records",
+   "MAX_INSTRUCTION_LEAD_LIMITATIONS": "dumpex.output.records",
+   "MEMORY_DIFF_ADDED": "dumpex.output.records",
+   "MEMORY_DIFF_PROTECTION_CHANGED": "dumpex.output.records",
+   "MEMORY_DIFF_REMOVED": "dumpex.output.records",
+   "MODULE_CONTEXT_RESOLVED": "dumpex.output.records",
+   "MODULE_CONTEXT_UNAVAILABLE": "dumpex.output.records",
+   "MODULE_CONTEXT_UNREGISTERED": "dumpex.output.records",
+   "MODULE_DIFF_ADDED": "dumpex.output.records",
+   "MODULE_DIFF_REBASED": "dumpex.output.records",
+   "MODULE_DIFF_REMOVED": "dumpex.output.records",
+   "MemoryDiffRecord": "dumpex.output.records",
+   "MemoryRegionRecord": "dumpex.output.records",
+   "ModuleDiffRecord": "dumpex.output.records",
+   "ModuleRecord": "dumpex.output.records",
+   "NEIGHBOR_RELATIONS": "dumpex.output.records",
+   "ObfuscationDetails": "dumpex.output.records",
+   "PE_MODULE_MATCH_STATES": "dumpex.output.records",
+   "PE_OBSERVATION_STATES": "dumpex.output.records",
+   "PROCESS_PE_CAPTURE_STATES": "dumpex.output.records",
+   "PROCESS_PE_COMPONENTS": "dumpex.output.records",
+   "PROCESS_PE_COMPONENT_STATES": "dumpex.output.records",
+   "PROCESS_PE_FORMATS": "dumpex.output.records",
+   "PROCESS_PE_IDENTITY_FORMS": "dumpex.output.records",
+   "PROCESS_PE_SOURCE_KINDS": "dumpex.output.records",
+   "PROCESS_PE_STAGES": "dumpex.output.records",
+   "PROCESS_PE_TABLE_STATES": "dumpex.output.records",
+   "PROCESS_PE_UNAVAILABLE_REASONS": "dumpex.output.records",
+   "PROCESS_PE_UNUSABLE_TABLE_STATES": "dumpex.output.records",
+   "PROCESS_PE_VALUE_KINDS": "dumpex.output.records",
+   "PeObservationRecord": "dumpex.output.records",
+   "PipeDetails": "dumpex.output.records",
+   "ProcessDiagnosticRecord": "dumpex.output.records",
+   "ProcessPeAcquisitionRecord": "dumpex.output.records",
+   "ProcessPeDirectoryRecord": "dumpex.output.records",
+   "ProcessPeEntryPointRecord": "dumpex.output.records",
+   "ProcessPeRecord": "dumpex.output.records",
+   "ProcessPeSectionRecord": "dumpex.output.records",
+   "ProcessRecord": "dumpex.output.records",
+   "ProfileCapabilityEntry": "dumpex.output.records",
+   "ProfileMemoryCapture": "dumpex.output.records",
+   "ProfileRecord": "dumpex.output.records",
+   "ProfileStreamEntry": "dumpex.output.records",
+   "REGION_MEMBERSHIP_CURRENT": "dumpex.output.records",
+   "REGION_MEMBERSHIP_START": "dumpex.output.records",
+   "REGION_MEMBERSHIP_START_AND_CURRENT": "dumpex.output.records",
+   "ReportAddressContext": "dumpex.output.records",
+   "ReportAllocationNeighborhood": "dumpex.output.records",
+   "ReportAnchorPeContext": "dumpex.output.records",
+   "ReportBranchTarget": "dumpex.output.records",
+   "ReportCorrelatedHandle": "dumpex.output.records",
+   "ReportDecodedInstruction": "dumpex.output.records",
+   "ReportEnvironmentSummary": "dumpex.output.records",
+   "ReportEnvironmentValue": "dumpex.output.records",
+   "ReportExceptionContext": "dumpex.output.records",
+   "ReportExceptionEntry": "dumpex.output.records",
+   "ReportHandleCorrelation": "dumpex.output.records",
+   "ReportHandleSummary": "dumpex.output.records",
+   "ReportHandleTypeCount": "dumpex.output.records",
+   "ReportIatCorrelatedEntry": "dumpex.output.records",
+   "ReportIatCorrelation": "dumpex.output.records",
+   "ReportIdentityConflict": "dumpex.output.records",
+   "ReportInstructionContext": "dumpex.output.records",
+   "ReportInstructionLead": "dumpex.output.records",
+   "ReportIocString": "dumpex.output.records",
+   "ReportNeighborRegion": "dumpex.output.records",
+   "ReportPeContext": "dumpex.output.records",
+   "ReportProcessEnrichment": "dumpex.output.records",
+   "ReportRegionInfo": "dumpex.output.records",
+   "ReportStringContext": "dumpex.output.records",
+   "ReportStringContextEntry": "dumpex.output.records",
+   "ReportThreadInfo": "dumpex.output.records",
+   "ReportTokenCapability": "dumpex.output.records",
+   "SEVERITY_ERROR": "dumpex.output.records",
+   "SEVERITY_WARNING": "dumpex.output.records",
+   "START_ADDRESS_ABSENT": "dumpex.output.records",
+   "START_ADDRESS_INVALID": "dumpex.output.records",
+   "START_ADDRESS_RECORDED": "dumpex.output.records",
+   "START_ADDRESS_UNVERIFIED": "dumpex.output.records",
+   "STRING_CONTEXT_SELECTION_REASONS": "dumpex.output.records",
+   "StompingDetails": "dumpex.output.records",
+   "StreamParserState": "dumpex.output.records",
+   "StringRecord": "dumpex.output.records",
+   "SysInfoRecord": "dumpex.output.records",
+   "THREAD_DIFF_ADDED": "dumpex.output.records",
+   "THREAD_DIFF_REMOVED": "dumpex.output.records",
+   "TOKEN_CAPABILITY_STATUSES": "dumpex.output.records",
+   "TRIAGE_ANCHOR_ADDRESS": "dumpex.output.records",
+   "TRIAGE_ANCHOR_STRING_HIT": "dumpex.output.records",
+   "TRIAGE_ANCHOR_TID": "dumpex.output.records",
+   "TRIAGE_ANCHOR_TID_CURRENT_IP": "dumpex.output.records",
+   "TargetedMeasurement": "dumpex.output.records",
+   "TargetedScopeRecord": "dumpex.output.records",
+   "ThreadDiffRecord": "dumpex.output.records",
+   "ThreadRecord": "dumpex.output.records",
+   "TriageCardRecord": "dumpex.output.records",
+   "YaraDetails": "dumpex.output.records",
+   "_CAPABILITY_LIMITATION_CODES": "dumpex.output.records",
+   "_CAPABILITY_LIMITATION_TEMPLATES": "dumpex.output.records",
+   "_CAPABILITY_STATUSES": "dumpex.output.records",
+   "_CAPTURE_STATES": "dumpex.output.records",
+   "_COVERAGE_STATUSES": "dumpex.output.records",
+   "_DUMP_FLAGS_STATES": "dumpex.output.records",
+   "_ENRICHMENT_SCOPES": "dumpex.output.records",
+   "_ENRICHMENT_STATES": "dumpex.output.records",
+   "_ENTRY_POINT_RESOLVED_FIELDS": "dumpex.output.records",
+   "_HEX_ADDRESS_RE": "dumpex.output.records",
+   "_HUNTER_DETAILS_TYPES": "dumpex.output.records",
+   "_HUNT_CONFIDENCES": "dumpex.output.records",
+   "_HUNT_REVIEW_PRIORITIES": "dumpex.output.records",
+   "_HUNT_STATUSES": "dumpex.output.records",
+   "_HUNT_VERDICT_LEVELS": "dumpex.output.records",
+   "_IMPORT_BY_VALUES": "dumpex.output.records",
+   "_MEASUREMENT_UNITS": "dumpex.output.records",
+   "_MEMORY_DIFF_CHANGE_TYPES": "dumpex.output.records",
+   "_MODULE_CONTEXTS": "dumpex.output.records",
+   "_MODULE_DIFF_CHANGE_TYPES": "dumpex.output.records",
+   "_OPTIONAL_LIMITATION_CODES": "dumpex.output.records",
+   "_PE_HEADER_STATES": "dumpex.output.records",
+   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA": "dumpex.output.records",
+   "_PROCESS_DIAGNOSTIC_SEVERITIES": "dumpex.output.records",
+   "_REGION_MEMBERSHIP_REASONS": "dumpex.output.records",
+   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES": "dumpex.output.records",
+   "_REQUIRED_LIMITATION_CODES": "dumpex.output.records",
+   "_START_ADDRESS_STATES": "dumpex.output.records",
+   "_START_ADDRESS_STATES_WITHOUT_ADDRESS": "dumpex.output.records",
+   "_START_ADDRESS_STATES_WITH_ADDRESS": "dumpex.output.records",
+   "_START_ADDRESS_STATE_FLAGS_STATE": "dumpex.output.records",
+   "_STREAM_PARSER_STATES": "dumpex.output.records",
+   "_STREAM_STATE_FORBIDS_COUNT": "dumpex.output.records",
+   "_STRING_RECORD_ENCODINGS": "dumpex.output.records",
+   "_THREAD_DIFF_CHANGE_TYPES": "dumpex.output.records",
+   "_TRIAGE_ANCHOR_SOURCES": "dumpex.output.records",
+   "_TRIAGE_FINDING_KEYS": "dumpex.output.records",
+   "_TRIAGE_VERDICTS": "dumpex.output.records",
+   "_TRUNCATED_LIMITATION_CODES": "dumpex.output.records",
+   "_require_bool": "dumpex.output.records",
+   "_require_bounded_text": "dumpex.output.records",
+   "_require_enrichment_section": "dumpex.output.records",
+   "_require_hex_address": "dumpex.output.records",
+   "_require_list_of": "dumpex.output.records",
+   "_require_nonneg_int": "dumpex.output.records",
+   "_require_optional_bounded_text": "dumpex.output.records",
+   "_require_optional_diff_bool": "dumpex.output.records",
+   "_require_optional_diff_int": "dumpex.output.records",
+   "_require_optional_diff_str": "dumpex.output.records",
+   "_require_optional_enum": "dumpex.output.records",
+   "_require_optional_hex_address": "dumpex.output.records",
+   "_require_optional_nonneg_int": "dumpex.output.records",
+   "_require_optional_str": "dumpex.output.records",
+   "_require_optional_targeted_scope": "dumpex.output.records",
+   "_require_thread_info_states": "dumpex.output.records",
+   "_targeted_scope_dict": "dumpex.output.records",
+   "handle_name_display": "dumpex.output.records",
+   "hex_address": "dumpex.output.records",
+   "render_capability_limitation": "dumpex.output.records"
+  },
+  "private_unexported": [
+   "_CAPABILITY_LIMITATION_CODES",
+   "_CAPABILITY_LIMITATION_TEMPLATES",
+   "_CAPABILITY_STATUSES",
+   "_CAPTURE_STATES",
+   "_COVERAGE_STATUSES",
+   "_DUMP_FLAGS_STATES",
+   "_ENRICHMENT_SCOPES",
+   "_ENRICHMENT_STATES",
+   "_ENTRY_POINT_RESOLVED_FIELDS",
+   "_HEX_ADDRESS_RE",
+   "_HUNTER_DETAILS_TYPES",
+   "_HUNT_STATUSES",
+   "_HUNT_VERDICT_LEVELS",
+   "_IMPORT_BY_VALUES",
+   "_MEASUREMENT_UNITS",
+   "_MEMORY_DIFF_CHANGE_TYPES",
+   "_MODULE_DIFF_CHANGE_TYPES",
+   "_PE_HEADER_STATES",
+   "_PROCESS_DIAGNOSTIC_SEVERITIES",
+   "_REGION_MEMBERSHIP_REASONS",
+   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES",
+   "_REQUIRED_LIMITATION_CODES",
+   "_START_ADDRESS_STATES",
+   "_START_ADDRESS_STATES_WITHOUT_ADDRESS",
+   "_START_ADDRESS_STATES_WITH_ADDRESS",
+   "_START_ADDRESS_STATE_FLAGS_STATE",
+   "_STREAM_PARSER_STATES",
+   "_STREAM_STATE_FORBIDS_COUNT",
+   "_STRING_RECORD_ENCODINGS",
+   "_THREAD_DIFF_CHANGE_TYPES",
+   "_TRIAGE_ANCHOR_SOURCES",
+   "_TRUNCATED_LIMITATION_CODES",
+   "_require_bool",
+   "_require_bounded_text",
+   "_require_enrichment_section",
+   "_require_list_of",
+   "_require_optional_bounded_text",
+   "_require_optional_diff_bool",
+   "_require_optional_diff_int",
+   "_require_optional_diff_str",
+   "_require_optional_enum",
+   "_require_optional_hex_address",
+   "_require_optional_nonneg_int",
+   "_require_optional_str",
+   "_require_optional_targeted_scope",
+   "_require_thread_info_states",
+   "_targeted_scope_dict"
+  ],
+  "runtime_state_initializers": {}
+ }
+}
