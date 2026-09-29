@@ -220,7 +220,7 @@ and for every dumpex command, not just `--profile`.
 
 §2.3's own requirement ("preserve unknown stream-type IDs") would
 otherwise be unreachable for a real dump — only exercisable through a
-hand-built test fixture. `dumpex.core.memory._parse_directory_entry()`
+hand-built test fixture. `dumpex.core.dumpfile.loader._parse_directory_entry()`
 closes this gap: **every** unrecognized `StreamType` value — whether
 `>0xFFFF` or a gap value in the named range — is preserved as its own
 row (the raw int, with `Location`/Rva/DataSize parsed normally), never
@@ -255,7 +255,7 @@ inventing rows to cover it — surfaced by `--profile` as
 - `raw_flags` — the header's own 64-bit `MINIDUMP_TYPE` union value,
   verbatim, or `null` only when the header's own trailing union+Flags
   bytes were themselves truncated
-  (`dumpex.core.memory._correct_header_union`). This is a **directory/
+  (`dumpex.core.dumpfile.loader._correct_header_union`). This is a **directory/
   header** fact (§5), independent of any capability.
 - `recognized_flags` — the `MINIDUMP_TYPE` member names whose bit is set
   in `raw_flags`, in `MINIDUMP_TYPE`'s own declaration order (never

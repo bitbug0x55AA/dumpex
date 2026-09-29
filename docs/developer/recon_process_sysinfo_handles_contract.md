@@ -265,7 +265,7 @@ from minidump.structures.peb import PEB
 # represent 0x0 or any combined value, walks entries at its own hardcoded
 # 64-byte layout regardless of the stream's declared SizeOfEntry, and
 # turns a field the record never carried into a zero (see
-# dumpex/core/memory.py's own section comment).
+# dumpex/core/dumpfile/thread_info_stream.py's own section comment).
 _STREAM_DISPATCH = {
     MINIDUMP_STREAM_TYPE.ThreadListStream:         ("threads", MinidumpThreadList.parse),
     MINIDUMP_STREAM_TYPE.ModuleListStream:         ("modules", MinidumpModuleList.parse),

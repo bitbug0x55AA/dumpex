@@ -130,7 +130,10 @@ attribute. Two different seams exist:
   compatibility contract: splitting it keeps explicit compatibility
   exports or small delegating wrappers at `dumpex.core.memory`, so a patch
   applied to a legacy reader or context entry point still affects the
-  executions that use it.
+  executions that use it. The owner modules in `dumpex.core.dumpfile` and
+  the entry points that delegate to them are listed in
+  [the memory module layout](memory_layout.md); the consumer scan counts
+  `dumpex/core/dumpfile/` as part of the family.
   `dumpex.output.records` has no such seams and does not delegate: its
   owner modules resolve their globals in their own namespaces, so a test
   replaces a records name on the owner module, never on the facade.
@@ -234,7 +237,11 @@ the split modules is still reported; and the generator run over the
 relocated layouts, which must reproduce the committed contract byte for
 byte and place every moved definition in its new owner. The simulated
 relocations re-execute a target's single source file, so they run against
-the targets that are still one module; a target already decomposed into a
-package (`dumpex.output.records`, see
-[the records package layout](records_layout.md)) is its own positive
-control, and a copy bound in its facade is still reported.
+the targets whose baseline definitions all still live in that one module;
+a target already decomposed -- into a package (`dumpex.output.records`,
+see [the records package layout](records_layout.md)) or behind a legacy
+module over owner modules (`dumpex.core.memory`, see
+[the memory module layout](memory_layout.md)) -- is its own positive
+control, and a copy bound in its facade is still reported. The seam
+controls still split `dumpex.core.memory`'s own source, whose entry points
+must keep delegating.

@@ -285,12 +285,20 @@ def test_disabled_cross_source_validator_is_detected(monkeypatch, validator, cod
 # ── Legal relocations and their negative control ──────────────────────────
 # Structural moves the baseline must accept unchanged, and a copy it must
 # refuse. The simulated relocations re-execute a target's single source
-# file, so they run against the targets that are still one module; a
-# target already decomposed into a package is its own positive control,
-# held by every comparison in test_decomposition_baseline.py.
+# file, so they run against the targets whose baseline definitions all
+# still live in that one module; a target already decomposed -- into a
+# package, or behind a facade over owner modules -- is its own positive
+# control, held by every comparison in test_decomposition_baseline.py.
 
-MONOLITHIC_TARGETS = tuple(
-    t for t in TARGET_MODULES if not hasattr(importlib.import_module(t), "__path__"))
+
+def _is_monolithic(target) -> bool:
+    if hasattr(importlib.import_module(target), "__path__"):
+        return False
+    owners = load_golden(capture.SURFACE_STRUCTURE)[target]["owners"]
+    return all(owner == target for owner in owners.values())
+
+
+MONOLITHIC_TARGETS = tuple(t for t in TARGET_MODULES if _is_monolithic(t))
 
 
 def _relocate(target, monkeypatch, tmp_path, copied=()):
@@ -429,11 +437,11 @@ def test_split_functions_resolve_globals_in_their_own_part(monkeypatch, tmp_path
     """Read from the functions themselves, not from the harness: a moved
     function's globals are its owning part's namespace."""
     parts = split_relocation("dumpex.core.memory", monkeypatch, tmp_path)
-    for name in ("read_region_spanning", "enriched_thread_contexts", "open_dump"):
+    for name in ("read_region_clamped", "enriched_thread_contexts", "open_dump"):
         fn = getattr(parts["facade"], name)
         assert fn.__globals__ is parts[FUNCTIONS].__dict__
         assert fn.__module__ == parts[FUNCTIONS].__name__
-    assert parts[INTERNALS]._correct_header_union.__globals__ is parts[INTERNALS].__dict__
+    assert parts[INTERNALS]._hexdump_context.__globals__ is parts[INTERNALS].__dict__
 
 
 @pytest.mark.parametrize("check", seams.CHECKS, ids=lambda c: c.__name__)
@@ -465,7 +473,7 @@ def test_split_without_delegation_breaks_the_loader_seams(monkeypatch, tmp_path)
 
 def test_split_relocation_keeps_the_leak_guard_working(monkeypatch, tmp_path):
     split_relocation("dumpex.core.memory", monkeypatch, tmp_path)
-    assert not hasattr(importlib.import_module("dumpex.core.memory"), "_correct_header_union")
+    assert not hasattr(importlib.import_module("dumpex.core.memory"), "_hexdump_context")
     seam_tests.test_no_memory_function_is_left_replaced()
 
 
