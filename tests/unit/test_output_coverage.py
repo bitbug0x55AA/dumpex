@@ -1930,7 +1930,7 @@ def test_scan_target_to_dict_uses_fixed_width_hex_and_byte_offsets():
 
 
 def test_scan_target_hex_matches_the_records_module_hex_convention():
-    # coverage.py cannot import records.py (records.py imports THIS
+    # coverage.py cannot import dumpex.output.records (which imports THIS
     # module), so its address formatter is a deliberate second copy --
     # this is what keeps the two from drifting.
     target = _region_target(base=0x7ff000001000, allocation_base=0x40)

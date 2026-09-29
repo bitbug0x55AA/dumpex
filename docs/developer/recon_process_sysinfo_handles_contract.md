@@ -80,7 +80,7 @@ ship.
 
 ### 1.3 Address, handle, and mask formatting
 
-The rule already stated in `dumpex/output/records.py`'s module docstring
+The rule already stated in `dumpex/output/records/common.py`'s module docstring
 applies unchanged, and is extended to the two new record types:
 
 - A field is a **fixed-width lowercase hex string** (`0x` + 16 hex

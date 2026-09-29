@@ -17,10 +17,11 @@ from tests.fixtures.decomposition_baseline import GOLDEN_DIR, TARGET_MODULES, ca
 from tests.fixtures.decomposition_baseline.cli_matrix import (
     SCENARIOS, golden_name, run_scenario, yara_available)
 from tests.fixtures.decomposition_baseline.consumers import (
-    EXTERNAL_CATEGORIES, by_categories, scan_consumers)
+    EXTERNAL_CATEGORIES, by_categories, scan_consumers, scan_legacy_rebinds, unreachable_rebinds)
 from tests.fixtures.decomposition_baseline.coverage_corpus import (
     capture_coverage_corpus, unaccounted_vocabularies, vocabulary_coverage)
-from tests.fixtures.decomposition_baseline.surface import duplicate_definitions
+from tests.fixtures.decomposition_baseline.surface import (
+    duplicate_definitions, duplicate_source_definitions)
 from tests.fixtures.decomposition_baseline.record_corpus import capture_record_corpus
 from tests.fixtures.decomposition_baseline.stable import (
     assert_matches_golden, dumps, load_golden)
@@ -83,6 +84,19 @@ def test_no_baseline_value_has_a_second_definition(target):
 
 
 @pytest.mark.parametrize("target", TARGET_MODULES)
+def test_no_baseline_name_is_defined_in_two_family_modules(target):
+    """The identity check above cannot see a scalar -- a budget or cap
+    copied into a second owner as an equal literal may even be the same
+    interned object. Each baseline name is defined in the source of one
+    module only."""
+    committed = load_golden(capture.SURFACE_CONTRACT)[target]
+    names = [*committed["exports"], *committed["private_values"]]
+    definitions = [n for n, _ in load_golden(capture.SURFACE_STRUCTURE)[target]["baseline_definitions"]]
+    assert duplicate_source_definitions(
+        target, sorted({*names, *definitions}), committed["exports"]) == []
+
+
+@pytest.mark.parametrize("target", TARGET_MODULES)
 def test_every_exported_definition_has_one_canonical_owner(target):
     """A class or function reachable through the legacy path is the very
     object its owning module defines under that name -- never a copy."""
@@ -117,6 +131,43 @@ def test_consumer_inventory_holds_files_outside_the_family_only(baseline_consume
     """How the decomposed modules import one another is structure, recorded
     in surface_structure.json's `family_consumers`."""
     assert by_categories(baseline_consumers, EXTERNAL_CATEGORIES) == baseline_consumers
+
+
+# Legacy attributes a test replaces for their own sake: the mutation
+# controls reorder and copy the facade's HUNTERS to prove the contract
+# capture and the duplicate guard read the legacy path itself.
+_INTENTIONAL_LEGACY_REBINDS = (
+    ("tests/integration/test_decomposition_baseline_mutations.py",
+     "dumpex.output.records", "HUNTERS"),
+)
+
+
+def test_no_test_rebinds_a_legacy_name_that_is_read_from_its_owner():
+    """A function relocated to an owner module reads its globals there, so
+    replacing the legacy module's attribute does not reach it: such a test
+    patches nothing it can observe. It must patch the owner module (or the
+    namespace the reader resolves in) instead."""
+    assert unreachable_rebinds(scan_legacy_rebinds(), load_golden(capture.SURFACE_STRUCTURE),
+                               exempt=_INTENTIONAL_LEGACY_REBINDS) == []
+
+
+def test_a_legacy_rebinding_of_a_relocated_validator_is_reported(tmp_path):
+    sample = tmp_path / "tests" / "unit" / "test_sample.py"
+    sample.parent.mkdir(parents=True)
+    sample.write_text(
+        "import dumpex.output.records as records\n\n\n"
+        "def test_sample(monkeypatch):\n"
+        "    monkeypatch.setattr(records, '_require_nonneg_int', lambda v, f: None)\n"
+        "    monkeypatch.setattr(records.ThreadRecord, '__post_init__', lambda self: None)\n",
+        encoding="utf-8")
+    rebinds = scan_legacy_rebinds(str(tmp_path))
+    assert rebinds == {"dumpex.output.records": {
+        "_require_nonneg_int": ["tests/unit/test_sample.py"]}}
+    reported = unreachable_rebinds(rebinds, load_golden(capture.SURFACE_STRUCTURE))
+    assert len(reported) == 1
+    assert reported[0].startswith(
+        "tests/unit/test_sample.py: dumpex.output.records._require_nonneg_int is read from [")
+    assert "'dumpex.output.records.extraction'" in reported[0]
 
 
 def test_every_baseline_consumer_name_still_resolves(baseline_consumers):

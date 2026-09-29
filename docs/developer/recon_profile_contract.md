@@ -4,9 +4,9 @@ Status: **implemented**. `--profile` is a released command in the current CLI
 and is part of schema v2.13.
 
 This document is the normative contract for the `--profile`
-evidence-capability-map command. `dumpex/commands/profile.py`,
-`dumpex/output/records.py`'s
-`ProfileRecord` family, and the `PROFILE_*` entries in
+evidence-capability-map command. `dumpex/commands/profile.py`, the
+`ProfileRecord` family in `dumpex/output/records/profile.py` and
+`dumpex/output/records/capabilities.py`, and the `PROFILE_*` entries in
 `dumpex/output/coverage.py` implement against **this file alone**.
 
 `--profile` is not a detector:
@@ -88,7 +88,8 @@ underlying activity is absent.
   two are never conflated (§2.2, §3.2).
 - Every closed-vocabulary field (`parser_state`, `status`, `code`) is
   validated at construction time by the record's own `__post_init__` —
-  never left to caller discipline (see `dumpex/output/records.py`).
+  never left to caller discipline (see `dumpex/output/records/profile.py`
+  and `dumpex/output/records/capabilities.py`).
 
 ---
 
@@ -368,7 +369,7 @@ type is ambiguous (§2.4, checked *before* consulting its
 `"absent"` otherwise.
 
 Enforced at construction time by `ProfileCapabilityEntry.__post_init__`
-(`dumpex/output/records.py`) — a caller cannot construct
+(`dumpex/output/records/capabilities.py`) — a caller cannot construct
 `status="available"` while still attaching a `REQUIRED_SOURCE_*`
 limitation, or `status="unavailable"` with none at all. A limitation's
 `source` must be one of the capability's own `required_sources ∪

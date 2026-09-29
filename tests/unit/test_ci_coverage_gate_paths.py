@@ -1,6 +1,7 @@
 """
 Every `coverage report --include="<path>"` line in the CI workflow's
-"Coverage gate" step must name a file that still exists in the repo --
+"Coverage gate" step must name a file that still exists in the repo, or a
+glob pattern matching at least one such file (a package gated as a whole) --
 `coverage report --include=<missing path>` prints "No data to report."
 and exits 1 under the workflow's own `shell: bash` fail-fast semantics
 (see .github/workflows/tests.yml's own comment: "Use the same fail-fast
@@ -34,8 +35,14 @@ def test_workflow_is_reachable():
     assert len(_gated_paths()) > 50
 
 
+def _gate_matches_a_file(path: str) -> bool:
+    if any(c in path for c in "*?["):
+        return any(p.is_file() for p in _REPO_ROOT.glob(path))
+    return (_REPO_ROOT / path).is_file()
+
+
 def test_every_coverage_gate_path_exists():
-    missing = [path for path in _gated_paths() if not (_REPO_ROOT / path).is_file()]
+    missing = [path for path in _gated_paths() if not _gate_matches_a_file(path)]
     assert not missing, (
         f"{len(missing)} coverage-gate --include path(s) in "
         f"{_WORKFLOW.relative_to(_REPO_ROOT)} name a file that no longer exists "

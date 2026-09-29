@@ -48,7 +48,7 @@ def collect_diff(mf_target, mf_baseline, mode: str = "all") -> CommandResult:
 
 
 def _int_or(hex_str, default: int = 0) -> int:
-    """Parses one of records.py's fixed-16-digit hex_address() strings
+    """Parses one of dumpex.output.records' fixed-16-digit hex_address() strings
     back into a plain int -- needed wherever diff's OWN console has
     always used VARIABLE-width hex (`0x{n:x}`, not `0x{n:016x}`), unlike
     every other wire-format address string. `default` reproduces the

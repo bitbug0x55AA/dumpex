@@ -118,6 +118,8 @@ class _FileScanner(ast.NodeVisitor):
         self.module_aliases = {}       # local name -> any dumpex module
         self.uses = set()              # (target, name, kind)
         self.foreign = set()           # (other dumpex module, attribute, kind)
+        self.rebinds = set()           # (target, name): the module attribute itself
+                                       # replaced, not an object patched through it
 
     # -- aliases --------------------------------------------------------
 
@@ -159,6 +161,7 @@ class _FileScanner(ast.NodeVisitor):
         target = self._target_of(module_node)
         if target is not None:
             self.uses.add((target, attribute, kind))
+            self.rebinds.add((target, attribute))
             return
         module = self._dumpex_module_of(module_node)
         if module is not None:
@@ -199,6 +202,7 @@ class _FileScanner(ast.NodeVisitor):
                 split = _split_dotted(first.value, TARGET_MODULES)
                 if split:
                     self.uses.add((split[0], split[1], "patch"))
+                    self.rebinds.add(split)
                 elif _is_dumpex_module_path(first.value) and "." in first.value:
                     module, _, attribute = first.value.rpartition(".")
                     self.foreign.add((module, attribute, "patch"))
@@ -240,6 +244,44 @@ def scan_legacy_patches(root: str = REPO_ROOT) -> dict:
     return {target: sorted(name for name, files in names.items()
                            if any({"patch", "assign"} & set(k) for k in files.values()))
             for target, names in inventory.items()}
+
+
+def scan_legacy_rebinds(root: str = REPO_ROOT) -> dict:
+    """{target module: {name: [relpaths]}} for every test file that
+    replaces the target module's attribute itself -- `setattr(module,
+    "X", ...)`, `module.X = ...`, a dotted-string patch, `delattr` --
+    rather than patching an object reached through it."""
+    out = {}
+    for relpath in python_files(root):
+        if category(relpath) != "tests":
+            continue
+        for target, name in _scan(relpath, root).rebinds:
+            out.setdefault(target, {}).setdefault(name, set()).add(relpath)
+    return {t: {n: sorted(files) for n, files in sorted(names.items())}
+            for t, names in sorted(out.items())}
+
+
+def unreachable_rebinds(rebinds: dict, structures: dict, exempt=()) -> list:
+    """"relpath: target.name" for every rebinding in `rebinds` (see
+    scan_legacy_rebinds) of a name some baseline function reads as a
+    global from a module OTHER than the target -- an owner module it was
+    relocated to. Replacing the legacy attribute never reaches that reader,
+    so a test relying on it observes nothing. `structures` is the
+    surface_structure golden; `exempt` holds (relpath, target, name)
+    triples that replace the legacy attribute for its own sake."""
+    out = []
+    for target, names in rebinds.items():
+        readers = {}
+        for entry in structures.get(target, {}).get("global_resolution", {}).values():
+            if entry["module"] != target:
+                for name in entry["globals"]:
+                    readers.setdefault(name, set()).add(entry["module"])
+        for name, files in names.items():
+            if name not in readers:
+                continue
+            out += [f"{relpath}: {target}.{name} is read from {sorted(readers[name])}"
+                    for relpath in files if (relpath, target, name) not in set(exempt)]
+    return sorted(out)
 
 
 def plain_assignments_to_targets(root: str = REPO_ROOT, exclude=("tests/conftest.py",)) -> list:

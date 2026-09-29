@@ -38,7 +38,7 @@ tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
 collector wiring is tracked follow-up work (see
-dumpex/output/records.py's own module-level comment above HUNTERS).
+dumpex/output/records/hunt_result.py's own module docstring).
 
 Also confirms dumpex-output-v1.1.schema.json, dumpex-output-v2.3.schema.json,
 and dumpex-output-v2.4.schema.json stay byte-identical and functionally

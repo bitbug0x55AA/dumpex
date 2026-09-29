@@ -276,7 +276,7 @@ def test_hunter_record_rejects_bad_findings_shape():
 
 
 # HUNTERS itself is not re-asserted against a second copy of the seven
-# names here -- that assertion can only fail if this file and records.py
+# names here -- that assertion can only fail if this file and hunt_identity.py
 # are edited apart, which no roster change ever does. What HUNTERS has to
 # agree with lives elsewhere and is pinned there instead:
 #   * tests/unit/test_hunter_roster_alignment.py -- the four schema
@@ -352,7 +352,7 @@ def test_obfuscation_details_to_dict():
                               "hidden_pe", "hidden_shellcode"}
 
 
-# ── Additional negative-branch coverage (CI fail-under=95 on records.py) ──
+# ── Additional negative-branch coverage (CI fail-under=95 on dumpex/output/records) ──
 
 def test_region_ref_rejects_empty_type():
     with pytest.raises(ValueError):

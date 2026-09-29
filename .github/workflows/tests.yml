@@ -250,7 +250,7 @@ jobs:
           coverage report --include="dumpex/hunt/yara_hunt/report_record.py"  --fail-under=95
           coverage report --include="dumpex/hunt/yara_hunt/collect.py"        --fail-under=95
           coverage report --include="dumpex/hunt/_context.py"               --fail-under=90
-          coverage report --include="dumpex/output/records.py"       --fail-under=95
+          coverage report --include="dumpex/output/records/*"      --fail-under=95
           coverage report --include="dumpex/output/serializer.py"    --fail-under=95
           coverage report --include="dumpex/output/envelope.py"      --fail-under=85
           coverage report --include="dumpex/output/collector.py"     --fail-under=80

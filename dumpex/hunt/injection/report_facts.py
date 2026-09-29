@@ -22,7 +22,7 @@ from dumpex.output.records import hex_address
 # fixed-width (16 hex digit, zero-padded) convention, matching the
 # verbose renderer (report_console.py) and structured records
 # (report_record.py's `HuntPeHeaderHit.image_base`, itself validated as a
-# hex address by `dumpex.output.records._require_optional_hex_address`)
+# hex address by `dumpex.output.records.common._require_optional_hex_address`)
 # instead of the variable-width `:x` this module used to render them with
 # (see issue #31). `entrypoint_rva` is deliberately excluded -- an RVA is
 # relative to a not-yet-established image base, not itself a memory

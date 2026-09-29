@@ -1983,7 +1983,7 @@
   ],
   "family_consumers": {
    "CoverageReport": {
-    "dumpex/output/records.py": [
+    "dumpex/output/records/hunt_result.py": [
      "from"
     ]
    },
@@ -4388,51 +4388,51 @@
   "global_resolution": {
    "Artifact.__post_init__": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.diagnostics"
    },
    "Artifact.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.diagnostics"
    },
    "CapabilityDefinition.required_sources": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    },
    "CapabilityLimitation.__post_init__": {
     "globals": [
      "_CAPABILITY_LIMITATION_CODES"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    },
    "CapabilityLimitation.to_dict": {
     "globals": [
      "render_capability_limitation"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    },
    "CsBeaconDetails.__post_init__": {
     "globals": [
      "_require_nonneg_int",
      "_require_optional_targeted_scope"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "CsBeaconDetails.to_dict": {
     "globals": [
      "_targeted_scope_dict"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "Diagnostic.__post_init__": {
     "globals": [
      "SEVERITY_ERROR",
      "SEVERITY_WARNING"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.diagnostics"
    },
    "Diagnostic.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.diagnostics"
    },
    "EnrichmentSection.__post_init__": {
     "globals": [
@@ -4444,11 +4444,11 @@
      "_require_nonneg_int",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_common"
    },
    "EnrichmentSection.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_common"
    },
    "ExtractRecord.__post_init__": {
     "globals": [
@@ -4457,11 +4457,11 @@
      "_require_hex_address",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.extraction"
    },
    "ExtractRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.extraction"
    },
    "HandleRecord.__post_init__": {
     "globals": [
@@ -4469,11 +4469,11 @@
      "_require_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.handles"
    },
    "HandleRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.handles"
    },
    "HollowingDetails.__post_init__": {
     "globals": [
@@ -4481,11 +4481,11 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "HollowingDetails.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "HuntPeHeaderHit.__post_init__": {
     "globals": [
@@ -4494,11 +4494,11 @@
      "_require_nonneg_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntPeHeaderHit.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntRegionRef.__post_init__": {
     "globals": [
@@ -4506,33 +4506,33 @@
      "_require_nonneg_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntRegionRef.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntThreadRef.__post_init__": {
     "globals": [
      "_require_nonneg_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntThreadRef.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntThreadRegionHit.__post_init__": {
     "globals": [
      "HuntRegionRef",
      "HuntThreadRef"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HuntThreadRegionHit.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "HunterRecord.__post_init__": {
     "globals": [
@@ -4545,11 +4545,11 @@
      "_HUNT_VERDICT_LEVELS",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_result"
    },
    "HunterRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_result"
    },
    "IatRecord.__post_init__": {
     "globals": [
@@ -4559,11 +4559,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "IatRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ImportEntryRecord.__post_init__": {
     "globals": [
@@ -4571,11 +4571,11 @@
      "_require_optional_diff_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ImportEntryRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "InjectionDetails.__post_init__": {
     "globals": [
@@ -4586,11 +4586,11 @@
      "_require_hex_address",
      "_require_list_of"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "InjectionDetails.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "MemoryDiffRecord.__post_init__": {
     "globals": [
@@ -4602,15 +4602,15 @@
      "_require_optional_diff_int",
      "_require_optional_diff_str"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "MemoryDiffRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "MemoryRegionRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "ModuleDiffRecord.__post_init__": {
     "globals": [
@@ -4620,27 +4620,27 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "ModuleDiffRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "ModuleRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "ObfuscationDetails.__post_init__": {
     "globals": [
      "_require_optional_targeted_scope"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "ObfuscationDetails.to_dict": {
     "globals": [
      "_targeted_scope_dict"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "PeObservationRecord.__post_init__": {
     "globals": [
@@ -4648,34 +4648,34 @@
      "PE_OBSERVATION_STATES",
      "_require_bounded_text"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.pe_observation"
    },
    "PeObservationRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.pe_observation"
    },
    "PipeDetails.__post_init__": {
     "globals": [
      "_require_optional_targeted_scope"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "PipeDetails.to_dict": {
     "globals": [
      "_targeted_scope_dict"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "ProcessDiagnosticRecord.__post_init__": {
     "globals": [
      "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
      "_PROCESS_DIAGNOSTIC_SEVERITIES"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ProcessDiagnosticRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ProcessPeAcquisitionRecord.__post_init__": {
     "globals": [
@@ -4689,11 +4689,11 @@
      "_require_optional_enum",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeAcquisitionRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeDirectoryRecord.__post_init__": {
     "globals": [
@@ -4705,11 +4705,11 @@
      "_require_optional_enum",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeDirectoryRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeEntryPointRecord.__post_init__": {
     "globals": [
@@ -4720,11 +4720,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeEntryPointRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord.__post_init__": {
     "globals": [
@@ -4745,28 +4745,28 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_collected": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_correlated": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_directory_summary": {
     "globals": [
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_observation_coverage": {
     "globals": [
      "PE_OBSERVATION_STATES",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_relocation": {
     "globals": [
@@ -4774,21 +4774,21 @@
      "_require_bool",
      "_require_optional_enum"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord._check_uncollected": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeRecord.uncollected": {
     "globals": [
      "ProcessPeEntryPointRecord"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeSectionRecord.__post_init__": {
     "globals": [
@@ -4799,11 +4799,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessPeSectionRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "ProcessRecord.__post_init__": {
     "globals": [
@@ -4812,13 +4812,13 @@
      "_require_optional_diff_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ProcessRecord.to_dict": {
     "globals": [
      "copy"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process"
    },
    "ProfileCapabilityEntry.__post_init__": {
     "globals": [
@@ -4833,22 +4833,22 @@
      "_REQUIRED_LIMITATION_CODES",
      "_TRUNCATED_LIMITATION_CODES"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    },
    "ProfileCapabilityEntry.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    },
    "ProfileMemoryCapture.__post_init__": {
     "globals": [
      "_require_bool",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ProfileMemoryCapture.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ProfileRecord.__post_init__": {
     "globals": [
@@ -4858,11 +4858,11 @@
      "ProfileStreamEntry",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ProfileRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ProfileStreamEntry.__post_init__": {
     "globals": [
@@ -4873,11 +4873,11 @@
      "_require_optional_nonneg_int",
      "_require_optional_str"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ProfileStreamEntry.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "ReportAddressContext.__post_init__": {
     "globals": [
@@ -4888,11 +4888,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportAddressContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportAllocationNeighborhood.__post_init__": {
     "globals": [
@@ -4901,11 +4901,11 @@
      "_require_enrichment_section",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportAllocationNeighborhood.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportAnchorPeContext.__post_init__": {
     "globals": [
@@ -4920,11 +4920,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_pe"
    },
    "ReportAnchorPeContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_pe"
    },
    "ReportBranchTarget.__post_init__": {
     "globals": [
@@ -4936,11 +4936,11 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportBranchTarget.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportCorrelatedHandle.__post_init__": {
     "globals": [
@@ -4953,11 +4953,11 @@
      "_require_optional_diff_int",
      "_require_optional_diff_str"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportCorrelatedHandle.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportDecodedInstruction.__post_init__": {
     "globals": [
@@ -4968,11 +4968,11 @@
      "_require_hex_address",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportDecodedInstruction.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportEnvironmentSummary.__post_init__": {
     "globals": [
@@ -4980,11 +4980,11 @@
      "ReportEnvironmentValue",
      "_require_enrichment_section"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportEnvironmentSummary.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportEnvironmentValue.__post_init__": {
     "globals": [
@@ -4992,11 +4992,11 @@
      "_require_bool",
      "_require_bounded_text"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportEnvironmentValue.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportExceptionContext.__post_init__": {
     "globals": [
@@ -5004,11 +5004,11 @@
      "ReportExceptionEntry",
      "_require_enrichment_section"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportExceptionContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportExceptionEntry.__post_init__": {
     "globals": [
@@ -5021,11 +5021,11 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportExceptionEntry.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportHandleCorrelation.__post_init__": {
     "globals": [
@@ -5033,11 +5033,11 @@
      "ReportCorrelatedHandle",
      "_require_enrichment_section"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportHandleCorrelation.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportHandleSummary.__post_init__": {
     "globals": [
@@ -5047,11 +5047,11 @@
      "_require_enrichment_section",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportHandleSummary.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportHandleTypeCount.__post_init__": {
     "globals": [
@@ -5060,11 +5060,11 @@
      "_require_bounded_text",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportHandleTypeCount.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportIatCorrelatedEntry.__post_init__": {
     "globals": [
@@ -5077,11 +5077,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_iat"
    },
    "ReportIatCorrelatedEntry.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_iat"
    },
    "ReportIatCorrelation.__post_init__": {
     "globals": [
@@ -5094,11 +5094,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_iat"
    },
    "ReportIatCorrelation.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_iat"
    },
    "ReportIdentityConflict.__post_init__": {
     "globals": [
@@ -5106,11 +5106,11 @@
      "IDENTITY_CONFLICT_SEVERITIES",
      "_require_bounded_text"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportIdentityConflict.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportInstructionContext.__post_init__": {
     "globals": [
@@ -5128,11 +5128,11 @@
      "_require_nonneg_int",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportInstructionContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportInstructionLead.__post_init__": {
     "globals": [
@@ -5143,7 +5143,7 @@
      "_require_hex_address",
      "_require_optional_bounded_text"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_instruction"
    },
    "ReportIocString.__post_init__": {
     "globals": [
@@ -5152,11 +5152,11 @@
      "_require_hex_address",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportIocString.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportNeighborRegion.__post_init__": {
     "globals": [
@@ -5168,11 +5168,11 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportNeighborRegion.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportPeContext.__post_init__": {
     "globals": [
@@ -5188,11 +5188,11 @@
      "_require_optional_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_pe"
    },
    "ReportPeContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_pe"
    },
    "ReportProcessEnrichment.__post_init__": {
     "globals": [
@@ -5209,11 +5209,11 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportProcessEnrichment.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportRegionInfo.__post_init__": {
     "globals": [
@@ -5230,11 +5230,11 @@
      "has_executable_protection",
      "is_private_memory_type"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportRegionInfo.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportStringContext.__post_init__": {
     "globals": [
@@ -5246,11 +5246,11 @@
      "_require_hex_address",
      "_require_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportStringContext.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportStringContextEntry.__post_init__": {
     "globals": [
@@ -5263,11 +5263,11 @@
      "_require_nonneg_int",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportStringContextEntry.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_context"
    },
    "ReportThreadInfo.__post_init__": {
     "globals": [
@@ -5280,11 +5280,11 @@
      "_require_optional_hex_address",
      "_require_thread_info_states"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportThreadInfo.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_thread"
    },
    "ReportTokenCapability.__post_init__": {
     "globals": [
@@ -5294,23 +5294,23 @@
      "_require_bool",
      "_require_bounded_text"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "ReportTokenCapability.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_process"
    },
    "StompingDetails.__post_init__": {
     "globals": [
      "_require_optional_targeted_scope"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "StompingDetails.to_dict": {
     "globals": [
      "_targeted_scope_dict"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "StringRecord.__post_init__": {
     "globals": [
@@ -5319,26 +5319,26 @@
      "_require_nonneg_int",
      "_require_optional_diff_bool"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.extraction"
    },
    "StringRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.extraction"
    },
    "SysInfoRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "TargetedMeasurement.__post_init__": {
     "globals": [
      "_MEASUREMENT_UNITS",
      "_require_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "TargetedMeasurement.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "TargetedScopeRecord.__post_init__": {
     "globals": [
@@ -5348,11 +5348,11 @@
      "_require_hex_address",
      "_require_optional_nonneg_int"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "TargetedScopeRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "ThreadDiffRecord.__post_init__": {
     "globals": [
@@ -5363,22 +5363,22 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "ThreadDiffRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.comparison"
    },
    "ThreadRecord.__post_init__": {
     "globals": [
      "_require_optional_hex_address",
      "_require_thread_info_states"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "ThreadRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "TriageCardRecord.__post_init__": {
     "globals": [
@@ -5404,94 +5404,94 @@
      "_require_optional_diff_str",
      "_require_optional_hex_address"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_card"
    },
    "TriageCardRecord.to_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_card"
    },
    "YaraDetails.__post_init__": {
     "globals": [
      "_require_optional_targeted_scope"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "YaraDetails.to_dict": {
     "globals": [
      "_targeted_scope_dict"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_details"
    },
    "_require_bool": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_bounded_text": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_enrichment_section": {
     "globals": [
      "EnrichmentSection"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_common"
    },
    "_require_hex_address": {
     "globals": [
      "_HEX_ADDRESS_RE"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_list_of": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "_require_nonneg_int": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_bounded_text": {
     "globals": [
      "ENRICHMENT_TEXT_CAP"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.report_common"
    },
    "_require_optional_diff_bool": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_diff_int": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_diff_str": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_enum": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.process_pe"
    },
    "_require_optional_hex_address": {
     "globals": [
      "_HEX_ADDRESS_RE"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_nonneg_int": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "_require_optional_str": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.profile"
    },
    "_require_optional_targeted_scope": {
     "globals": [
      "TargetedScopeRecord",
      "_require_list_of"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "_require_thread_info_states": {
     "globals": [
@@ -5503,11 +5503,11 @@
      "_START_ADDRESS_STATES_WITH_ADDRESS",
      "_START_ADDRESS_STATE_FLAGS_STATE"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.base"
    },
    "_targeted_scope_dict": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.hunt_scope"
    },
    "handle_name_display": {
     "globals": [
@@ -5515,448 +5515,391 @@
      "HANDLE_NAME_STATUS_LABELS",
      "HANDLE_RESERVED_NAME_LABELS"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.handles"
    },
    "hex_address": {
     "globals": [],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.common"
    },
    "render_capability_limitation": {
     "globals": [
      "CAPABILITY_SOURCE_DISPLAY_NAMES",
      "_CAPABILITY_LIMITATION_TEMPLATES"
     ],
-    "module": "dumpex.output.records"
+    "module": "dumpex.output.records.capabilities"
    }
   },
-  "legacy_defines": [
-   "hex_address",
-   "MemoryRegionRecord",
-   "ModuleRecord",
-   "MODULE_CONTEXT_RESOLVED",
-   "MODULE_CONTEXT_UNREGISTERED",
-   "MODULE_CONTEXT_UNAVAILABLE",
-   "START_ADDRESS_RECORDED",
-   "START_ADDRESS_INVALID",
-   "START_ADDRESS_UNVERIFIED",
-   "START_ADDRESS_ABSENT",
-   "_START_ADDRESS_STATES",
-   "DUMP_FLAGS_RESOLVED",
-   "DUMP_FLAGS_UNRESOLVED",
-   "DUMP_FLAGS_ABSENT",
-   "_DUMP_FLAGS_STATES",
-   "_START_ADDRESS_STATE_FLAGS_STATE",
-   "_START_ADDRESS_STATES_WITH_ADDRESS",
-   "_START_ADDRESS_STATES_WITHOUT_ADDRESS",
-   "_require_thread_info_states",
-   "ThreadRecord",
-   "SysInfoRecord",
-   "_require_nonneg_int",
-   "_require_bool",
-   "_require_hex_address",
-   "_STRING_RECORD_ENCODINGS",
-   "ExtractRecord",
-   "StringRecord",
-   "_HEX_ADDRESS_RE",
-   "_require_optional_hex_address",
-   "_require_optional_diff_str",
-   "_require_optional_diff_int",
-   "_require_optional_diff_bool",
-   "MODULE_DIFF_ADDED",
-   "MODULE_DIFF_REMOVED",
-   "MODULE_DIFF_REBASED",
-   "_MODULE_DIFF_CHANGE_TYPES",
-   "ModuleDiffRecord",
-   "THREAD_DIFF_ADDED",
-   "THREAD_DIFF_REMOVED",
-   "_THREAD_DIFF_CHANGE_TYPES",
-   "_MODULE_CONTEXTS",
-   "ThreadDiffRecord",
-   "MEMORY_DIFF_ADDED",
-   "MEMORY_DIFF_REMOVED",
-   "MEMORY_DIFF_PROTECTION_CHANGED",
-   "_MEMORY_DIFF_CHANGE_TYPES",
-   "MemoryDiffRecord",
-   "SEVERITY_WARNING",
-   "SEVERITY_ERROR",
-   "Diagnostic",
-   "Artifact",
-   "TRIAGE_ANCHOR_TID",
-   "TRIAGE_ANCHOR_ADDRESS",
-   "TRIAGE_ANCHOR_STRING_HIT",
-   "TRIAGE_ANCHOR_TID_CURRENT_IP",
-   "_TRIAGE_ANCHOR_SOURCES",
-   "_TRIAGE_VERDICTS",
-   "_TRIAGE_FINDING_KEYS",
-   "REGION_MEMBERSHIP_START",
-   "REGION_MEMBERSHIP_CURRENT",
-   "REGION_MEMBERSHIP_START_AND_CURRENT",
-   "_REGION_MEMBERSHIP_REASONS",
-   "ReportThreadInfo",
-   "_PE_HEADER_STATES",
-   "ReportRegionInfo",
-   "ReportIocString",
-   "ENRICHMENT_MISSING",
-   "ENRICHMENT_PARTIAL",
-   "ENRICHMENT_COMPLETE",
-   "_ENRICHMENT_STATES",
-   "ENRICHMENT_SCOPE_PROCESS",
-   "ENRICHMENT_SCOPE_CARD",
-   "_ENRICHMENT_SCOPES",
-   "EnrichmentSection",
-   "_require_enrichment_section",
-   "_require_optional_bounded_text",
-   "_require_bounded_text",
-   "ENRICHMENT_TEXT_CAP",
-   "ReportEnvironmentValue",
-   "ReportEnvironmentSummary",
-   "ReportHandleTypeCount",
-   "ReportHandleSummary",
-   "TOKEN_CAPABILITY_STATUSES",
-   "ReportTokenCapability",
-   "IDENTITY_CONFLICT_SEVERITIES",
-   "ReportIdentityConflict",
-   "ReportProcessEnrichment",
-   "ACCESS_VIOLATION_TYPES",
-   "ReportAddressContext",
-   "EXCEPTION_SELECTION_REASONS",
-   "ReportExceptionEntry",
-   "ReportExceptionContext",
-   "NEIGHBOR_RELATIONS",
-   "ReportNeighborRegion",
-   "ReportAllocationNeighborhood",
-   "HANDLE_SELECTION_REASONS",
-   "ReportCorrelatedHandle",
-   "ReportHandleCorrelation",
-   "STRING_CONTEXT_SELECTION_REASONS",
-   "ReportStringContextEntry",
-   "ReportStringContext",
-   "PE_OBSERVATION_STATES",
-   "PeObservationRecord",
-   "PE_MODULE_MATCH_STATES",
-   "ReportPeContext",
-   "ANCHOR_PE_CLASSIFICATIONS",
-   "ANCHOR_PE_REGISTRATIONS",
-   "ReportAnchorPeContext",
-   "INSTRUCTION_ANCHOR_SOURCES",
-   "INSTRUCTION_DECODER_STATES",
-   "INSTRUCTION_BRANCH_KINDS",
-   "INSTRUCTION_LEAD_NAMES",
-   "INSTRUCTION_LEAD_SIGNALS",
-   "MAX_INSTRUCTION_LEAD_EVIDENCE",
-   "MAX_INSTRUCTION_LEAD_LIMITATIONS",
-   "BRANCH_TARGET_KINDS",
-   "ReportInstructionLead",
-   "ReportDecodedInstruction",
-   "ReportBranchTarget",
-   "ReportInstructionContext",
-   "IAT_IMPORT_BY",
-   "IAT_ENTRY_SELECTION_REASONS",
-   "ReportIatCorrelatedEntry",
-   "ReportIatCorrelation",
-   "TriageCardRecord",
-   "HUNTERS",
-   "_HUNT_STATUSES",
-   "_HUNT_VERDICT_LEVELS",
-   "_HUNT_CONFIDENCES",
-   "_HUNT_REVIEW_PRIORITIES",
-   "_require_list_of",
-   "_CAPTURE_STATES",
-   "_COVERAGE_STATUSES",
-   "_MEASUREMENT_UNITS",
-   "TargetedMeasurement",
-   "TargetedScopeRecord",
-   "_require_optional_targeted_scope",
-   "_targeted_scope_dict",
-   "HuntRegionRef",
-   "HuntThreadRef",
-   "HuntThreadRegionHit",
-   "HuntPeHeaderHit",
-   "InjectionDetails",
-   "HollowingDetails",
-   "StompingDetails",
-   "PipeDetails",
-   "CsBeaconDetails",
-   "YaraDetails",
-   "ObfuscationDetails",
-   "_HUNTER_DETAILS_TYPES",
-   "HunterRecord",
-   "_IMPORT_BY_VALUES",
-   "_PROCESS_DIAGNOSTIC_SEVERITIES",
-   "_require_optional_nonneg_int",
-   "ImportEntryRecord",
-   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
-   "ProcessDiagnosticRecord",
-   "IatRecord",
-   "PROCESS_PE_COMPONENT_STATES",
-   "PROCESS_PE_COMPONENTS",
-   "PROCESS_PE_STAGES",
-   "PROCESS_PE_SOURCE_KINDS",
-   "PROCESS_PE_FORMATS",
-   "PROCESS_PE_CAPTURE_STATES",
-   "PROCESS_PE_UNAVAILABLE_REASONS",
-   "PROCESS_PE_TABLE_STATES",
-   "PROCESS_PE_UNUSABLE_TABLE_STATES",
-   "PROCESS_PE_VALUE_KINDS",
-   "PROCESS_PE_IDENTITY_FORMS",
-   "_require_optional_enum",
-   "ProcessPeSectionRecord",
-   "ProcessPeDirectoryRecord",
-   "_ENTRY_POINT_RESOLVED_FIELDS",
-   "ProcessPeEntryPointRecord",
-   "ProcessPeAcquisitionRecord",
-   "ProcessPeRecord",
-   "ProcessRecord",
-   "HANDLE_NAME_STATUSES",
-   "HANDLE_NAME_STATUS_LABELS",
-   "HANDLE_RESERVED_NAME_LABELS",
-   "HANDLE_CAPTURED_NAME_SUFFIX",
-   "handle_name_display",
-   "HandleRecord",
-   "StreamParserState",
-   "_STREAM_PARSER_STATES",
-   "_STREAM_STATE_FORBIDS_COUNT",
-   "ProfileStreamEntry",
-   "_require_optional_str",
-   "ProfileMemoryCapture",
-   "CapabilityStatus",
-   "_CAPABILITY_STATUSES",
-   "CapabilityDefinition",
-   "CAPABILITY_REGISTRY",
-   "CAPABILITY_IDS",
-   "CAPABILITY_BY_ID",
-   "CapabilityLimitationCode",
-   "_CAPABILITY_LIMITATION_CODES",
-   "_REQUIRED_LIMITATION_CODES",
-   "_OPTIONAL_LIMITATION_CODES",
-   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES",
-   "_TRUNCATED_LIMITATION_CODES",
-   "CAPABILITY_SOURCE_DISPLAY_NAMES",
-   "_CAPABILITY_LIMITATION_TEMPLATES",
-   "render_capability_limitation",
-   "CapabilityLimitation",
-   "ProfileCapabilityEntry",
-   "ProfileRecord"
-  ],
+  "legacy_defines": [],
   "legacy_imports": {
-   "CoverageReport": "dumpex.output.coverage:CoverageReport",
-   "Enum": "enum:Enum",
-   "MappingProxyType": "types:MappingProxyType",
-   "copy": "copy",
-   "dataclass": "dataclasses:dataclass",
-   "field": "dataclasses:field",
-   "has_executable_protection": "dumpex.core.pe_utils:has_executable_protection",
-   "is_private_memory_type": "dumpex.core.pe_utils:is_private_memory_type",
-   "re": "re"
+   "ACCESS_VIOLATION_TYPES": "dumpex.output.records.report_context:ACCESS_VIOLATION_TYPES",
+   "ANCHOR_PE_CLASSIFICATIONS": "dumpex.output.records.report_pe:ANCHOR_PE_CLASSIFICATIONS",
+   "ANCHOR_PE_REGISTRATIONS": "dumpex.output.records.report_pe:ANCHOR_PE_REGISTRATIONS",
+   "Artifact": "dumpex.output.records.diagnostics:Artifact",
+   "BRANCH_TARGET_KINDS": "dumpex.output.records.report_instruction:BRANCH_TARGET_KINDS",
+   "CAPABILITY_BY_ID": "dumpex.output.records.capabilities:CAPABILITY_BY_ID",
+   "CAPABILITY_IDS": "dumpex.output.records.capabilities:CAPABILITY_IDS",
+   "CAPABILITY_REGISTRY": "dumpex.output.records.capabilities:CAPABILITY_REGISTRY",
+   "CAPABILITY_SOURCE_DISPLAY_NAMES": "dumpex.output.records.capabilities:CAPABILITY_SOURCE_DISPLAY_NAMES",
+   "CapabilityDefinition": "dumpex.output.records.capabilities:CapabilityDefinition",
+   "CapabilityLimitation": "dumpex.output.records.capabilities:CapabilityLimitation",
+   "CapabilityLimitationCode": "dumpex.output.records.capabilities:CapabilityLimitationCode",
+   "CapabilityStatus": "dumpex.output.records.capabilities:CapabilityStatus",
+   "CsBeaconDetails": "dumpex.output.records.hunt_details:CsBeaconDetails",
+   "DUMP_FLAGS_ABSENT": "dumpex.output.records.base:DUMP_FLAGS_ABSENT",
+   "DUMP_FLAGS_RESOLVED": "dumpex.output.records.base:DUMP_FLAGS_RESOLVED",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.output.records.base:DUMP_FLAGS_UNRESOLVED",
+   "Diagnostic": "dumpex.output.records.diagnostics:Diagnostic",
+   "ENRICHMENT_COMPLETE": "dumpex.output.records.report_common:ENRICHMENT_COMPLETE",
+   "ENRICHMENT_MISSING": "dumpex.output.records.report_common:ENRICHMENT_MISSING",
+   "ENRICHMENT_PARTIAL": "dumpex.output.records.report_common:ENRICHMENT_PARTIAL",
+   "ENRICHMENT_SCOPE_CARD": "dumpex.output.records.report_common:ENRICHMENT_SCOPE_CARD",
+   "ENRICHMENT_SCOPE_PROCESS": "dumpex.output.records.report_common:ENRICHMENT_SCOPE_PROCESS",
+   "ENRICHMENT_TEXT_CAP": "dumpex.output.records.common:ENRICHMENT_TEXT_CAP",
+   "EXCEPTION_SELECTION_REASONS": "dumpex.output.records.report_context:EXCEPTION_SELECTION_REASONS",
+   "EnrichmentSection": "dumpex.output.records.report_common:EnrichmentSection",
+   "ExtractRecord": "dumpex.output.records.extraction:ExtractRecord",
+   "HANDLE_CAPTURED_NAME_SUFFIX": "dumpex.output.records.handles:HANDLE_CAPTURED_NAME_SUFFIX",
+   "HANDLE_NAME_STATUSES": "dumpex.output.records.handles:HANDLE_NAME_STATUSES",
+   "HANDLE_NAME_STATUS_LABELS": "dumpex.output.records.handles:HANDLE_NAME_STATUS_LABELS",
+   "HANDLE_RESERVED_NAME_LABELS": "dumpex.output.records.handles:HANDLE_RESERVED_NAME_LABELS",
+   "HANDLE_SELECTION_REASONS": "dumpex.output.records.report_context:HANDLE_SELECTION_REASONS",
+   "HUNTERS": "dumpex.output.records.hunt_identity:HUNTERS",
+   "HandleRecord": "dumpex.output.records.handles:HandleRecord",
+   "HollowingDetails": "dumpex.output.records.hunt_details:HollowingDetails",
+   "HuntPeHeaderHit": "dumpex.output.records.hunt_scope:HuntPeHeaderHit",
+   "HuntRegionRef": "dumpex.output.records.hunt_scope:HuntRegionRef",
+   "HuntThreadRef": "dumpex.output.records.hunt_scope:HuntThreadRef",
+   "HuntThreadRegionHit": "dumpex.output.records.hunt_scope:HuntThreadRegionHit",
+   "HunterRecord": "dumpex.output.records.hunt_result:HunterRecord",
+   "IAT_ENTRY_SELECTION_REASONS": "dumpex.output.records.report_iat:IAT_ENTRY_SELECTION_REASONS",
+   "IAT_IMPORT_BY": "dumpex.output.records.report_iat:IAT_IMPORT_BY",
+   "IDENTITY_CONFLICT_SEVERITIES": "dumpex.output.records.report_process:IDENTITY_CONFLICT_SEVERITIES",
+   "INSTRUCTION_ANCHOR_SOURCES": "dumpex.output.records.report_instruction:INSTRUCTION_ANCHOR_SOURCES",
+   "INSTRUCTION_BRANCH_KINDS": "dumpex.output.records.report_instruction:INSTRUCTION_BRANCH_KINDS",
+   "INSTRUCTION_DECODER_STATES": "dumpex.output.records.report_instruction:INSTRUCTION_DECODER_STATES",
+   "INSTRUCTION_LEAD_NAMES": "dumpex.output.records.report_instruction:INSTRUCTION_LEAD_NAMES",
+   "INSTRUCTION_LEAD_SIGNALS": "dumpex.output.records.report_instruction:INSTRUCTION_LEAD_SIGNALS",
+   "IatRecord": "dumpex.output.records.process:IatRecord",
+   "ImportEntryRecord": "dumpex.output.records.process:ImportEntryRecord",
+   "InjectionDetails": "dumpex.output.records.hunt_details:InjectionDetails",
+   "MAX_INSTRUCTION_LEAD_EVIDENCE": "dumpex.output.records.report_instruction:MAX_INSTRUCTION_LEAD_EVIDENCE",
+   "MAX_INSTRUCTION_LEAD_LIMITATIONS": "dumpex.output.records.report_instruction:MAX_INSTRUCTION_LEAD_LIMITATIONS",
+   "MEMORY_DIFF_ADDED": "dumpex.output.records.comparison:MEMORY_DIFF_ADDED",
+   "MEMORY_DIFF_PROTECTION_CHANGED": "dumpex.output.records.comparison:MEMORY_DIFF_PROTECTION_CHANGED",
+   "MEMORY_DIFF_REMOVED": "dumpex.output.records.comparison:MEMORY_DIFF_REMOVED",
+   "MODULE_CONTEXT_RESOLVED": "dumpex.output.records.base:MODULE_CONTEXT_RESOLVED",
+   "MODULE_CONTEXT_UNAVAILABLE": "dumpex.output.records.base:MODULE_CONTEXT_UNAVAILABLE",
+   "MODULE_CONTEXT_UNREGISTERED": "dumpex.output.records.base:MODULE_CONTEXT_UNREGISTERED",
+   "MODULE_DIFF_ADDED": "dumpex.output.records.comparison:MODULE_DIFF_ADDED",
+   "MODULE_DIFF_REBASED": "dumpex.output.records.comparison:MODULE_DIFF_REBASED",
+   "MODULE_DIFF_REMOVED": "dumpex.output.records.comparison:MODULE_DIFF_REMOVED",
+   "MemoryDiffRecord": "dumpex.output.records.comparison:MemoryDiffRecord",
+   "MemoryRegionRecord": "dumpex.output.records.base:MemoryRegionRecord",
+   "ModuleDiffRecord": "dumpex.output.records.comparison:ModuleDiffRecord",
+   "ModuleRecord": "dumpex.output.records.base:ModuleRecord",
+   "NEIGHBOR_RELATIONS": "dumpex.output.records.report_context:NEIGHBOR_RELATIONS",
+   "ObfuscationDetails": "dumpex.output.records.hunt_details:ObfuscationDetails",
+   "PE_MODULE_MATCH_STATES": "dumpex.output.records.report_pe:PE_MODULE_MATCH_STATES",
+   "PE_OBSERVATION_STATES": "dumpex.output.records.pe_observation:PE_OBSERVATION_STATES",
+   "PROCESS_PE_CAPTURE_STATES": "dumpex.output.records.process_pe:PROCESS_PE_CAPTURE_STATES",
+   "PROCESS_PE_COMPONENTS": "dumpex.output.records.process_pe:PROCESS_PE_COMPONENTS",
+   "PROCESS_PE_COMPONENT_STATES": "dumpex.output.records.process_pe:PROCESS_PE_COMPONENT_STATES",
+   "PROCESS_PE_FORMATS": "dumpex.output.records.process_pe:PROCESS_PE_FORMATS",
+   "PROCESS_PE_IDENTITY_FORMS": "dumpex.output.records.process_pe:PROCESS_PE_IDENTITY_FORMS",
+   "PROCESS_PE_SOURCE_KINDS": "dumpex.output.records.process_pe:PROCESS_PE_SOURCE_KINDS",
+   "PROCESS_PE_STAGES": "dumpex.output.records.process_pe:PROCESS_PE_STAGES",
+   "PROCESS_PE_TABLE_STATES": "dumpex.output.records.process_pe:PROCESS_PE_TABLE_STATES",
+   "PROCESS_PE_UNAVAILABLE_REASONS": "dumpex.output.records.process_pe:PROCESS_PE_UNAVAILABLE_REASONS",
+   "PROCESS_PE_UNUSABLE_TABLE_STATES": "dumpex.output.records.process_pe:PROCESS_PE_UNUSABLE_TABLE_STATES",
+   "PROCESS_PE_VALUE_KINDS": "dumpex.output.records.process_pe:PROCESS_PE_VALUE_KINDS",
+   "PeObservationRecord": "dumpex.output.records.pe_observation:PeObservationRecord",
+   "PipeDetails": "dumpex.output.records.hunt_details:PipeDetails",
+   "ProcessDiagnosticRecord": "dumpex.output.records.process:ProcessDiagnosticRecord",
+   "ProcessPeAcquisitionRecord": "dumpex.output.records.process_pe:ProcessPeAcquisitionRecord",
+   "ProcessPeDirectoryRecord": "dumpex.output.records.process_pe:ProcessPeDirectoryRecord",
+   "ProcessPeEntryPointRecord": "dumpex.output.records.process_pe:ProcessPeEntryPointRecord",
+   "ProcessPeRecord": "dumpex.output.records.process_pe:ProcessPeRecord",
+   "ProcessPeSectionRecord": "dumpex.output.records.process_pe:ProcessPeSectionRecord",
+   "ProcessRecord": "dumpex.output.records.process:ProcessRecord",
+   "ProfileCapabilityEntry": "dumpex.output.records.capabilities:ProfileCapabilityEntry",
+   "ProfileMemoryCapture": "dumpex.output.records.profile:ProfileMemoryCapture",
+   "ProfileRecord": "dumpex.output.records.profile:ProfileRecord",
+   "ProfileStreamEntry": "dumpex.output.records.profile:ProfileStreamEntry",
+   "REGION_MEMBERSHIP_CURRENT": "dumpex.output.records.report_thread:REGION_MEMBERSHIP_CURRENT",
+   "REGION_MEMBERSHIP_START": "dumpex.output.records.report_thread:REGION_MEMBERSHIP_START",
+   "REGION_MEMBERSHIP_START_AND_CURRENT": "dumpex.output.records.report_thread:REGION_MEMBERSHIP_START_AND_CURRENT",
+   "ReportAddressContext": "dumpex.output.records.report_context:ReportAddressContext",
+   "ReportAllocationNeighborhood": "dumpex.output.records.report_context:ReportAllocationNeighborhood",
+   "ReportAnchorPeContext": "dumpex.output.records.report_pe:ReportAnchorPeContext",
+   "ReportBranchTarget": "dumpex.output.records.report_instruction:ReportBranchTarget",
+   "ReportCorrelatedHandle": "dumpex.output.records.report_context:ReportCorrelatedHandle",
+   "ReportDecodedInstruction": "dumpex.output.records.report_instruction:ReportDecodedInstruction",
+   "ReportEnvironmentSummary": "dumpex.output.records.report_process:ReportEnvironmentSummary",
+   "ReportEnvironmentValue": "dumpex.output.records.report_process:ReportEnvironmentValue",
+   "ReportExceptionContext": "dumpex.output.records.report_context:ReportExceptionContext",
+   "ReportExceptionEntry": "dumpex.output.records.report_context:ReportExceptionEntry",
+   "ReportHandleCorrelation": "dumpex.output.records.report_context:ReportHandleCorrelation",
+   "ReportHandleSummary": "dumpex.output.records.report_process:ReportHandleSummary",
+   "ReportHandleTypeCount": "dumpex.output.records.report_process:ReportHandleTypeCount",
+   "ReportIatCorrelatedEntry": "dumpex.output.records.report_iat:ReportIatCorrelatedEntry",
+   "ReportIatCorrelation": "dumpex.output.records.report_iat:ReportIatCorrelation",
+   "ReportIdentityConflict": "dumpex.output.records.report_process:ReportIdentityConflict",
+   "ReportInstructionContext": "dumpex.output.records.report_instruction:ReportInstructionContext",
+   "ReportInstructionLead": "dumpex.output.records.report_instruction:ReportInstructionLead",
+   "ReportIocString": "dumpex.output.records.report_thread:ReportIocString",
+   "ReportNeighborRegion": "dumpex.output.records.report_context:ReportNeighborRegion",
+   "ReportPeContext": "dumpex.output.records.report_pe:ReportPeContext",
+   "ReportProcessEnrichment": "dumpex.output.records.report_process:ReportProcessEnrichment",
+   "ReportRegionInfo": "dumpex.output.records.report_thread:ReportRegionInfo",
+   "ReportStringContext": "dumpex.output.records.report_context:ReportStringContext",
+   "ReportStringContextEntry": "dumpex.output.records.report_context:ReportStringContextEntry",
+   "ReportThreadInfo": "dumpex.output.records.report_thread:ReportThreadInfo",
+   "ReportTokenCapability": "dumpex.output.records.report_process:ReportTokenCapability",
+   "SEVERITY_ERROR": "dumpex.output.records.diagnostics:SEVERITY_ERROR",
+   "SEVERITY_WARNING": "dumpex.output.records.diagnostics:SEVERITY_WARNING",
+   "START_ADDRESS_ABSENT": "dumpex.output.records.base:START_ADDRESS_ABSENT",
+   "START_ADDRESS_INVALID": "dumpex.output.records.base:START_ADDRESS_INVALID",
+   "START_ADDRESS_RECORDED": "dumpex.output.records.base:START_ADDRESS_RECORDED",
+   "START_ADDRESS_UNVERIFIED": "dumpex.output.records.base:START_ADDRESS_UNVERIFIED",
+   "STRING_CONTEXT_SELECTION_REASONS": "dumpex.output.records.report_context:STRING_CONTEXT_SELECTION_REASONS",
+   "StompingDetails": "dumpex.output.records.hunt_details:StompingDetails",
+   "StreamParserState": "dumpex.output.records.stream_state:StreamParserState",
+   "StringRecord": "dumpex.output.records.extraction:StringRecord",
+   "SysInfoRecord": "dumpex.output.records.base:SysInfoRecord",
+   "THREAD_DIFF_ADDED": "dumpex.output.records.comparison:THREAD_DIFF_ADDED",
+   "THREAD_DIFF_REMOVED": "dumpex.output.records.comparison:THREAD_DIFF_REMOVED",
+   "TOKEN_CAPABILITY_STATUSES": "dumpex.output.records.report_process:TOKEN_CAPABILITY_STATUSES",
+   "TRIAGE_ANCHOR_ADDRESS": "dumpex.output.records.report_card:TRIAGE_ANCHOR_ADDRESS",
+   "TRIAGE_ANCHOR_STRING_HIT": "dumpex.output.records.report_card:TRIAGE_ANCHOR_STRING_HIT",
+   "TRIAGE_ANCHOR_TID": "dumpex.output.records.report_card:TRIAGE_ANCHOR_TID",
+   "TRIAGE_ANCHOR_TID_CURRENT_IP": "dumpex.output.records.report_card:TRIAGE_ANCHOR_TID_CURRENT_IP",
+   "TargetedMeasurement": "dumpex.output.records.hunt_scope:TargetedMeasurement",
+   "TargetedScopeRecord": "dumpex.output.records.hunt_scope:TargetedScopeRecord",
+   "ThreadDiffRecord": "dumpex.output.records.comparison:ThreadDiffRecord",
+   "ThreadRecord": "dumpex.output.records.base:ThreadRecord",
+   "TriageCardRecord": "dumpex.output.records.report_card:TriageCardRecord",
+   "YaraDetails": "dumpex.output.records.hunt_details:YaraDetails",
+   "_HUNT_CONFIDENCES": "dumpex.output.records.hunt_identity:_HUNT_CONFIDENCES",
+   "_HUNT_REVIEW_PRIORITIES": "dumpex.output.records.hunt_identity:_HUNT_REVIEW_PRIORITIES",
+   "_MODULE_CONTEXTS": "dumpex.output.records.base:_MODULE_CONTEXTS",
+   "_OPTIONAL_LIMITATION_CODES": "dumpex.output.records.capabilities:_OPTIONAL_LIMITATION_CODES",
+   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA": "dumpex.output.records.process:_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA",
+   "_TRIAGE_FINDING_KEYS": "dumpex.output.records.report_card:_TRIAGE_FINDING_KEYS",
+   "_TRIAGE_VERDICTS": "dumpex.output.records.report_card:_TRIAGE_VERDICTS",
+   "_require_hex_address": "dumpex.output.records.common:_require_hex_address",
+   "_require_nonneg_int": "dumpex.output.records.common:_require_nonneg_int",
+   "handle_name_display": "dumpex.output.records.handles:handle_name_display",
+   "hex_address": "dumpex.output.records.common:hex_address",
+   "render_capability_limitation": "dumpex.output.records.capabilities:render_capability_limitation"
   },
   "owners": {
-   "ACCESS_VIOLATION_TYPES": "dumpex.output.records",
-   "ANCHOR_PE_CLASSIFICATIONS": "dumpex.output.records",
-   "ANCHOR_PE_REGISTRATIONS": "dumpex.output.records",
-   "Artifact": "dumpex.output.records",
-   "BRANCH_TARGET_KINDS": "dumpex.output.records",
-   "CAPABILITY_BY_ID": "dumpex.output.records",
-   "CAPABILITY_IDS": "dumpex.output.records",
-   "CAPABILITY_REGISTRY": "dumpex.output.records",
-   "CAPABILITY_SOURCE_DISPLAY_NAMES": "dumpex.output.records",
-   "CapabilityDefinition": "dumpex.output.records",
-   "CapabilityLimitation": "dumpex.output.records",
-   "CapabilityLimitationCode": "dumpex.output.records",
-   "CapabilityStatus": "dumpex.output.records",
-   "CsBeaconDetails": "dumpex.output.records",
-   "DUMP_FLAGS_ABSENT": "dumpex.output.records",
-   "DUMP_FLAGS_RESOLVED": "dumpex.output.records",
-   "DUMP_FLAGS_UNRESOLVED": "dumpex.output.records",
-   "Diagnostic": "dumpex.output.records",
-   "ENRICHMENT_COMPLETE": "dumpex.output.records",
-   "ENRICHMENT_MISSING": "dumpex.output.records",
-   "ENRICHMENT_PARTIAL": "dumpex.output.records",
-   "ENRICHMENT_SCOPE_CARD": "dumpex.output.records",
-   "ENRICHMENT_SCOPE_PROCESS": "dumpex.output.records",
-   "ENRICHMENT_TEXT_CAP": "dumpex.output.records",
-   "EXCEPTION_SELECTION_REASONS": "dumpex.output.records",
-   "EnrichmentSection": "dumpex.output.records",
-   "ExtractRecord": "dumpex.output.records",
-   "HANDLE_CAPTURED_NAME_SUFFIX": "dumpex.output.records",
-   "HANDLE_NAME_STATUSES": "dumpex.output.records",
-   "HANDLE_NAME_STATUS_LABELS": "dumpex.output.records",
-   "HANDLE_RESERVED_NAME_LABELS": "dumpex.output.records",
-   "HANDLE_SELECTION_REASONS": "dumpex.output.records",
-   "HUNTERS": "dumpex.output.records",
-   "HandleRecord": "dumpex.output.records",
-   "HollowingDetails": "dumpex.output.records",
-   "HuntPeHeaderHit": "dumpex.output.records",
-   "HuntRegionRef": "dumpex.output.records",
-   "HuntThreadRef": "dumpex.output.records",
-   "HuntThreadRegionHit": "dumpex.output.records",
-   "HunterRecord": "dumpex.output.records",
-   "IAT_ENTRY_SELECTION_REASONS": "dumpex.output.records",
-   "IAT_IMPORT_BY": "dumpex.output.records",
-   "IDENTITY_CONFLICT_SEVERITIES": "dumpex.output.records",
-   "INSTRUCTION_ANCHOR_SOURCES": "dumpex.output.records",
-   "INSTRUCTION_BRANCH_KINDS": "dumpex.output.records",
-   "INSTRUCTION_DECODER_STATES": "dumpex.output.records",
-   "INSTRUCTION_LEAD_NAMES": "dumpex.output.records",
-   "INSTRUCTION_LEAD_SIGNALS": "dumpex.output.records",
-   "IatRecord": "dumpex.output.records",
-   "ImportEntryRecord": "dumpex.output.records",
-   "InjectionDetails": "dumpex.output.records",
-   "MAX_INSTRUCTION_LEAD_EVIDENCE": "dumpex.output.records",
-   "MAX_INSTRUCTION_LEAD_LIMITATIONS": "dumpex.output.records",
-   "MEMORY_DIFF_ADDED": "dumpex.output.records",
-   "MEMORY_DIFF_PROTECTION_CHANGED": "dumpex.output.records",
-   "MEMORY_DIFF_REMOVED": "dumpex.output.records",
-   "MODULE_CONTEXT_RESOLVED": "dumpex.output.records",
-   "MODULE_CONTEXT_UNAVAILABLE": "dumpex.output.records",
-   "MODULE_CONTEXT_UNREGISTERED": "dumpex.output.records",
-   "MODULE_DIFF_ADDED": "dumpex.output.records",
-   "MODULE_DIFF_REBASED": "dumpex.output.records",
-   "MODULE_DIFF_REMOVED": "dumpex.output.records",
-   "MemoryDiffRecord": "dumpex.output.records",
-   "MemoryRegionRecord": "dumpex.output.records",
-   "ModuleDiffRecord": "dumpex.output.records",
-   "ModuleRecord": "dumpex.output.records",
-   "NEIGHBOR_RELATIONS": "dumpex.output.records",
-   "ObfuscationDetails": "dumpex.output.records",
-   "PE_MODULE_MATCH_STATES": "dumpex.output.records",
-   "PE_OBSERVATION_STATES": "dumpex.output.records",
-   "PROCESS_PE_CAPTURE_STATES": "dumpex.output.records",
-   "PROCESS_PE_COMPONENTS": "dumpex.output.records",
-   "PROCESS_PE_COMPONENT_STATES": "dumpex.output.records",
-   "PROCESS_PE_FORMATS": "dumpex.output.records",
-   "PROCESS_PE_IDENTITY_FORMS": "dumpex.output.records",
-   "PROCESS_PE_SOURCE_KINDS": "dumpex.output.records",
-   "PROCESS_PE_STAGES": "dumpex.output.records",
-   "PROCESS_PE_TABLE_STATES": "dumpex.output.records",
-   "PROCESS_PE_UNAVAILABLE_REASONS": "dumpex.output.records",
-   "PROCESS_PE_UNUSABLE_TABLE_STATES": "dumpex.output.records",
-   "PROCESS_PE_VALUE_KINDS": "dumpex.output.records",
-   "PeObservationRecord": "dumpex.output.records",
-   "PipeDetails": "dumpex.output.records",
-   "ProcessDiagnosticRecord": "dumpex.output.records",
-   "ProcessPeAcquisitionRecord": "dumpex.output.records",
-   "ProcessPeDirectoryRecord": "dumpex.output.records",
-   "ProcessPeEntryPointRecord": "dumpex.output.records",
-   "ProcessPeRecord": "dumpex.output.records",
-   "ProcessPeSectionRecord": "dumpex.output.records",
-   "ProcessRecord": "dumpex.output.records",
-   "ProfileCapabilityEntry": "dumpex.output.records",
-   "ProfileMemoryCapture": "dumpex.output.records",
-   "ProfileRecord": "dumpex.output.records",
-   "ProfileStreamEntry": "dumpex.output.records",
-   "REGION_MEMBERSHIP_CURRENT": "dumpex.output.records",
-   "REGION_MEMBERSHIP_START": "dumpex.output.records",
-   "REGION_MEMBERSHIP_START_AND_CURRENT": "dumpex.output.records",
-   "ReportAddressContext": "dumpex.output.records",
-   "ReportAllocationNeighborhood": "dumpex.output.records",
-   "ReportAnchorPeContext": "dumpex.output.records",
-   "ReportBranchTarget": "dumpex.output.records",
-   "ReportCorrelatedHandle": "dumpex.output.records",
-   "ReportDecodedInstruction": "dumpex.output.records",
-   "ReportEnvironmentSummary": "dumpex.output.records",
-   "ReportEnvironmentValue": "dumpex.output.records",
-   "ReportExceptionContext": "dumpex.output.records",
-   "ReportExceptionEntry": "dumpex.output.records",
-   "ReportHandleCorrelation": "dumpex.output.records",
-   "ReportHandleSummary": "dumpex.output.records",
-   "ReportHandleTypeCount": "dumpex.output.records",
-   "ReportIatCorrelatedEntry": "dumpex.output.records",
-   "ReportIatCorrelation": "dumpex.output.records",
-   "ReportIdentityConflict": "dumpex.output.records",
-   "ReportInstructionContext": "dumpex.output.records",
-   "ReportInstructionLead": "dumpex.output.records",
-   "ReportIocString": "dumpex.output.records",
-   "ReportNeighborRegion": "dumpex.output.records",
-   "ReportPeContext": "dumpex.output.records",
-   "ReportProcessEnrichment": "dumpex.output.records",
-   "ReportRegionInfo": "dumpex.output.records",
-   "ReportStringContext": "dumpex.output.records",
-   "ReportStringContextEntry": "dumpex.output.records",
-   "ReportThreadInfo": "dumpex.output.records",
-   "ReportTokenCapability": "dumpex.output.records",
-   "SEVERITY_ERROR": "dumpex.output.records",
-   "SEVERITY_WARNING": "dumpex.output.records",
-   "START_ADDRESS_ABSENT": "dumpex.output.records",
-   "START_ADDRESS_INVALID": "dumpex.output.records",
-   "START_ADDRESS_RECORDED": "dumpex.output.records",
-   "START_ADDRESS_UNVERIFIED": "dumpex.output.records",
-   "STRING_CONTEXT_SELECTION_REASONS": "dumpex.output.records",
-   "StompingDetails": "dumpex.output.records",
-   "StreamParserState": "dumpex.output.records",
-   "StringRecord": "dumpex.output.records",
-   "SysInfoRecord": "dumpex.output.records",
-   "THREAD_DIFF_ADDED": "dumpex.output.records",
-   "THREAD_DIFF_REMOVED": "dumpex.output.records",
-   "TOKEN_CAPABILITY_STATUSES": "dumpex.output.records",
-   "TRIAGE_ANCHOR_ADDRESS": "dumpex.output.records",
-   "TRIAGE_ANCHOR_STRING_HIT": "dumpex.output.records",
-   "TRIAGE_ANCHOR_TID": "dumpex.output.records",
-   "TRIAGE_ANCHOR_TID_CURRENT_IP": "dumpex.output.records",
-   "TargetedMeasurement": "dumpex.output.records",
-   "TargetedScopeRecord": "dumpex.output.records",
-   "ThreadDiffRecord": "dumpex.output.records",
-   "ThreadRecord": "dumpex.output.records",
-   "TriageCardRecord": "dumpex.output.records",
-   "YaraDetails": "dumpex.output.records",
-   "_CAPABILITY_LIMITATION_CODES": "dumpex.output.records",
-   "_CAPABILITY_LIMITATION_TEMPLATES": "dumpex.output.records",
-   "_CAPABILITY_STATUSES": "dumpex.output.records",
-   "_CAPTURE_STATES": "dumpex.output.records",
-   "_COVERAGE_STATUSES": "dumpex.output.records",
-   "_DUMP_FLAGS_STATES": "dumpex.output.records",
-   "_ENRICHMENT_SCOPES": "dumpex.output.records",
-   "_ENRICHMENT_STATES": "dumpex.output.records",
-   "_ENTRY_POINT_RESOLVED_FIELDS": "dumpex.output.records",
-   "_HEX_ADDRESS_RE": "dumpex.output.records",
-   "_HUNTER_DETAILS_TYPES": "dumpex.output.records",
-   "_HUNT_CONFIDENCES": "dumpex.output.records",
-   "_HUNT_REVIEW_PRIORITIES": "dumpex.output.records",
-   "_HUNT_STATUSES": "dumpex.output.records",
-   "_HUNT_VERDICT_LEVELS": "dumpex.output.records",
-   "_IMPORT_BY_VALUES": "dumpex.output.records",
-   "_MEASUREMENT_UNITS": "dumpex.output.records",
-   "_MEMORY_DIFF_CHANGE_TYPES": "dumpex.output.records",
-   "_MODULE_CONTEXTS": "dumpex.output.records",
-   "_MODULE_DIFF_CHANGE_TYPES": "dumpex.output.records",
-   "_OPTIONAL_LIMITATION_CODES": "dumpex.output.records",
-   "_PE_HEADER_STATES": "dumpex.output.records",
-   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA": "dumpex.output.records",
-   "_PROCESS_DIAGNOSTIC_SEVERITIES": "dumpex.output.records",
-   "_REGION_MEMBERSHIP_REASONS": "dumpex.output.records",
-   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES": "dumpex.output.records",
-   "_REQUIRED_LIMITATION_CODES": "dumpex.output.records",
-   "_START_ADDRESS_STATES": "dumpex.output.records",
-   "_START_ADDRESS_STATES_WITHOUT_ADDRESS": "dumpex.output.records",
-   "_START_ADDRESS_STATES_WITH_ADDRESS": "dumpex.output.records",
-   "_START_ADDRESS_STATE_FLAGS_STATE": "dumpex.output.records",
-   "_STREAM_PARSER_STATES": "dumpex.output.records",
-   "_STREAM_STATE_FORBIDS_COUNT": "dumpex.output.records",
-   "_STRING_RECORD_ENCODINGS": "dumpex.output.records",
-   "_THREAD_DIFF_CHANGE_TYPES": "dumpex.output.records",
-   "_TRIAGE_ANCHOR_SOURCES": "dumpex.output.records",
-   "_TRIAGE_FINDING_KEYS": "dumpex.output.records",
-   "_TRIAGE_VERDICTS": "dumpex.output.records",
-   "_TRUNCATED_LIMITATION_CODES": "dumpex.output.records",
-   "_require_bool": "dumpex.output.records",
-   "_require_bounded_text": "dumpex.output.records",
-   "_require_enrichment_section": "dumpex.output.records",
-   "_require_hex_address": "dumpex.output.records",
-   "_require_list_of": "dumpex.output.records",
-   "_require_nonneg_int": "dumpex.output.records",
-   "_require_optional_bounded_text": "dumpex.output.records",
-   "_require_optional_diff_bool": "dumpex.output.records",
-   "_require_optional_diff_int": "dumpex.output.records",
-   "_require_optional_diff_str": "dumpex.output.records",
-   "_require_optional_enum": "dumpex.output.records",
-   "_require_optional_hex_address": "dumpex.output.records",
-   "_require_optional_nonneg_int": "dumpex.output.records",
-   "_require_optional_str": "dumpex.output.records",
-   "_require_optional_targeted_scope": "dumpex.output.records",
-   "_require_thread_info_states": "dumpex.output.records",
-   "_targeted_scope_dict": "dumpex.output.records",
-   "handle_name_display": "dumpex.output.records",
-   "hex_address": "dumpex.output.records",
-   "render_capability_limitation": "dumpex.output.records"
+   "ACCESS_VIOLATION_TYPES": "dumpex.output.records.report_context",
+   "ANCHOR_PE_CLASSIFICATIONS": "dumpex.output.records.report_pe",
+   "ANCHOR_PE_REGISTRATIONS": "dumpex.output.records.report_pe",
+   "Artifact": "dumpex.output.records.diagnostics",
+   "BRANCH_TARGET_KINDS": "dumpex.output.records.report_instruction",
+   "CAPABILITY_BY_ID": "dumpex.output.records.capabilities",
+   "CAPABILITY_IDS": "dumpex.output.records.capabilities",
+   "CAPABILITY_REGISTRY": "dumpex.output.records.capabilities",
+   "CAPABILITY_SOURCE_DISPLAY_NAMES": "dumpex.output.records.capabilities",
+   "CapabilityDefinition": "dumpex.output.records.capabilities",
+   "CapabilityLimitation": "dumpex.output.records.capabilities",
+   "CapabilityLimitationCode": "dumpex.output.records.capabilities",
+   "CapabilityStatus": "dumpex.output.records.capabilities",
+   "CsBeaconDetails": "dumpex.output.records.hunt_details",
+   "DUMP_FLAGS_ABSENT": "dumpex.output.records.base",
+   "DUMP_FLAGS_RESOLVED": "dumpex.output.records.base",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.output.records.base",
+   "Diagnostic": "dumpex.output.records.diagnostics",
+   "ENRICHMENT_COMPLETE": "dumpex.output.records.report_common",
+   "ENRICHMENT_MISSING": "dumpex.output.records.report_common",
+   "ENRICHMENT_PARTIAL": "dumpex.output.records.report_common",
+   "ENRICHMENT_SCOPE_CARD": "dumpex.output.records.report_common",
+   "ENRICHMENT_SCOPE_PROCESS": "dumpex.output.records.report_common",
+   "ENRICHMENT_TEXT_CAP": "dumpex.output.records.common",
+   "EXCEPTION_SELECTION_REASONS": "dumpex.output.records.report_context",
+   "EnrichmentSection": "dumpex.output.records.report_common",
+   "ExtractRecord": "dumpex.output.records.extraction",
+   "HANDLE_CAPTURED_NAME_SUFFIX": "dumpex.output.records.handles",
+   "HANDLE_NAME_STATUSES": "dumpex.output.records.handles",
+   "HANDLE_NAME_STATUS_LABELS": "dumpex.output.records.handles",
+   "HANDLE_RESERVED_NAME_LABELS": "dumpex.output.records.handles",
+   "HANDLE_SELECTION_REASONS": "dumpex.output.records.report_context",
+   "HUNTERS": "dumpex.output.records.hunt_identity",
+   "HandleRecord": "dumpex.output.records.handles",
+   "HollowingDetails": "dumpex.output.records.hunt_details",
+   "HuntPeHeaderHit": "dumpex.output.records.hunt_scope",
+   "HuntRegionRef": "dumpex.output.records.hunt_scope",
+   "HuntThreadRef": "dumpex.output.records.hunt_scope",
+   "HuntThreadRegionHit": "dumpex.output.records.hunt_scope",
+   "HunterRecord": "dumpex.output.records.hunt_result",
+   "IAT_ENTRY_SELECTION_REASONS": "dumpex.output.records.report_iat",
+   "IAT_IMPORT_BY": "dumpex.output.records.report_iat",
+   "IDENTITY_CONFLICT_SEVERITIES": "dumpex.output.records.report_process",
+   "INSTRUCTION_ANCHOR_SOURCES": "dumpex.output.records.report_instruction",
+   "INSTRUCTION_BRANCH_KINDS": "dumpex.output.records.report_instruction",
+   "INSTRUCTION_DECODER_STATES": "dumpex.output.records.report_instruction",
+   "INSTRUCTION_LEAD_NAMES": "dumpex.output.records.report_instruction",
+   "INSTRUCTION_LEAD_SIGNALS": "dumpex.output.records.report_instruction",
+   "IatRecord": "dumpex.output.records.process",
+   "ImportEntryRecord": "dumpex.output.records.process",
+   "InjectionDetails": "dumpex.output.records.hunt_details",
+   "MAX_INSTRUCTION_LEAD_EVIDENCE": "dumpex.output.records.report_instruction",
+   "MAX_INSTRUCTION_LEAD_LIMITATIONS": "dumpex.output.records.report_instruction",
+   "MEMORY_DIFF_ADDED": "dumpex.output.records.comparison",
+   "MEMORY_DIFF_PROTECTION_CHANGED": "dumpex.output.records.comparison",
+   "MEMORY_DIFF_REMOVED": "dumpex.output.records.comparison",
+   "MODULE_CONTEXT_RESOLVED": "dumpex.output.records.base",
+   "MODULE_CONTEXT_UNAVAILABLE": "dumpex.output.records.base",
+   "MODULE_CONTEXT_UNREGISTERED": "dumpex.output.records.base",
+   "MODULE_DIFF_ADDED": "dumpex.output.records.comparison",
+   "MODULE_DIFF_REBASED": "dumpex.output.records.comparison",
+   "MODULE_DIFF_REMOVED": "dumpex.output.records.comparison",
+   "MemoryDiffRecord": "dumpex.output.records.comparison",
+   "MemoryRegionRecord": "dumpex.output.records.base",
+   "ModuleDiffRecord": "dumpex.output.records.comparison",
+   "ModuleRecord": "dumpex.output.records.base",
+   "NEIGHBOR_RELATIONS": "dumpex.output.records.report_context",
+   "ObfuscationDetails": "dumpex.output.records.hunt_details",
+   "PE_MODULE_MATCH_STATES": "dumpex.output.records.report_pe",
+   "PE_OBSERVATION_STATES": "dumpex.output.records.pe_observation",
+   "PROCESS_PE_CAPTURE_STATES": "dumpex.output.records.process_pe",
+   "PROCESS_PE_COMPONENTS": "dumpex.output.records.process_pe",
+   "PROCESS_PE_COMPONENT_STATES": "dumpex.output.records.process_pe",
+   "PROCESS_PE_FORMATS": "dumpex.output.records.process_pe",
+   "PROCESS_PE_IDENTITY_FORMS": "dumpex.output.records.process_pe",
+   "PROCESS_PE_SOURCE_KINDS": "dumpex.output.records.process_pe",
+   "PROCESS_PE_STAGES": "dumpex.output.records.process_pe",
+   "PROCESS_PE_TABLE_STATES": "dumpex.output.records.process_pe",
+   "PROCESS_PE_UNAVAILABLE_REASONS": "dumpex.output.records.process_pe",
+   "PROCESS_PE_UNUSABLE_TABLE_STATES": "dumpex.output.records.process_pe",
+   "PROCESS_PE_VALUE_KINDS": "dumpex.output.records.process_pe",
+   "PeObservationRecord": "dumpex.output.records.pe_observation",
+   "PipeDetails": "dumpex.output.records.hunt_details",
+   "ProcessDiagnosticRecord": "dumpex.output.records.process",
+   "ProcessPeAcquisitionRecord": "dumpex.output.records.process_pe",
+   "ProcessPeDirectoryRecord": "dumpex.output.records.process_pe",
+   "ProcessPeEntryPointRecord": "dumpex.output.records.process_pe",
+   "ProcessPeRecord": "dumpex.output.records.process_pe",
+   "ProcessPeSectionRecord": "dumpex.output.records.process_pe",
+   "ProcessRecord": "dumpex.output.records.process",
+   "ProfileCapabilityEntry": "dumpex.output.records.capabilities",
+   "ProfileMemoryCapture": "dumpex.output.records.profile",
+   "ProfileRecord": "dumpex.output.records.profile",
+   "ProfileStreamEntry": "dumpex.output.records.profile",
+   "REGION_MEMBERSHIP_CURRENT": "dumpex.output.records.report_thread",
+   "REGION_MEMBERSHIP_START": "dumpex.output.records.report_thread",
+   "REGION_MEMBERSHIP_START_AND_CURRENT": "dumpex.output.records.report_thread",
+   "ReportAddressContext": "dumpex.output.records.report_context",
+   "ReportAllocationNeighborhood": "dumpex.output.records.report_context",
+   "ReportAnchorPeContext": "dumpex.output.records.report_pe",
+   "ReportBranchTarget": "dumpex.output.records.report_instruction",
+   "ReportCorrelatedHandle": "dumpex.output.records.report_context",
+   "ReportDecodedInstruction": "dumpex.output.records.report_instruction",
+   "ReportEnvironmentSummary": "dumpex.output.records.report_process",
+   "ReportEnvironmentValue": "dumpex.output.records.report_process",
+   "ReportExceptionContext": "dumpex.output.records.report_context",
+   "ReportExceptionEntry": "dumpex.output.records.report_context",
+   "ReportHandleCorrelation": "dumpex.output.records.report_context",
+   "ReportHandleSummary": "dumpex.output.records.report_process",
+   "ReportHandleTypeCount": "dumpex.output.records.report_process",
+   "ReportIatCorrelatedEntry": "dumpex.output.records.report_iat",
+   "ReportIatCorrelation": "dumpex.output.records.report_iat",
+   "ReportIdentityConflict": "dumpex.output.records.report_process",
+   "ReportInstructionContext": "dumpex.output.records.report_instruction",
+   "ReportInstructionLead": "dumpex.output.records.report_instruction",
+   "ReportIocString": "dumpex.output.records.report_thread",
+   "ReportNeighborRegion": "dumpex.output.records.report_context",
+   "ReportPeContext": "dumpex.output.records.report_pe",
+   "ReportProcessEnrichment": "dumpex.output.records.report_process",
+   "ReportRegionInfo": "dumpex.output.records.report_thread",
+   "ReportStringContext": "dumpex.output.records.report_context",
+   "ReportStringContextEntry": "dumpex.output.records.report_context",
+   "ReportThreadInfo": "dumpex.output.records.report_thread",
+   "ReportTokenCapability": "dumpex.output.records.report_process",
+   "SEVERITY_ERROR": "dumpex.output.records.diagnostics",
+   "SEVERITY_WARNING": "dumpex.output.records.diagnostics",
+   "START_ADDRESS_ABSENT": "dumpex.output.records.base",
+   "START_ADDRESS_INVALID": "dumpex.output.records.base",
+   "START_ADDRESS_RECORDED": "dumpex.output.records.base",
+   "START_ADDRESS_UNVERIFIED": "dumpex.output.records.base",
+   "STRING_CONTEXT_SELECTION_REASONS": "dumpex.output.records.report_context",
+   "StompingDetails": "dumpex.output.records.hunt_details",
+   "StreamParserState": "dumpex.output.records.stream_state",
+   "StringRecord": "dumpex.output.records.extraction",
+   "SysInfoRecord": "dumpex.output.records.base",
+   "THREAD_DIFF_ADDED": "dumpex.output.records.comparison",
+   "THREAD_DIFF_REMOVED": "dumpex.output.records.comparison",
+   "TOKEN_CAPABILITY_STATUSES": "dumpex.output.records.report_process",
+   "TRIAGE_ANCHOR_ADDRESS": "dumpex.output.records.report_card",
+   "TRIAGE_ANCHOR_STRING_HIT": "dumpex.output.records.report_card",
+   "TRIAGE_ANCHOR_TID": "dumpex.output.records.report_card",
+   "TRIAGE_ANCHOR_TID_CURRENT_IP": "dumpex.output.records.report_card",
+   "TargetedMeasurement": "dumpex.output.records.hunt_scope",
+   "TargetedScopeRecord": "dumpex.output.records.hunt_scope",
+   "ThreadDiffRecord": "dumpex.output.records.comparison",
+   "ThreadRecord": "dumpex.output.records.base",
+   "TriageCardRecord": "dumpex.output.records.report_card",
+   "YaraDetails": "dumpex.output.records.hunt_details",
+   "_CAPABILITY_LIMITATION_CODES": "dumpex.output.records.capabilities",
+   "_CAPABILITY_LIMITATION_TEMPLATES": "dumpex.output.records.capabilities",
+   "_CAPABILITY_STATUSES": "dumpex.output.records.capabilities",
+   "_CAPTURE_STATES": "dumpex.output.records.hunt_scope",
+   "_COVERAGE_STATUSES": "dumpex.output.records.hunt_scope",
+   "_DUMP_FLAGS_STATES": "dumpex.output.records.base",
+   "_ENRICHMENT_SCOPES": "dumpex.output.records.report_common",
+   "_ENRICHMENT_STATES": "dumpex.output.records.report_common",
+   "_ENTRY_POINT_RESOLVED_FIELDS": "dumpex.output.records.process_pe",
+   "_HEX_ADDRESS_RE": "dumpex.output.records.common",
+   "_HUNTER_DETAILS_TYPES": "dumpex.output.records.hunt_result",
+   "_HUNT_CONFIDENCES": "dumpex.output.records.hunt_identity",
+   "_HUNT_REVIEW_PRIORITIES": "dumpex.output.records.hunt_identity",
+   "_HUNT_STATUSES": "dumpex.output.records.hunt_identity",
+   "_HUNT_VERDICT_LEVELS": "dumpex.output.records.hunt_identity",
+   "_IMPORT_BY_VALUES": "dumpex.output.records.process",
+   "_MEASUREMENT_UNITS": "dumpex.output.records.hunt_scope",
+   "_MEMORY_DIFF_CHANGE_TYPES": "dumpex.output.records.comparison",
+   "_MODULE_CONTEXTS": "dumpex.output.records.base",
+   "_MODULE_DIFF_CHANGE_TYPES": "dumpex.output.records.comparison",
+   "_OPTIONAL_LIMITATION_CODES": "dumpex.output.records.capabilities",
+   "_PE_HEADER_STATES": "dumpex.output.records.extraction",
+   "_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA": "dumpex.output.records.process",
+   "_PROCESS_DIAGNOSTIC_SEVERITIES": "dumpex.output.records.process",
+   "_REGION_MEMBERSHIP_REASONS": "dumpex.output.records.report_thread",
+   "_REQUIRED_GROUP_MEMBER_LIMITATION_CODES": "dumpex.output.records.capabilities",
+   "_REQUIRED_LIMITATION_CODES": "dumpex.output.records.capabilities",
+   "_START_ADDRESS_STATES": "dumpex.output.records.base",
+   "_START_ADDRESS_STATES_WITHOUT_ADDRESS": "dumpex.output.records.base",
+   "_START_ADDRESS_STATES_WITH_ADDRESS": "dumpex.output.records.base",
+   "_START_ADDRESS_STATE_FLAGS_STATE": "dumpex.output.records.base",
+   "_STREAM_PARSER_STATES": "dumpex.output.records.stream_state",
+   "_STREAM_STATE_FORBIDS_COUNT": "dumpex.output.records.profile",
+   "_STRING_RECORD_ENCODINGS": "dumpex.output.records.extraction",
+   "_THREAD_DIFF_CHANGE_TYPES": "dumpex.output.records.comparison",
+   "_TRIAGE_ANCHOR_SOURCES": "dumpex.output.records.report_card",
+   "_TRIAGE_FINDING_KEYS": "dumpex.output.records.report_card",
+   "_TRIAGE_VERDICTS": "dumpex.output.records.report_card",
+   "_TRUNCATED_LIMITATION_CODES": "dumpex.output.records.capabilities",
+   "_require_bool": "dumpex.output.records.common",
+   "_require_bounded_text": "dumpex.output.records.common",
+   "_require_enrichment_section": "dumpex.output.records.report_common",
+   "_require_hex_address": "dumpex.output.records.common",
+   "_require_list_of": "dumpex.output.records.hunt_scope",
+   "_require_nonneg_int": "dumpex.output.records.common",
+   "_require_optional_bounded_text": "dumpex.output.records.report_common",
+   "_require_optional_diff_bool": "dumpex.output.records.common",
+   "_require_optional_diff_int": "dumpex.output.records.common",
+   "_require_optional_diff_str": "dumpex.output.records.common",
+   "_require_optional_enum": "dumpex.output.records.process_pe",
+   "_require_optional_hex_address": "dumpex.output.records.common",
+   "_require_optional_nonneg_int": "dumpex.output.records.common",
+   "_require_optional_str": "dumpex.output.records.profile",
+   "_require_optional_targeted_scope": "dumpex.output.records.hunt_scope",
+   "_require_thread_info_states": "dumpex.output.records.base",
+   "_targeted_scope_dict": "dumpex.output.records.hunt_scope",
+   "handle_name_display": "dumpex.output.records.handles",
+   "hex_address": "dumpex.output.records.common",
+   "render_capability_limitation": "dumpex.output.records.capabilities"
   },
   "private_unexported": [
    "_CAPABILITY_LIMITATION_CODES",

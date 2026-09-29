@@ -36,7 +36,7 @@ from tests.fixtures.decomposition_baseline.stable import (
 from tests.fixtures.decomposition_baseline.relocation import (
     FUNCTIONS, INTERNALS, split_relocation)
 from tests.fixtures.decomposition_baseline.surface import (
-    capture_contract, capture_structure, duplicate_definitions)
+    capture_contract, capture_structure, duplicate_definitions, duplicate_source_definitions)
 from tests.unit import test_memory_baseline_characterization as characterization
 from tests.unit import test_memory_patch_seams as seam_tests
 
@@ -93,6 +93,17 @@ def test_dropped_validator_is_detected(monkeypatch):
     assert _any_mentions(differences, "ThreadRecord", "probes")
 
 
+def _replace_everywhere(monkeypatch, target, name, replacement):
+    """Replace `target.name` in every loaded dumpex namespace that binds the
+    same object: the legacy path and each owner module whose validators
+    resolve it at call time."""
+    real = getattr(target, name)
+    for module in list(sys.modules.values()):
+        if (getattr(module, "__name__", "").split(".")[0] == "dumpex"
+                and vars(module).get(name) is real):
+            monkeypatch.setattr(module, name, replacement)
+
+
 def test_changed_validation_message_is_detected(monkeypatch):
     real = records._require_nonneg_int
 
@@ -102,7 +113,7 @@ def test_changed_validation_message_is_detected(monkeypatch):
         except ValueError:
             raise ValueError(f"{field_name} is invalid") from None
 
-    monkeypatch.setattr(records, "_require_nonneg_int", reworded)
+    _replace_everywhere(monkeypatch, records, "_require_nonneg_int", reworded)
     differences = _corpus_diff(capture.RECORD_CORPUS, capture_record_corpus())
     assert _any_mentions(differences, "probes")
 
@@ -273,7 +284,13 @@ def test_disabled_cross_source_validator_is_detected(monkeypatch, validator, cod
 
 # ── Legal relocations and their negative control ──────────────────────────
 # Structural moves the baseline must accept unchanged, and a copy it must
-# refuse.
+# refuse. The simulated relocations re-execute a target's single source
+# file, so they run against the targets that are still one module; a
+# target already decomposed into a package is its own positive control,
+# held by every comparison in test_decomposition_baseline.py.
+
+MONOLITHIC_TARGETS = tuple(
+    t for t in TARGET_MODULES if not hasattr(importlib.import_module(t), "__path__"))
 
 
 def _relocate(target, monkeypatch, tmp_path, copied=()):
@@ -323,7 +340,7 @@ def test_pure_reexport_facade_keeps_the_contract(target, monkeypatch, tmp_path):
     assert diff(committed, roundtrip(contract)) == []
 
 
-@pytest.mark.parametrize("target", TARGET_MODULES)
+@pytest.mark.parametrize("target", MONOLITHIC_TARGETS)
 def test_definitions_moved_to_a_new_owner_keep_the_contract(target, monkeypatch, tmp_path):
     owner, facade, committed = _relocate(target, monkeypatch, tmp_path)
     assert importlib.import_module(target) is facade and owner.__name__ != target
@@ -333,7 +350,7 @@ def test_definitions_moved_to_a_new_owner_keep_the_contract(target, monkeypatch,
         target, [*committed["exports"], *committed["private_values"]], committed["exports"]) == []
 
 
-@pytest.mark.parametrize("target", TARGET_MODULES)
+@pytest.mark.parametrize("target", MONOLITHIC_TARGETS)
 def test_regeneration_after_a_relocation_keeps_contract_and_follows_owners(
         target, monkeypatch, tmp_path):
     """Running the generator over the relocated layout reproduces the
@@ -363,6 +380,17 @@ def test_value_copied_into_the_facade_is_detected(monkeypatch, tmp_path):
         "_SOURCE_DISPLAY_NAMES: ['dumpex.output._relocated_owner', 'dumpex.output.coverage']"]
 
 
+def test_value_copied_into_the_records_package_facade_is_detected(monkeypatch):
+    """The decomposed records package: a facade binding that is an equal
+    copy of its owner's value, rather than the owner's object."""
+    target = "dumpex.output.records"
+    monkeypatch.setattr(records, "HUNTERS", tuple(list(records.HUNTERS)))
+    committed = load_golden(capture.SURFACE_CONTRACT)[target]
+    assert duplicate_definitions(
+        target, [*committed["exports"], *committed["private_values"]], committed["exports"]) == [
+        "HUNTERS: ['dumpex.output.records', 'dumpex.output.records.hunt_identity']"]
+
+
 # ── Split relocation: private definitions in a module that owns no export ──
 
 
@@ -371,7 +399,7 @@ def _split_names(target):
     return committed, [*committed["exports"], *committed["private_values"]]
 
 
-@pytest.mark.parametrize("target", TARGET_MODULES)
+@pytest.mark.parametrize("target", MONOLITHIC_TARGETS)
 def test_split_relocation_keeps_every_baseline(target, monkeypatch, tmp_path):
     """Exported classes in one owner, exported functions and values in a
     second, every private value, vocabulary and helper in a third module
@@ -441,7 +469,7 @@ def test_split_relocation_keeps_the_leak_guard_working(monkeypatch, tmp_path):
     seam_tests.test_no_memory_function_is_left_replaced()
 
 
-@pytest.mark.parametrize("target", TARGET_MODULES)
+@pytest.mark.parametrize("target", MONOLITHIC_TARGETS)
 def test_regeneration_after_a_split_keeps_the_contract(target, monkeypatch, tmp_path):
     parts = split_relocation(target, monkeypatch, tmp_path)
     regenerated = capture.capture_static_goldens(sections=["contract", "structure"])
@@ -459,6 +487,19 @@ def test_copy_bound_in_a_second_split_module_is_detected(monkeypatch, tmp_path):
     assert duplicate_definitions(target, names, committed["exports"]) == [
         "_SCAN_REGION_SEARCH_INCOMPLETE_REASONS: ['dumpex.output._split_functions', "
         "'dumpex.output._split_internals']"]
+
+
+def test_scalar_budget_redefined_in_a_second_split_module_is_detected(monkeypatch, tmp_path):
+    """A budget re-declared as an equal local literal in a second owner:
+    the identity-based guard skips scalars, the source-level one reports
+    both defining modules."""
+    target = "dumpex.core.memory"
+    split_relocation(target, monkeypatch, tmp_path,
+                     extra_internals="MAX_REGION_READ = 256 * 1024 * 1024\n")
+    committed, names = _split_names(target)
+    assert duplicate_definitions(target, names, committed["exports"]) == []
+    assert duplicate_source_definitions(target, names, committed["exports"]) == [
+        "MAX_REGION_READ: ['dumpex.core._split_functions', 'dumpex.core._split_internals']"]
 
 
 def test_unregistered_vocabulary_in_a_split_module_is_detected(monkeypatch, tmp_path):

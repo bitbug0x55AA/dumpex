@@ -170,7 +170,7 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     signal -- for a thread whose address was simply never known at all.
     start_address_*/backing_module_after/backing_module_context all stay
     null in that case, mirroring ThreadRecord's own module_context
-    convention (see records.py).
+    convention (see dumpex.output.records.base).
 
     target.modules is only read, and only registered as a coverage
     source, when at least one ADDED thread has a known StartAddress
