@@ -14,9 +14,10 @@ docs/developer/recon_profile_contract.md. A rule only the collector happens to
 respect is caller discipline, not enforcement, and the difference stays
 invisible until something else builds one of these records.
 """
+import sys
+
 import pytest
 
-from dumpex.output import records as records_module
 from dumpex.output.records import (
     CAPABILITY_REGISTRY, CAPABILITY_IDS,
     CapabilityLimitation, CapabilityLimitationCode, CapabilityStatus,
@@ -270,10 +271,12 @@ def test_a_limitation_code_in_no_family_is_rejected_rather_than_silently_ignored
     # Simulating that drift is the only way to prove the guard is a real
     # check rather than dead code: without it, such a code would slip
     # past every family-specific rule below (source membership, status
-    # cross-checks) and land in the record unexamined.
+    # cross-checks) and land in the record unexamined. The drift is applied
+    # to the namespace ProfileCapabilityEntry itself reads the families from.
+    owner = sys.modules[ProfileCapabilityEntry.__module__]
     monkeypatch.setattr(
-        records_module, "_OPTIONAL_LIMITATION_CODES",
-        tuple(c for c in records_module._OPTIONAL_LIMITATION_CODES
+        owner, "_OPTIONAL_LIMITATION_CODES",
+        tuple(c for c in owner._OPTIONAL_LIMITATION_CODES
               if c != CapabilityLimitationCode.OPTIONAL_SOURCE_ABSENT.value))
     with pytest.raises(ValueError, match="outside the closed"):
         _capability("thread_analysis", status=CapabilityStatus.LIMITED.value,

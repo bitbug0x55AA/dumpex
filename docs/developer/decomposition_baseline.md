@@ -104,7 +104,11 @@ definition: a class or function is the object its owning module defines
 under that name, and a non-scalar export or private value is never bound to
 a copy in the facade or a second owner
 (`test_every_exported_definition_has_one_canonical_owner`,
-`test_no_baseline_value_has_a_second_definition`).
+`test_no_baseline_value_has_a_second_definition`). Identity cannot tell an
+equal scalar copied into a second owner from an import -- a budget literal
+may even be the same interned object -- so every baseline name is also
+defined in the source of one family module only
+(`test_no_baseline_name_is_defined_in_two_family_modules`).
 
 Test files never feed a contract: the consumer inventory and the export
 derivation read shipped files only, so a change that only adds a test leaves
@@ -122,7 +126,19 @@ attribute. Two different seams exist:
   in `tests/fixtures/decomposition_baseline/seams.py` patch each legacy name
   tests rely on and assert its consumer observes it;
   `surface_structure.json`'s `global_resolution` lists every such
-  dependency.
+  dependency. These seams are part of `dumpex.core.memory`'s
+  compatibility contract: splitting it keeps explicit compatibility
+  exports or small delegating wrappers at `dumpex.core.memory`, so a patch
+  applied to a legacy reader or context entry point still affects the
+  executions that use it.
+  `dumpex.output.records` has no such seams and does not delegate: its
+  owner modules resolve their globals in their own namespaces, so a test
+  replaces a records name on the owner module, never on the facade.
+  `test_no_test_rebinds_a_legacy_name_that_is_read_from_its_owner` fails
+  when a test rebinds a legacy attribute that a relocated function reads
+  from another module -- a records owner, or a `memory` owner a split
+  failed to delegate for (patching an object reached through the legacy
+  path, such as `setattr(records.ThreadRecord, ...)`, is unaffected).
 * **Consumer seams.** Hunters and commands hold readers by name
   (`dumpex.hunt.injection.read_region`, `dumpex.hunt.stomping.
   enriched_thread_contexts`, ...). The scanner finds them whether a test
@@ -216,4 +232,9 @@ contract and both corpora are byte-identical, every baseline definition has
 an owner, the leak guard holds, and a copy or an unregistered vocabulary in
 the split modules is still reported; and the generator run over the
 relocated layouts, which must reproduce the committed contract byte for
-byte and place every moved definition in its new owner.
+byte and place every moved definition in its new owner. The simulated
+relocations re-execute a target's single source file, so they run against
+the targets that are still one module; a target already decomposed into a
+package (`dumpex.output.records`, see
+[the records package layout](records_layout.md)) is its own positive
+control, and a copy bound in its facade is still reported.

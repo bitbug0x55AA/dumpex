@@ -350,11 +350,11 @@ def _build_memory_capture(mf: MinidumpFile, raw_flags: "int | None",
 # #95's six first-release capability ids now lives in
 # dumpex.output.records.CAPABILITY_REGISTRY/CAPABILITY_BY_ID -- the
 # SINGLE place it is defined, cross-validated at ProfileCapabilityEntry
-# construction time (records.py's own __post_init__) so a mismatch here
-# can never silently produce a self-consistent-but-wrong record. See that
-# module for the full per-capability rationale (which real collector/
-# hunter each id mirrors, and why each one's required sources form an
-# OR-group or a hard requirement).
+# construction time (its own __post_init__) so a mismatch here can never
+# silently produce a self-consistent-but-wrong record. See
+# dumpex.output.records.capabilities for the full per-capability
+# rationale (which real collector/hunter each id mirrors, and why each
+# one's required sources form an OR-group or a hard requirement).
 
 
 _AMBIGUOUS_SOURCE_DETAIL = (

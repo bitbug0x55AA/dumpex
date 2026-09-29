@@ -30,6 +30,18 @@ def _module_path(module: str) -> "pathlib.Path | None":
     return path if path.is_file() else None
 
 
+def _binds_names_from_package_init(package: str, aliases) -> bool:
+    """True when `from <package> import <aliases>` takes at least one name
+    the package's own __init__ binds -- a facade's re-export rather than a
+    submodule -- so that __init__ is a dependency of the importer."""
+    root = _REPO_ROOT.joinpath(*package.split("."))
+    if not (root / "__init__.py").is_file():
+        return False
+    return any(not (root / f"{alias.name}.py").is_file()
+               and not (root / alias.name / "__init__.py").is_file()
+               for alias in aliases)
+
+
 def _imports_of(module: str) -> "set[str]":
     """Every `dumpex.*` name `module` imports, read off the parsed AST.
 
@@ -56,6 +68,10 @@ def _imports_of(module: str) -> "set[str]":
                 # `from dumpex.output import envelope` -- the submodule is
                 # named by the alias, not by the module part.
                 found.update(f"{name}.{alias.name}" for alias in node.names)
+                # `from dumpex.output.records import Diagnostic` -- the name
+                # comes from the package's own __init__, walked as a module.
+                if _binds_names_from_package_init(name, node.names):
+                    found.add(f"{name}.__init__")
         elif isinstance(node, ast.Call):
             func = node.func
             called = getattr(func, "attr", None) or getattr(func, "id", None)
@@ -79,8 +95,8 @@ def test_command_result_module_does_not_import_envelope_or_hunt():
 
 def test_command_result_does_not_reach_envelope_or_hunt_transitively():
     """The direct-import guard sees only this module's own text, so it
-    stays green if command_result keeps importing records.py and
-    records.py starts importing envelope.py -- the layering is just as
+    stays green if command_result keeps importing dumpex.output.records
+    and a records module starts importing envelope.py -- the layering is just as
     broken, one hop further out. This walks the whole first-party import
     closure instead.
 
@@ -117,6 +133,9 @@ def test_command_result_does_not_reach_envelope_or_hunt_transitively():
 
     assert crossings == [], ("command_result reaches a banned layer:\n  "
                             + "\n  ".join(_path_to(name) for name in sorted(set(crossings))))
+    # Names imported from a package facade are followed into the modules
+    # that define them.
+    assert {"dumpex.output.records.__init__", "dumpex.output.records.diagnostics"} <= seen
 
 
 def test_command_result_defaults():

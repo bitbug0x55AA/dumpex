@@ -771,7 +771,7 @@ def test_declared_image_base_is_padded_in_facts_verbose_and_structured_record():
     """`declared_image_base`/`Declared_ImageBase` is the PE header's OWN
     declared base -- a real address (see `HuntPeHeaderHit.image_base`'s
     own docstring, validated as a hex address by
-    `dumpex.output.records._require_optional_hex_address`), not an RVA --
+    `dumpex.output.records.common._require_optional_hex_address`), not an RVA --
     so it renders through the same fixed-width convention as every other
     address-like field, consistently across normal facts, verbose facts,
     and the structured `HunterRecord` (issue #31 follow-up)."""

@@ -1892,7 +1892,7 @@ def test_triage_card_verdict_must_match_the_four_tier_rule():
 @pytest.mark.parametrize("count", [0, 1, 2, 3, 4])
 def test_triage_card_verdict_tiering_agrees_with_core_memory_verdict_for(count):
     """The one rule in this module that is deliberately MIRRORED rather
-    than imported: records.py keeps its own _TRIAGE_VERDICTS and its own
+    than imported: dumpex.output.records keeps its own _TRIAGE_VERDICTS and its own
     four-tier check so it takes no dependency on dumpex.core.memory,
     while core.memory.verdict_for() is what the console's own colored
     text renders from. The class docstring claims the wire value and the

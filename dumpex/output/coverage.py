@@ -1210,8 +1210,8 @@ SCAN_TARGET_MEMORY_SEGMENT = ScanTargetKind.MEMORY_SEGMENT
 def _hex_address(n) -> "str | None":
     """dumpex's fixed-width (16 hex digit, zero-padded, lowercase, "0x"-
     prefixed) address convention -- byte-identical to dumpex.output.
-    records.hex_address(), which this module cannot import: records.py
-    imports THIS module (CoverageReport), and the dependency direction
+    records.hex_address(), which this module cannot import: the records
+    package imports THIS module (CoverageReport), and the dependency direction
     domain model -> output adapter must not be reversed for a four-line
     formatter. The wire shape is pinned by the schema's own hexAddress
     $def either way, and test_output_coverage.py asserts the two agree."""

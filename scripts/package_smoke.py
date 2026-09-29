@@ -7,8 +7,9 @@ packaged resources (rules.yaml, the YARA rule files, the JSON output
 schema) are readable via importlib.resources, its MPL-2.0 metadata and
 license/notice files are present, the rules loader picks up the packaged
 rules.yaml rather than silently falling back to the built-in emergency
-defaults, the CLI entry point runs, and the instruction decoder that came
-with the base dependencies actually decodes.
+defaults, the CLI entry point runs, the records package carries every
+owner module its compatibility facade re-exports from, and the instruction
+decoder that came with the base dependencies actually decodes.
 
 Deliberately NOT a pytest test: it must run standalone, with no pytest
 and no dependency on this repository's source tree, from a fresh venv
@@ -114,6 +115,35 @@ def validate_declared_decoder() -> None:
               f"install:\n{output}")
     print(f"decoder installed with the base dependencies and decoding: "
           f"capstone {backend.version}")
+
+
+def validate_records_package() -> None:
+    """`dumpex.output.records` is installed as the records package, with
+    every owner module in the distribution, and a record read through the
+    compatibility facade is its owner's own object.
+
+    The facade imports every owner module, so an owner the build left out
+    fails here rather than on the first command that builds its records.
+    """
+    import importlib
+    import pkgutil
+
+    facade = importlib.import_module("dumpex.output.records")
+    path = getattr(facade, "__path__", None)
+    if path is None:
+        _fail("dumpex.output.records is installed as a single module, not the records package")
+    owners = sorted(info.name for info in pkgutil.iter_modules(path, "dumpex.output.records."))
+    if not owners:
+        _fail("dumpex.output.records carries no owner modules")
+    for name in owners:
+        importlib.import_module(name)
+    for name in ("ThreadRecord", "HunterRecord", "ProfileRecord"):
+        record = getattr(facade, name)
+        owner = importlib.import_module(record.__module__)
+        if getattr(owner, record.__name__, None) is not record:
+            _fail(f"dumpex.output.records.{record.__name__} is not "
+                  f"{record.__module__}.{record.__name__}")
+    print(f"records package installed with {len(owners)} owner modules")
 
 
 def main() -> None:
@@ -225,6 +255,7 @@ def main() -> None:
         _fail(f"'python -m dumpex --help' exited {result.returncode}\n"
               f"stdout: {result.stdout}\nstderr: {result.stderr}")
 
+    validate_records_package()
     validate_declared_decoder()
 
     print("OK: package smoke test passed")

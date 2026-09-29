@@ -241,8 +241,6 @@
    "HUNTERS",
    "ProcessPeRecord",
    "ThreadRecord",
-   "_OPTIONAL_LIMITATION_CODES",
-   "_require_nonneg_int",
    "hex_address"
   ]
  }

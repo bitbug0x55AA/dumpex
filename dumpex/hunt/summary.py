@@ -81,9 +81,10 @@ def validate_scan_scope(scan_scope: dict) -> dict:
 
 # Relative severity among the three verdict levels a DETECTED hunter can
 # report -- deliberately its own tuple, not reused from
-# dumpex.output.records._HUNT_VERDICT_LEVELS (whose ordering also
-# includes "clean"/"inconclusive"/"not_evaluated" interleaved for an
-# unrelated reason and must not be assumed to double as a severity rank).
+# dumpex.output.records.hunt_identity._HUNT_VERDICT_LEVELS (whose
+# ordering also includes "clean"/"inconclusive"/"not_evaluated"
+# interleaved for an unrelated reason and must not be assumed to double
+# as a severity rank).
 _DETECTED_VERDICT_ORDER = ("possible", "likely", "high")
 
 

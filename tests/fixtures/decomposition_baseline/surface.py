@@ -508,6 +508,22 @@ def duplicate_definitions(target: str, names, exports, module_name: "str | None"
     return out
 
 
+def duplicate_source_definitions(target: str, names, exports,
+                                 module_name: "str | None" = None) -> list:
+    """`names` whose own source definition (def, class or assignment)
+    appears in more than one module of the family. Read from the source
+    text, not object identity, so an equal scalar -- a budget or a cap
+    copied into a second owner as a local literal -- is reported although
+    it can be the very same interned object."""
+    locator = Locator(target, exports, names=names, module_name=module_name)
+    out = []
+    for name in sorted(names):
+        modules = sorted(m.__name__ for m in locator.family() if name in locator.defined_in(m))
+        if len(modules) > 1:
+            out.append(f"{name}: {modules}")
+    return out
+
+
 # ── Structure ─────────────────────────────────────────────────────────────
 
 
