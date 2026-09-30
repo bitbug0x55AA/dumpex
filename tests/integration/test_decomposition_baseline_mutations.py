@@ -435,13 +435,22 @@ def test_split_relocation_keeps_every_baseline(target, monkeypatch, tmp_path):
 
 def test_split_functions_resolve_globals_in_their_own_part(monkeypatch, tmp_path):
     """Read from the functions themselves, not from the harness: a moved
-    function's globals are its owning part's namespace."""
+    function's globals are its owning part's namespace, and a name the
+    legacy source only imports keeps its real owner's globals."""
     parts = split_relocation("dumpex.core.memory", monkeypatch, tmp_path)
     for name in ("read_region_clamped", "enriched_thread_contexts", "open_dump"):
         fn = getattr(parts["facade"], name)
         assert fn.__globals__ is parts[FUNCTIONS].__dict__
         assert fn.__module__ == parts[FUNCTIONS].__name__
-    assert parts[INTERNALS]._hexdump_context.__globals__ is parts[INTERNALS].__dict__
+    presentation = importlib.import_module("dumpex.ui.memory_presentation")
+    assert parts[INTERNALS]._hexdump_context.__globals__ is presentation.__dict__
+
+
+def test_split_private_helpers_resolve_globals_in_the_internals_part(monkeypatch, tmp_path):
+    """A private helper the legacy source defines itself moves to the
+    internals part and resolves its globals there."""
+    parts = split_relocation("dumpex.output.coverage", monkeypatch, tmp_path)
+    assert parts[INTERNALS]._require_non_empty_str.__globals__ is parts[INTERNALS].__dict__
 
 
 @pytest.mark.parametrize("check", seams.CHECKS, ids=lambda c: c.__name__)
@@ -498,16 +507,16 @@ def test_copy_bound_in_a_second_split_module_is_detected(monkeypatch, tmp_path):
 
 
 def test_scalar_budget_redefined_in_a_second_split_module_is_detected(monkeypatch, tmp_path):
-    """A budget re-declared as an equal local literal in a second owner:
-    the identity-based guard skips scalars, the source-level one reports
-    both defining modules."""
+    """A budget re-declared as an equal local literal in a module other
+    than its owner: the identity-based guard skips scalars, the
+    source-level one reports both defining modules."""
     target = "dumpex.core.memory"
     split_relocation(target, monkeypatch, tmp_path,
                      extra_internals="MAX_REGION_READ = 256 * 1024 * 1024\n")
     committed, names = _split_names(target)
     assert duplicate_definitions(target, names, committed["exports"]) == []
     assert duplicate_source_definitions(target, names, committed["exports"]) == [
-        "MAX_REGION_READ: ['dumpex.core._split_functions', 'dumpex.core._split_internals']"]
+        "MAX_REGION_READ: ['dumpex.core._split_internals', 'dumpex.core.dumpquery.lookup']"]
 
 
 def test_unregistered_vocabulary_in_a_split_module_is_detected(monkeypatch, tmp_path):

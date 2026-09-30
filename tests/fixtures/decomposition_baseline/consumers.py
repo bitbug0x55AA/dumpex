@@ -40,12 +40,16 @@ _SCAN_ROOTS = ("dumpex", "scripts", "tests")
 _ROOT_FILES = ("Dumpex.py", "setup.py")
 _PATCH_CALLS = {"setattr", "delattr", "patch", "object", "setitem", "delitem"}
 
+# The owner modules of `dumpex.core.memory`: `dumpex/core/dumpfile/` holds
+# its loader, stream parsers and captured-range access,
+# `dumpex/core/dumpquery/` its thread, lookup and string-search
+# interpretation, `dumpex/core/verdict.py` its verdict tiers and
+# `dumpex/ui/memory_presentation.py` its console text.
 FAMILY_FILES = frozenset({
-    "dumpex/output/records.py", "dumpex/core/memory.py", "dumpex/output/coverage.py"})
-# `dumpex/core/dumpfile/` holds the owner modules of `dumpex.core.memory`'s
-# loader, stream parsers and captured-range access.
+    "dumpex/output/records.py", "dumpex/core/memory.py", "dumpex/output/coverage.py",
+    "dumpex/core/verdict.py", "dumpex/ui/memory_presentation.py"})
 FAMILY_PREFIXES = ("dumpex/output/records/", "dumpex/core/memory/", "dumpex/core/dumpfile/",
-                   "dumpex/output/coverage/")
+                   "dumpex/core/dumpquery/", "dumpex/output/coverage/")
 SHIPPED_CATEGORIES = ("production", "scripts", "family")
 EXTERNAL_CATEGORIES = ("production", "scripts")
 

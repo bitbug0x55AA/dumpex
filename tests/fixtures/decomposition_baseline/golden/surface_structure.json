@@ -462,7 +462,7 @@
    },
    "RawThreadInfo.__init__": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.threads"
    },
    "_BoundedDescriptorReader.__init__": {
     "globals": [],
@@ -502,17 +502,17 @@
      "_IOC_ENC_UTF16",
      "re"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.strings"
    },
    "_extract_strings_from_data": {
     "globals": [
      "re"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.strings"
    },
    "_get_region_at": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "_handle_descriptor_layout": {
     "globals": [
@@ -529,13 +529,13 @@
      "DIM",
      "YELLOW"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.ui.memory_presentation"
    },
    "_is_real_thread_info": {
     "globals": [
      "RawThreadInfo"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.threads"
    },
    "_memory_segments": {
     "globals": [],
@@ -564,17 +564,15 @@
    "_resolve_size": {
     "globals": [
      "MAX_REGION_READ",
-     "get_memory_regions"
+     "resolve_read_size"
     ],
     "module": "dumpex.core.memory"
    },
    "_search_string_in_memory": {
     "globals": [
      "MAX_REGION_READ",
-     "StringSearchStats",
-     "get_memory_regions",
-     "prot_str",
-     "read_region"
+     "read_region",
+     "search_committed_regions"
     ],
     "module": "dumpex.core.memory"
    },
@@ -592,18 +590,18 @@
      "YELLOW",
      "verdict_for"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.ui.memory_presentation"
    },
    "addr_label": {
     "globals": [
-     "DIM",
+     "address_label",
      "va_to_file_offset"
     ],
     "module": "dumpex.core.memory"
    },
    "addr_to_module": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "clamped_reader": {
     "globals": [],
@@ -625,41 +623,40 @@
    },
    "dump_flags_state": {
     "globals": [
-     "DUMP_FLAGS_ABSENT",
-     "DUMP_FLAGS_RESOLVED",
-     "DUMP_FLAGS_UNRESOLVED",
      "_is_real_thread_info",
-     "dump_flags_value"
+     "dump_flags_value",
+     "thread_dump_flags_state"
     ],
     "module": "dumpex.core.memory"
    },
    "dump_flags_tags": {
     "globals": [
-     "_DUMP_FLAG_TAGS",
-     "dump_flags_value"
+     "dump_flags_value",
+     "thread_dump_flags_tags"
     ],
     "module": "dumpex.core.memory"
    },
    "dump_flags_value": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.threads"
    },
    "enriched_thread_contexts": {
     "globals": [
      "get_thread_contexts",
      "get_thread_infos",
      "ip_context_conflict_for",
+     "join_thread_contexts",
      "recorded_start_address"
     ],
     "module": "dumpex.core.memory"
    },
    "get_handles": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "get_memory_regions": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "get_memory_segments": {
     "globals": [
@@ -669,19 +666,19 @@
    },
    "get_modules": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "get_thread_contexts": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.threads"
    },
    "get_thread_infos": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.threads"
    },
    "group_regions_by_allocation": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "handle_stream_evidence": {
     "globals": [
@@ -697,9 +694,9 @@
    },
    "ip_context_conflict_for": {
     "globals": [
-     "DUMP_FLAG_INVALID_CONTEXT",
      "_is_real_thread_info",
-     "dump_flags_value"
+     "dump_flags_value",
+     "thread_context_conflict"
     ],
     "module": "dumpex.core.memory"
    },
@@ -707,7 +704,7 @@
     "globals": [
      "ntpath"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "observe_stream": {
     "globals": [
@@ -719,13 +716,13 @@
    "open_dump": {
     "globals": [
      "CONTEXT",
-     "DIM",
      "DumpFileNotFoundError",
      "DumpFormatError",
      "PEB",
-     "RED",
      "WOW64_CONTEXT",
      "_STREAM_DISPATCH",
+     "dump_format_error_lines",
+     "dump_not_found_lines",
      "load_minidump",
      "sys"
     ],
@@ -743,7 +740,7 @@
    },
    "parse_hex_or_int": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "parse_thread_info_stream": {
     "globals": [
@@ -754,7 +751,7 @@
    },
    "prot_str": {
     "globals": [],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.dumpquery.lookup"
    },
    "read_region": {
     "globals": [],
@@ -772,13 +769,9 @@
    },
    "recorded_start_address": {
     "globals": [
-     "START_ADDRESS_ABSENT",
-     "START_ADDRESS_INVALID",
-     "START_ADDRESS_RECORDED",
-     "START_ADDRESS_UNVERIFIED",
-     "_DUMP_FLAGS_INFO_INVALID",
      "_is_real_thread_info",
-     "dump_flags_value"
+     "dump_flags_value",
+     "thread_start_address"
     ],
     "module": "dumpex.core.memory"
    },
@@ -820,37 +813,19 @@
      "VERDICT_LIKELY_MALICIOUS",
      "VERDICT_SUSPICIOUS"
     ],
-    "module": "dumpex.core.memory"
+    "module": "dumpex.core.verdict"
    }
   },
   "legacy_defines": [
-   "SYSTEM_RANGE",
-   "parse_hex_or_int",
-   "prot_str",
    "_HANDLE_DESCRIPTOR_LAYOUT_CACHE",
    "_handle_descriptor_layout",
    "parse_handle_stream",
-   "DUMP_FLAG_ERROR_THREAD",
-   "DUMP_FLAG_WRITING_THREAD",
-   "DUMP_FLAG_EXITED_THREAD",
-   "DUMP_FLAG_INVALID_INFO",
-   "DUMP_FLAG_INVALID_CONTEXT",
-   "DUMP_FLAG_INVALID_TEB",
-   "_DUMP_FLAG_TAGS",
-   "_DUMP_FLAGS_INFO_INVALID",
-   "DUMP_FLAGS_RESOLVED",
-   "DUMP_FLAGS_UNRESOLVED",
-   "DUMP_FLAGS_ABSENT",
-   "START_ADDRESS_RECORDED",
-   "START_ADDRESS_INVALID",
-   "START_ADDRESS_UNVERIFIED",
-   "START_ADDRESS_ABSENT",
    "parse_thread_info_stream",
-   "_is_real_thread_info",
-   "dump_flags_value",
    "dump_flags_state",
    "dump_flags_tags",
    "recorded_start_address",
+   "ip_context_conflict_for",
+   "enriched_thread_contexts",
    "_STREAM_DISPATCH",
    "DISPATCHED_STREAM_TYPES",
    "STREAM_ATTR_NAMES",
@@ -858,55 +833,37 @@
    "handle_stream_evidence",
    "observe_stream",
    "read_region_clamped",
-   "get_modules",
-   "get_thread_infos",
-   "RawThreadInfo",
-   "get_memory_regions",
-   "get_thread_contexts",
-   "ip_context_conflict_for",
-   "enriched_thread_contexts",
-   "group_regions_by_allocation",
-   "get_handles",
-   "module_name_only",
-   "addr_to_module",
    "get_memory_segments",
    "va_to_file_offset",
    "va_range_captured_bytes",
    "addr_label",
-   "MAX_REGION_READ",
    "_resolve_size",
-   "_get_region_at",
-   "_extract_strings_from_data",
-   "_hexdump_context",
-   "INDICATOR_DIMS",
-   "VERDICT_CLEAN",
-   "VERDICT_SUSPICIOUS",
-   "VERDICT_LIKELY_MALICIOUS",
-   "VERDICT_HIGH_CONFIDENCE_MALICIOUS",
-   "verdict_for",
-   "_verdict",
-   "StringSearchStats",
-   "_search_string_in_memory",
-   "_IOC_ENC_ASCII",
-   "_IOC_ENC_ASCII_URL",
-   "_IOC_ENC_UTF16",
-   "IOC_STRING_ENCODING_WIDTHS",
-   "_extract_ioc_strings"
+   "_search_string_in_memory"
   ],
   "legacy_imports": {
    "CONTEXT": "minidump.streams.ContextStream:CONTEXT",
    "CommentStreamA": "minidump.streams:CommentStreamA",
    "CommentStreamW": "minidump.streams:CommentStreamW",
-   "DIM": "dumpex.ui.colors:DIM",
+   "DUMP_FLAGS_ABSENT": "dumpex.core.dumpquery.threads:DUMP_FLAGS_ABSENT",
+   "DUMP_FLAGS_RESOLVED": "dumpex.core.dumpquery.threads:DUMP_FLAGS_RESOLVED",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.core.dumpquery.threads:DUMP_FLAGS_UNRESOLVED",
+   "DUMP_FLAG_ERROR_THREAD": "dumpex.core.dumpquery.threads:DUMP_FLAG_ERROR_THREAD",
+   "DUMP_FLAG_EXITED_THREAD": "dumpex.core.dumpquery.threads:DUMP_FLAG_EXITED_THREAD",
+   "DUMP_FLAG_INVALID_CONTEXT": "dumpex.core.dumpquery.threads:DUMP_FLAG_INVALID_CONTEXT",
+   "DUMP_FLAG_INVALID_INFO": "dumpex.core.dumpquery.threads:DUMP_FLAG_INVALID_INFO",
+   "DUMP_FLAG_INVALID_TEB": "dumpex.core.dumpquery.threads:DUMP_FLAG_INVALID_TEB",
+   "DUMP_FLAG_WRITING_THREAD": "dumpex.core.dumpquery.threads:DUMP_FLAG_WRITING_THREAD",
    "DumpFileNotFoundError": "dumpex.core.dumpfile.loader:DumpFileNotFoundError",
    "DumpFormatError": "dumpex.core.dumpfile.loader:DumpFormatError",
    "ExceptionList": "minidump.streams:ExceptionList",
-   "GREEN": "dumpex.ui.colors:GREEN",
    "HandleDescriptorLayoutError": "dumpex.core.dumpfile.handle_stream:HandleDescriptorLayoutError",
    "HandleStreamContractError": "dumpex.core.dumpfile.handle_stream:HandleStreamContractError",
    "HandleStreamFramingError": "dumpex.core.dumpfile.handle_stream:HandleStreamFramingError",
+   "INDICATOR_DIMS": "dumpex.core.verdict:INDICATOR_DIMS",
+   "IOC_STRING_ENCODING_WIDTHS": "dumpex.core.dumpquery.strings:IOC_STRING_ENCODING_WIDTHS",
    "MAX_HANDLE_DESCRIPTORS": "dumpex.core.dumpfile.handle_stream:MAX_HANDLE_DESCRIPTORS",
    "MAX_HANDLE_STRING_BYTES": "dumpex.core.dumpfile.handle_stream:MAX_HANDLE_STRING_BYTES",
+   "MAX_REGION_READ": "dumpex.core.dumpquery.lookup:MAX_REGION_READ",
    "MAX_THREAD_INFO_ENTRIES": "dumpex.core.dumpfile.thread_info_stream:MAX_THREAD_INFO_ENTRIES",
    "MAX_THREAD_INFO_RAW_BYTES": "dumpex.core.dumpfile.thread_info_stream:MAX_THREAD_INFO_RAW_BYTES",
    "MINIDUMP_HANDLE_DESCRIPTOR": "minidump.streams.HandleDataStream:MINIDUMP_HANDLE_DESCRIPTOR",
@@ -922,98 +879,131 @@
    "MinidumpThreadExList": "minidump.streams:MinidumpThreadExList",
    "MinidumpThreadList": "minidump.streams:MinidumpThreadList",
    "MinidumpUnloadedModuleList": "minidump.streams:MinidumpUnloadedModuleList",
-   "NamedTuple": "typing:NamedTuple",
    "PEB": "minidump.structures.peb:PEB",
    "ParsedHandleDataStream": "dumpex.core.dumpfile.handle_stream:ParsedHandleDataStream",
    "ParsedHandleDescriptor": "dumpex.core.dumpfile.handle_stream:ParsedHandleDescriptor",
    "ParsedThreadInfo": "dumpex.core.dumpfile.thread_info_stream:ParsedThreadInfo",
    "ParsedThreadInfoList": "dumpex.core.dumpfile.thread_info_stream:ParsedThreadInfoList",
-   "Path": "pathlib:Path",
-   "RED": "dumpex.ui.colors:RED",
+   "RawThreadInfo": "dumpex.core.dumpquery.threads:RawThreadInfo",
    "RegionReadError": "dumpex.core.dumpfile.reads:RegionReadError",
+   "START_ADDRESS_ABSENT": "dumpex.core.dumpquery.threads:START_ADDRESS_ABSENT",
+   "START_ADDRESS_INVALID": "dumpex.core.dumpquery.threads:START_ADDRESS_INVALID",
+   "START_ADDRESS_RECORDED": "dumpex.core.dumpquery.threads:START_ADDRESS_RECORDED",
+   "START_ADDRESS_UNVERIFIED": "dumpex.core.dumpquery.threads:START_ADDRESS_UNVERIFIED",
+   "SYSTEM_RANGE": "dumpex.core.dumpquery.lookup:SYSTEM_RANGE",
    "SourceObservation": "dumpex.output.coverage:SourceObservation",
+   "StringSearchStats": "dumpex.core.dumpquery.strings:StringSearchStats",
    "ThreadInfoStreamFramingError": "dumpex.core.dumpfile.thread_info_stream:ThreadInfoStreamFramingError",
    "UNPARSED_HANDLE_STREAM_DETAIL": "dumpex.core.dumpfile.stream_state:UNPARSED_HANDLE_STREAM_DETAIL",
+   "VERDICT_CLEAN": "dumpex.core.verdict:VERDICT_CLEAN",
+   "VERDICT_HIGH_CONFIDENCE_MALICIOUS": "dumpex.core.verdict:VERDICT_HIGH_CONFIDENCE_MALICIOUS",
+   "VERDICT_LIKELY_MALICIOUS": "dumpex.core.verdict:VERDICT_LIKELY_MALICIOUS",
+   "VERDICT_SUSPICIOUS": "dumpex.core.verdict:VERDICT_SUSPICIOUS",
    "WOW64_CONTEXT": "minidump.streams.ContextStream:WOW64_CONTEXT",
-   "YELLOW": "dumpex.ui.colors:YELLOW",
    "_DESCRIPTOR_PROBE_BYTES": "dumpex.core.dumpfile.handle_stream:_DESCRIPTOR_PROBE_BYTES",
    "_descriptor_class_size": "dumpex.core.dumpfile.handle_stream:_descriptor_class_size",
+   "_extract_ioc_strings": "dumpex.core.dumpquery.strings:_extract_ioc_strings",
+   "_extract_strings_from_data": "dumpex.core.dumpquery.strings:_extract_strings_from_data",
+   "_get_region_at": "dumpex.core.dumpquery.lookup:_get_region_at",
+   "_hexdump_context": "dumpex.ui.memory_presentation:_hexdump_context",
+   "_is_real_thread_info": "dumpex.core.dumpquery.threads:_is_real_thread_info",
    "_memory_segments": "dumpex.core.dumpfile.segments:_memory_segments",
    "_read_handle_string": "dumpex.core.dumpfile.handle_stream:_read_handle_string",
+   "_verdict": "dumpex.ui.memory_presentation:_verdict",
+   "addr_to_module": "dumpex.core.dumpquery.lookup:addr_to_module",
+   "address_label": "dumpex.ui.memory_presentation:address_label",
    "captured_range_length": "dumpex.core.dumpfile.segments:captured_range_length",
    "clamped_reader": "dumpex.core.dumpfile.reads:clamped_reader",
    "declared_descriptor_count": "dumpex.core.dumpfile.handle_stream:declared_descriptor_count",
    "declared_thread_info_count": "dumpex.core.dumpfile.thread_info_stream:declared_thread_info_count",
    "directory_truncated_count": "dumpex.core.dumpfile.loader:directory_truncated_count",
+   "dump_flags_value": "dumpex.core.dumpquery.threads:dump_flags_value",
+   "dump_format_error_lines": "dumpex.ui.memory_presentation:dump_format_error_lines",
+   "dump_not_found_lines": "dumpex.ui.memory_presentation:dump_not_found_lines",
+   "get_handles": "dumpex.core.dumpquery.lookup:get_handles",
+   "get_memory_regions": "dumpex.core.dumpquery.lookup:get_memory_regions",
+   "get_modules": "dumpex.core.dumpquery.lookup:get_modules",
+   "get_thread_contexts": "dumpex.core.dumpquery.threads:get_thread_contexts",
+   "get_thread_infos": "dumpex.core.dumpquery.threads:get_thread_infos",
+   "group_regions_by_allocation": "dumpex.core.dumpquery.lookup:group_regions_by_allocation",
    "handle_stream_state": "dumpex.core.dumpfile.stream_state:handle_stream_state",
    "has_stream_directory": "dumpex.core.dumpfile.loader:has_stream_directory",
+   "join_thread_contexts": "dumpex.core.dumpquery.threads:join_thread_contexts",
    "load_minidump": "dumpex.core.dumpfile.loader:load_minidump",
-   "ntpath": "ntpath",
+   "module_name_only": "dumpex.core.dumpquery.lookup:module_name_only",
    "parse_bounded_handle_stream": "dumpex.core.dumpfile.handle_stream:parse_bounded_handle_stream",
    "parse_bounded_thread_info_stream": "dumpex.core.dumpfile.thread_info_stream:parse_bounded_thread_info_stream",
-   "re": "re",
+   "parse_hex_or_int": "dumpex.core.dumpquery.lookup:parse_hex_or_int",
+   "prot_str": "dumpex.core.dumpquery.lookup:prot_str",
    "read_region": "dumpex.core.dumpfile.reads:read_region",
    "read_region_spanning": "dumpex.core.dumpfile.reads:read_region_spanning",
+   "resolve_read_size": "dumpex.core.dumpquery.lookup:resolve_read_size",
+   "search_committed_regions": "dumpex.core.dumpquery.strings:search_committed_regions",
    "segment_file_offset": "dumpex.core.dumpfile.segments:segment_file_offset",
    "stream_failure": "dumpex.core.dumpfile.loader:stream_failure",
    "stream_observation": "dumpex.core.dumpfile.stream_state:stream_observation",
    "sys": "sys",
+   "thread_context_conflict": "dumpex.core.dumpquery.threads:thread_context_conflict",
+   "thread_dump_flags_state": "dumpex.core.dumpquery.threads:thread_dump_flags_state",
+   "thread_dump_flags_tags": "dumpex.core.dumpquery.threads:thread_dump_flags_tags",
+   "thread_start_address": "dumpex.core.dumpquery.threads:thread_start_address",
    "truncated_descriptor_count": "dumpex.core.dumpfile.handle_stream:truncated_descriptor_count",
    "truncated_thread_info_count": "dumpex.core.dumpfile.thread_info_stream:truncated_thread_info_count",
-   "validated_descriptor_layout": "dumpex.core.dumpfile.handle_stream:validated_descriptor_layout"
+   "validated_descriptor_layout": "dumpex.core.dumpfile.handle_stream:validated_descriptor_layout",
+   "verdict_for": "dumpex.core.verdict:verdict_for"
   },
   "owners": {
    "DISPATCHED_STREAM_TYPES": "dumpex.core.memory",
-   "DUMP_FLAGS_ABSENT": "dumpex.core.memory",
-   "DUMP_FLAGS_RESOLVED": "dumpex.core.memory",
-   "DUMP_FLAGS_UNRESOLVED": "dumpex.core.memory",
-   "DUMP_FLAG_ERROR_THREAD": "dumpex.core.memory",
-   "DUMP_FLAG_EXITED_THREAD": "dumpex.core.memory",
-   "DUMP_FLAG_INVALID_CONTEXT": "dumpex.core.memory",
-   "DUMP_FLAG_INVALID_INFO": "dumpex.core.memory",
-   "DUMP_FLAG_INVALID_TEB": "dumpex.core.memory",
-   "DUMP_FLAG_WRITING_THREAD": "dumpex.core.memory",
+   "DUMP_FLAGS_ABSENT": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAGS_RESOLVED": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAGS_UNRESOLVED": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_ERROR_THREAD": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_EXITED_THREAD": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_INVALID_CONTEXT": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_INVALID_INFO": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_INVALID_TEB": "dumpex.core.dumpquery.threads",
+   "DUMP_FLAG_WRITING_THREAD": "dumpex.core.dumpquery.threads",
    "HandleDescriptorLayoutError": "dumpex.core.dumpfile.handle_stream",
    "HandleStreamContractError": "dumpex.core.dumpfile.handle_stream",
    "HandleStreamFramingError": "dumpex.core.dumpfile.handle_stream",
-   "INDICATOR_DIMS": "dumpex.core.memory",
-   "IOC_STRING_ENCODING_WIDTHS": "dumpex.core.memory",
+   "INDICATOR_DIMS": "dumpex.core.verdict",
+   "IOC_STRING_ENCODING_WIDTHS": "dumpex.core.dumpquery.strings",
    "MAX_HANDLE_DESCRIPTORS": "dumpex.core.dumpfile.handle_stream",
    "MAX_HANDLE_STRING_BYTES": "dumpex.core.dumpfile.handle_stream",
-   "MAX_REGION_READ": "dumpex.core.memory",
+   "MAX_REGION_READ": "dumpex.core.dumpquery.lookup",
    "MAX_THREAD_INFO_ENTRIES": "dumpex.core.dumpfile.thread_info_stream",
    "MAX_THREAD_INFO_RAW_BYTES": "dumpex.core.dumpfile.thread_info_stream",
    "ParsedHandleDataStream": "dumpex.core.dumpfile.handle_stream",
    "ParsedHandleDescriptor": "dumpex.core.dumpfile.handle_stream",
    "ParsedThreadInfo": "dumpex.core.dumpfile.thread_info_stream",
    "ParsedThreadInfoList": "dumpex.core.dumpfile.thread_info_stream",
-   "RawThreadInfo": "dumpex.core.memory",
+   "RawThreadInfo": "dumpex.core.dumpquery.threads",
    "RegionReadError": "dumpex.core.dumpfile.reads",
-   "START_ADDRESS_ABSENT": "dumpex.core.memory",
-   "START_ADDRESS_INVALID": "dumpex.core.memory",
-   "START_ADDRESS_RECORDED": "dumpex.core.memory",
-   "START_ADDRESS_UNVERIFIED": "dumpex.core.memory",
+   "START_ADDRESS_ABSENT": "dumpex.core.dumpquery.threads",
+   "START_ADDRESS_INVALID": "dumpex.core.dumpquery.threads",
+   "START_ADDRESS_RECORDED": "dumpex.core.dumpquery.threads",
+   "START_ADDRESS_UNVERIFIED": "dumpex.core.dumpquery.threads",
    "STREAM_ATTR_NAMES": "dumpex.core.memory",
-   "SYSTEM_RANGE": "dumpex.core.memory",
-   "StringSearchStats": "dumpex.core.memory",
+   "SYSTEM_RANGE": "dumpex.core.dumpquery.lookup",
+   "StringSearchStats": "dumpex.core.dumpquery.strings",
    "ThreadInfoStreamFramingError": "dumpex.core.dumpfile.thread_info_stream",
    "UNPARSED_HANDLE_STREAM_DETAIL": "dumpex.core.dumpfile.stream_state",
-   "VERDICT_CLEAN": "dumpex.core.memory",
-   "VERDICT_HIGH_CONFIDENCE_MALICIOUS": "dumpex.core.memory",
-   "VERDICT_LIKELY_MALICIOUS": "dumpex.core.memory",
-   "VERDICT_SUSPICIOUS": "dumpex.core.memory",
+   "VERDICT_CLEAN": "dumpex.core.verdict",
+   "VERDICT_HIGH_CONFIDENCE_MALICIOUS": "dumpex.core.verdict",
+   "VERDICT_LIKELY_MALICIOUS": "dumpex.core.verdict",
+   "VERDICT_SUSPICIOUS": "dumpex.core.verdict",
    "_BoundedDescriptorReader": "dumpex.core.dumpfile.handle_stream",
    "_DESCRIPTOR_PROBE_BYTES": "dumpex.core.dumpfile.handle_stream",
-   "_DUMP_FLAGS_INFO_INVALID": "dumpex.core.memory",
-   "_DUMP_FLAG_TAGS": "dumpex.core.memory",
+   "_DUMP_FLAGS_INFO_INVALID": "dumpex.core.dumpquery.threads",
+   "_DUMP_FLAG_TAGS": "dumpex.core.dumpquery.threads",
    "_HANDLE_DESCRIPTOR_LAYOUT_CACHE": "dumpex.core.memory",
    "_HEADER_FLAGS_SIZE": "dumpex.core.dumpfile.loader",
    "_HEADER_TAIL_SIZE": "dumpex.core.dumpfile.loader",
    "_HEADER_UNION_OFFSET": "dumpex.core.dumpfile.loader",
    "_HEADER_UNION_SIZE": "dumpex.core.dumpfile.loader",
-   "_IOC_ENC_ASCII": "dumpex.core.memory",
-   "_IOC_ENC_ASCII_URL": "dumpex.core.memory",
-   "_IOC_ENC_UTF16": "dumpex.core.memory",
+   "_IOC_ENC_ASCII": "dumpex.core.dumpquery.strings",
+   "_IOC_ENC_ASCII_URL": "dumpex.core.dumpquery.strings",
+   "_IOC_ENC_UTF16": "dumpex.core.dumpquery.strings",
    "_STREAM_DISPATCH": "dumpex.core.memory",
    "_THREAD_INFO_ENTRY_SIZE": "dumpex.core.dumpfile.thread_info_stream",
    "_THREAD_INFO_LAYOUT": "dumpex.core.dumpfile.thread_info_stream",
@@ -1022,12 +1012,12 @@
    "_THREAD_INFO_MIN_ENTRY_SIZE": "dumpex.core.dumpfile.thread_info_stream",
    "_correct_header_union": "dumpex.core.dumpfile.loader",
    "_descriptor_class_size": "dumpex.core.dumpfile.handle_stream",
-   "_extract_ioc_strings": "dumpex.core.memory",
-   "_extract_strings_from_data": "dumpex.core.memory",
-   "_get_region_at": "dumpex.core.memory",
+   "_extract_ioc_strings": "dumpex.core.dumpquery.strings",
+   "_extract_strings_from_data": "dumpex.core.dumpquery.strings",
+   "_get_region_at": "dumpex.core.dumpquery.lookup",
    "_handle_descriptor_layout": "dumpex.core.memory",
-   "_hexdump_context": "dumpex.core.memory",
-   "_is_real_thread_info": "dumpex.core.memory",
+   "_hexdump_context": "dumpex.ui.memory_presentation",
+   "_is_real_thread_info": "dumpex.core.dumpquery.threads",
    "_memory_segments": "dumpex.core.dumpfile.segments",
    "_parse_directory_entry": "dumpex.core.dumpfile.loader",
    "_parse_thread_info_entry": "dumpex.core.dumpfile.thread_info_stream",
@@ -1035,34 +1025,34 @@
    "_resolve_size": "dumpex.core.memory",
    "_search_string_in_memory": "dumpex.core.memory",
    "_segments_by_va": "dumpex.core.dumpfile.segments",
-   "_verdict": "dumpex.core.memory",
+   "_verdict": "dumpex.ui.memory_presentation",
    "addr_label": "dumpex.core.memory",
-   "addr_to_module": "dumpex.core.memory",
+   "addr_to_module": "dumpex.core.dumpquery.lookup",
    "clamped_reader": "dumpex.core.dumpfile.reads",
    "declared_descriptor_count": "dumpex.core.dumpfile.handle_stream",
    "declared_thread_info_count": "dumpex.core.dumpfile.thread_info_stream",
    "directory_truncated_count": "dumpex.core.dumpfile.loader",
    "dump_flags_state": "dumpex.core.memory",
    "dump_flags_tags": "dumpex.core.memory",
-   "dump_flags_value": "dumpex.core.memory",
+   "dump_flags_value": "dumpex.core.dumpquery.threads",
    "enriched_thread_contexts": "dumpex.core.memory",
-   "get_handles": "dumpex.core.memory",
-   "get_memory_regions": "dumpex.core.memory",
+   "get_handles": "dumpex.core.dumpquery.lookup",
+   "get_memory_regions": "dumpex.core.dumpquery.lookup",
    "get_memory_segments": "dumpex.core.memory",
-   "get_modules": "dumpex.core.memory",
-   "get_thread_contexts": "dumpex.core.memory",
-   "get_thread_infos": "dumpex.core.memory",
-   "group_regions_by_allocation": "dumpex.core.memory",
+   "get_modules": "dumpex.core.dumpquery.lookup",
+   "get_thread_contexts": "dumpex.core.dumpquery.threads",
+   "get_thread_infos": "dumpex.core.dumpquery.threads",
+   "group_regions_by_allocation": "dumpex.core.dumpquery.lookup",
    "handle_stream_evidence": "dumpex.core.memory",
    "has_stream_directory": "dumpex.core.dumpfile.loader",
    "ip_context_conflict_for": "dumpex.core.memory",
-   "module_name_only": "dumpex.core.memory",
+   "module_name_only": "dumpex.core.dumpquery.lookup",
    "observe_stream": "dumpex.core.memory",
    "open_dump": "dumpex.core.memory",
    "parse_handle_stream": "dumpex.core.memory",
-   "parse_hex_or_int": "dumpex.core.memory",
+   "parse_hex_or_int": "dumpex.core.dumpquery.lookup",
    "parse_thread_info_stream": "dumpex.core.memory",
-   "prot_str": "dumpex.core.memory",
+   "prot_str": "dumpex.core.dumpquery.lookup",
    "read_region": "dumpex.core.dumpfile.reads",
    "read_region_clamped": "dumpex.core.memory",
    "read_region_spanning": "dumpex.core.dumpfile.reads",
@@ -1072,7 +1062,7 @@
    "truncated_thread_info_count": "dumpex.core.dumpfile.thread_info_stream",
    "va_range_captured_bytes": "dumpex.core.memory",
    "va_to_file_offset": "dumpex.core.memory",
-   "verdict_for": "dumpex.core.memory"
+   "verdict_for": "dumpex.core.verdict"
   },
   "private_unexported": [
    "_BoundedDescriptorReader",

@@ -147,9 +147,10 @@ def validate_records_package() -> None:
 
 
 def validate_memory_owner_modules() -> None:
-    """`dumpex.core.memory`'s owner modules (`dumpex.core.dumpfile`) are
-    installed, and a name read through the legacy module is its owner's
-    own object.
+    """`dumpex.core.memory`'s owner modules (the `dumpex.core.dumpfile` and
+    `dumpex.core.dumpquery` packages, `dumpex.core.verdict` and
+    `dumpex.ui.memory_presentation`) are installed, and a name read through
+    the legacy module is its owner's own object.
 
     The legacy module imports every owner module, so an owner the build
     left out fails here rather than on the first dump a command opens.
@@ -158,15 +159,19 @@ def validate_memory_owner_modules() -> None:
     import pkgutil
 
     memory = importlib.import_module("dumpex.core.memory")
-    package = importlib.import_module("dumpex.core.dumpfile")
-    owners = sorted(info.name for info in pkgutil.iter_modules(
-        package.__path__, "dumpex.core.dumpfile."))
-    if not owners:
-        _fail("dumpex.core.dumpfile carries no owner modules")
+    owners = ["dumpex.core.verdict", "dumpex.ui.memory_presentation"]
+    for package_name in ("dumpex.core.dumpfile", "dumpex.core.dumpquery"):
+        package = importlib.import_module(package_name)
+        found = sorted(info.name for info in pkgutil.iter_modules(
+            package.__path__, package_name + "."))
+        if not found:
+            _fail(f"{package_name} carries no owner modules")
+        owners += found
     for name in owners:
         importlib.import_module(name)
     for name in ("ParsedHandleDataStream", "ParsedThreadInfoList", "stream_failure",
-                 "read_region"):
+                 "read_region", "RawThreadInfo", "get_modules", "StringSearchStats",
+                 "verdict_for", "_verdict"):
         obj = getattr(memory, name)
         owner = importlib.import_module(obj.__module__)
         if getattr(owner, obj.__name__, None) is not obj:
