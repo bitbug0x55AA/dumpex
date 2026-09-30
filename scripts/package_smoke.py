@@ -146,6 +146,34 @@ def validate_records_package() -> None:
     print(f"records package installed with {len(owners)} owner modules")
 
 
+def validate_memory_owner_modules() -> None:
+    """`dumpex.core.memory`'s owner modules (`dumpex.core.dumpfile`) are
+    installed, and a name read through the legacy module is its owner's
+    own object.
+
+    The legacy module imports every owner module, so an owner the build
+    left out fails here rather than on the first dump a command opens.
+    """
+    import importlib
+    import pkgutil
+
+    memory = importlib.import_module("dumpex.core.memory")
+    package = importlib.import_module("dumpex.core.dumpfile")
+    owners = sorted(info.name for info in pkgutil.iter_modules(
+        package.__path__, "dumpex.core.dumpfile."))
+    if not owners:
+        _fail("dumpex.core.dumpfile carries no owner modules")
+    for name in owners:
+        importlib.import_module(name)
+    for name in ("ParsedHandleDataStream", "ParsedThreadInfoList", "stream_failure",
+                 "read_region"):
+        obj = getattr(memory, name)
+        owner = importlib.import_module(obj.__module__)
+        if getattr(owner, obj.__name__, None) is not obj:
+            _fail(f"dumpex.core.memory.{name} is not {obj.__module__}.{obj.__name__}")
+    print(f"dumpex.core.memory installed with {len(owners)} owner modules")
+
+
 def main() -> None:
     repo_root = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
 
@@ -256,6 +284,7 @@ def main() -> None:
               f"stdout: {result.stdout}\nstderr: {result.stderr}")
 
     validate_records_package()
+    validate_memory_owner_modules()
     validate_declared_decoder()
 
     print("OK: package smoke test passed")

@@ -42,7 +42,10 @@ _PATCH_CALLS = {"setattr", "delattr", "patch", "object", "setitem", "delitem"}
 
 FAMILY_FILES = frozenset({
     "dumpex/output/records.py", "dumpex/core/memory.py", "dumpex/output/coverage.py"})
-FAMILY_PREFIXES = ("dumpex/output/records/", "dumpex/core/memory/", "dumpex/output/coverage/")
+# `dumpex/core/dumpfile/` holds the owner modules of `dumpex.core.memory`'s
+# loader, stream parsers and captured-range access.
+FAMILY_PREFIXES = ("dumpex/output/records/", "dumpex/core/memory/", "dumpex/core/dumpfile/",
+                   "dumpex/output/coverage/")
 SHIPPED_CATEGORIES = ("production", "scripts", "family")
 EXTERNAL_CATEGORIES = ("production", "scripts")
 

@@ -14,7 +14,8 @@ other. Thread enumeration in `--threads` and report TID lookup use both streams.
 An absent context is not a captured zero; zero is preserved as evidence but is
 not a usable execution address or proof of divergent execution.
 
-`parse_thread_info_stream` in `dumpex.core.memory` owns the stream layout.
+`dumpex.core.dumpfile.thread_info_stream` owns the stream layout; its entry
+point is `dumpex.core.memory.parse_thread_info_stream`.
 All fields use the declared header and entry stride, bounded by the stream's
 DataSize, file extent, and explicit count, stride, and total-byte ceilings
 before reading. Invalid framing fails the stream; it never guesses offsets.
