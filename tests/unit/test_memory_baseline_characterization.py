@@ -500,6 +500,36 @@ def test_string_search_hits_and_telemetry(searchable):
     assert stats == memory.StringSearchStats(skipped=2, clamped=0, truncated=1)
 
 
+def test_string_search_reports_one_hit_per_region_and_ignores_modules(monkeypatch):
+    """The search reports the first ASCII occurrence per committed region,
+    or the first UTF-16LE one only when the ASCII form is absent; further
+    occurrences in the same region are not reported. A hit in a MEM_IMAGE
+    region covered by a loaded module is reported like any other: setting
+    registered-image hits aside is collect_report's decision."""
+    from tests.fixtures.fakes import FakeMF, FakeStream, Module, Region
+    wide = "NEEDLE".encode("utf-16-le")
+    contents = {
+        0x10000: b"..NEEDLE..NEEDLE.." + wide,
+        0x20000: b"...." + wide + b".." + wide,
+        0x30000: b"NEEDLE",
+    }
+    mf = FakeMF()
+    mf.memory_info = FakeStream([
+        Region(0x10000, 0x10000, 0x40, "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+        Region(0x20000, 0x20000, 0x40, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+        Region(0x30000, 0x30000, 0x40, "MEM_RESERVE", "PAGE_NOACCESS", "MEM_PRIVATE"),
+    ], "infos")
+    mf.modules = FakeStream([Module(0x10000, 0x1000, "C:\\Windows\\System32\\image.dll")], "modules")
+    monkeypatch.setattr(memory, "read_region",
+                        lambda mf_, addr, size: contents[addr].ljust(size, b"\x00"))
+    hits, stats = memory._search_string_in_memory(mf, "NEEDLE")
+    assert [(r.BaseAddress, off, enc) for r, off, enc in hits] == [
+        (0x10000, 2, "ASCII"),
+        (0x20000, 4, "UTF16"),
+    ]
+    assert stats == memory.StringSearchStats(skipped=0, clamped=0, truncated=0)
+
+
 def test_resolve_size(searchable):
     assert memory._resolve_size(searchable, 0x10010, None) == 0x2000 - 0x10
     assert memory._resolve_size(searchable, 0x10010, 5) == 5

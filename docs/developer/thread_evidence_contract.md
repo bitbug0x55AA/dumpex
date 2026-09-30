@@ -61,7 +61,10 @@ An empty rendered flag list alone never establishes that flags were readable.
 
 `ip_context_conflict_for` is the shared conflict derivation;
 `enriched_thread_contexts` joins contexts to each TID's recorded start and
-conflict state for commands and hunters. Rendered explanations consume the
+conflict state for commands and hunters. Commands and hunters reach these
+derivations through their `dumpex.core.memory` entry points; the
+derivations themselves are owned by `dumpex.core.dumpquery.threads` (see
+the [memory module layout](memory_layout.md)). Rendered explanations consume the
 same states: no record, invalid record, missing StartAddress bytes, and
 unreadable flags must not be described as interchangeable causes.
 

@@ -2,8 +2,9 @@
 Behavioural checks for the module-level replacement seams of
 `dumpex.core.memory`.
 
-Tests (and the conftest reset fixture) replace readers, parsers, caps and
-caches by assigning to `dumpex.core.memory.<name>`. That only works while
+Tests (and the conftest reset fixture) replace readers, parsers, caps,
+caches and thread interpretations by assigning to
+`dumpex.core.memory.<name>`. That only works while
 the function that consumes `<name>` resolves it from the
 `dumpex.core.memory` namespace at call time. Moving the consumer into
 another module silently breaks the seam -- a re-export keeps the name
@@ -116,6 +117,26 @@ def check_dump_flags_reach_conflict_join(monkeypatch):
         "ip_context_conflict_for does not read dumpex.core.memory.dump_flags_value"
 
 
+def check_flag_readers_reach_thread_interpretations(monkeypatch):
+    memory = _legacy()
+    info = type("Info", (), {"ThreadId": 1, "StartAddress": 0x401000,
+                             "DumpFlags": 0, "RawDumpFlags": 0})()
+    _patch(monkeypatch, memory, "_is_real_thread_info", lambda ti: False)
+    assert memory.dump_flags_state(info) == memory.DUMP_FLAGS_ABSENT, \
+        "dump_flags_state does not read dumpex.core.memory._is_real_thread_info"
+    assert memory.recorded_start_address(info) == (None, memory.START_ADDRESS_ABSENT), \
+        "recorded_start_address does not read dumpex.core.memory._is_real_thread_info"
+    _patch(monkeypatch, memory, "_is_real_thread_info", lambda ti: True)
+    _patch(monkeypatch, memory, "dump_flags_value", lambda ti: None)
+    assert memory.dump_flags_state(info) == memory.DUMP_FLAGS_UNRESOLVED, \
+        "dump_flags_state does not read dumpex.core.memory.dump_flags_value"
+    assert memory.recorded_start_address(info) == (0x401000, memory.START_ADDRESS_UNVERIFIED), \
+        "recorded_start_address does not read dumpex.core.memory.dump_flags_value"
+    _patch(monkeypatch, memory, "dump_flags_value", lambda ti: memory.DUMP_FLAG_EXITED_THREAD)
+    assert memory.dump_flags_tags(info) == ["EXITED"], \
+        "dump_flags_tags does not read dumpex.core.memory.dump_flags_value"
+
+
 def check_clamped_reader_reaches_one_shot_read(monkeypatch):
     memory = _legacy()
     _patch(monkeypatch, memory, "clamped_reader", lambda mf_: (lambda addr, size: b"patched"))
@@ -207,6 +228,7 @@ CHECKS = (
     check_max_region_read_reaches_size_resolution,
     check_thread_readers_reach_enriched_contexts,
     check_dump_flags_reach_conflict_join,
+    check_flag_readers_reach_thread_interpretations,
     check_clamped_reader_reaches_one_shot_read,
     check_segment_table_reaches_address_mapping,
     check_stream_failure_reaches_observers,

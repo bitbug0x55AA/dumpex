@@ -130,12 +130,11 @@ def split_relocation(target: str, monkeypatch, tmp_path, copied_into_functions=(
         modules[FUNCTIONS].__dict__[name] = _copy.copy(modules[owner_of[name]].__dict__[name])
         texts[FUNCTIONS].append(f"{name} = copy.copy({name})\n")
 
+    owned = {part: sorted(n for n, p in owner_of.items() if p == part) for part in PARTS}
     for part in PARTS:
         header = "".join(
-            f"from {names[other]} import (\n"
-            + "".join(f"    {n},\n" for n in sorted(n for n, p in owner_of.items() if p == other))
-            + ")\n"
-            for other in PARTS if other != part)
+            f"from {names[other]} import (\n" + "".join(f"    {n},\n" for n in owned[other]) + ")\n"
+            for other in PARTS if other != part and owned[other])
         with open(modules[part].__file__, "w", encoding="utf-8") as fh:
             fh.write(header + "\n\n" + "\n\n".join(texts[part]))
 

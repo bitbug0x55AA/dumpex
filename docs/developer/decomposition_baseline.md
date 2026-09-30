@@ -130,10 +130,11 @@ attribute. Two different seams exist:
   compatibility contract: splitting it keeps explicit compatibility
   exports or small delegating wrappers at `dumpex.core.memory`, so a patch
   applied to a legacy reader or context entry point still affects the
-  executions that use it. The owner modules in `dumpex.core.dumpfile` and
-  the entry points that delegate to them are listed in
-  [the memory module layout](memory_layout.md); the consumer scan counts
-  `dumpex/core/dumpfile/` as part of the family.
+  executions that use it. The owner modules in `dumpex.core.dumpfile`,
+  `dumpex.core.dumpquery`, `dumpex.core.verdict` and
+  `dumpex.ui.memory_presentation`, and the entry points that delegate to
+  them, are listed in [the memory module layout](memory_layout.md); the
+  consumer scan counts those modules as part of the family.
   `dumpex.output.records` has no such seams and does not delegate: its
   owner modules resolve their globals in their own namespaces, so a test
   replaces a records name on the owner module, never on the facade.
