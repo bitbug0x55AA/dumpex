@@ -52,7 +52,7 @@
     "pyyaml_version": "<VERSION>",
     "yara_version": "<VERSION>"
    },
-   "schema_version": "2.20",
+   "schema_version": "2.21",
    "tool": {
     "name": "dumpex",
     "version": "<VERSION>"

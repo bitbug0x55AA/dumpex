@@ -18,6 +18,7 @@ from dumpex.core.pe_profile import (
 from dumpex.core.pe_utils import parse_iat
 from dumpex.core.process_info import (
     MAIN_IMAGE_PE_READ_MAX, build_process_identity_snapshot, classify_process_create_time,
+    classify_main_image_state as _classify_main_image_state,
 )
 from dumpex.core.va_range import (
     VirtualRange, enumerate_captured_regions, enumerate_captured_segments, slice_captured,
@@ -88,61 +89,6 @@ _EMPTY_IAT_RECORD = IatRecord(
     table_present=None, table_va=None, table_size=None,
     import_directory_present=None, import_directory_va=None, import_directory_size=None,
     has_entries=False, dll_count=0, entry_count=0, entries=(), diagnostics=())
-
-
-def _classify_main_image_state(image_base: "int | None", main_image_pe) -> "str | None":
-    """-> one of None/"read_failed"/"short_read"/"pe_invalid"/"ok",
-    derived entirely from dumpex.core.process_info's already-built
-    MainImagePeClaim (§3.4.4) -- no second read or parse of the main
-    image happens here.
-
-      None           -- no normalized image base at all, nothing to check
-      "read_failed"  -- an image base exists but MainImagePeClaim.checked
-                        is False (nothing was captured there, or the read
-                        itself failed)
-      "short_read"   -- parse_pe_header()'s own `insufficient_data` flag
-                        (dumpex.core.pe_utils, copied onto
-                        MainImagePeFacts) says the rejection was a
-                        genuine capture-length gap -- some structurally
-                        required offset ran past what was captured.
-                        Deciding this ALSO on whether the full
-                        MAIN_IMAGE_PE_READ_MAX budget was reached would be
-                        wrong: MAIN_IMAGE_PE_READ_MAX is dumpex's OWN read
-                        budget, not a fact about the image, and a header
-                        that is genuinely fully present in the dump but
-                        merely structurally LARGER than that budget (e.g.
-                        a section table that needs more than 4096 bytes
-                        to finish) would then be misreported as PE_INVALID
-                        -- a real structural-defect claim -- and silently
-                        drop the entire IAT walk for an image with nothing
-                        wrong with it. `insufficient_data` alone is the
-                        complete, correct signal.
-                        Never decided by pattern-matching parse_pe_header()'s
-                        free-text `reason`: that string is not a closed
-                        vocabulary, and several data-starved rejections
-                        (e.g. a DOS header shorter than 0x40 bytes) would
-                        otherwise need to be told apart from a
-                        DETERMINISTIC rejection reached from bytes that
-                        were all present (a genuinely wrong signature at
-                        a fully-captured offset) by matching free text --
-                        only the structural `insufficient_data` bit does
-                        this reliably.
-      "pe_invalid"   -- parse_pe_header() rejected the header for a
-                        deterministic structural reason (bad signature/
-                        Machine/NumberOfSections/Magic) that more data
-                        would not have changed -- a genuine structural
-                        defect, not a capture gap
-      "ok"           -- parse_pe_header() validated the header
-    """
-    if image_base is None:
-        return None
-    if not main_image_pe.checked:
-        return "read_failed"
-    if main_image_pe.valid:
-        return "ok"
-    if main_image_pe.pe_facts.insufficient_data:
-        return "short_read"
-    return "pe_invalid"
 
 
 # ── §3.10 -- the canonical main-image PE profile ────────────────────────

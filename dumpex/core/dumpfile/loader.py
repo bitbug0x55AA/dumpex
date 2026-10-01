@@ -254,14 +254,17 @@ def load_minidump(path: str, *, stream_dispatch, context, wow64_context, peb) ->
         pass   # same swallow-and-continue as the library's own guard
 
     # Phase 3b -- PEB. Same precondition and same swallow as
-    # __parse_peb()/_parse().
+    # __parse_peb()/_parse(); the failure text is kept, so a PEB that
+    # could not be read is told apart from one never attempted.
+    peb_failure = None
     try:
         if mf.sysinfo and mf.threads:
             mf.peb = peb.from_minidump(mf)
-    except Exception:
-        pass
+    except Exception as e:
+        peb_failure = f"{type(e).__name__}: {e}"
 
     mf._dumpex_stream_failures = stream_failures
+    mf._dumpex_peb_failure = peb_failure
     return mf
 
 
@@ -275,6 +278,17 @@ def stream_failure(mf: MinidumpFile, stream_type) -> "str | None":
     raising."""
     failures = getattr(mf, "_dumpex_stream_failures", None) or {}
     return failures.get(stream_type)
+
+
+def peb_failure(mf: MinidumpFile) -> "str | None":
+    """The failure detail of PEB reconstruction, or None when it
+    succeeded or was never attempted. load_minidump() attempts it only
+    when both SystemInfoStream and ThreadListStream parsed; a PEB that is
+    None with no failure recorded was therefore never attempted (or the
+    attempt produced nothing). An `mf` that never went through
+    open_dump() reports no failure, the same tolerance stream_failure()
+    applies."""
+    return getattr(mf, "_dumpex_peb_failure", None)
 
 
 def has_stream_directory(mf: MinidumpFile, stream_type) -> bool:

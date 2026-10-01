@@ -449,6 +449,11 @@
     "from"
    ]
   },
+  "peb_failure": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
   "prot_str": {
    "dumpex/commands/comparison.py": [
     "from"
@@ -578,6 +583,9 @@
    ]
   },
   "stream_failure": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
    "dumpex/commands/process.py": [
     "from"
    ],
@@ -614,6 +622,9 @@
    ]
   },
   "va_range_captured_bytes": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
    "dumpex/core/process_info.py": [
     "from"
    ],
@@ -1320,6 +1331,41 @@
     "from"
    ]
   },
+  "CAPTURE_ORDER_BASELINE_FIRST": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "CAPTURE_ORDER_SAME_SECOND": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "CAPTURE_ORDER_TARGET_FIRST": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "CAPTURE_ORDER_UNKNOWN": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "COMPARISON_FACTS": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "COMPARISON_SIDE_BASELINE": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "COMPARISON_SIDE_TARGET": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
   "CapabilityLimitation": {
    "dumpex/commands/profile.py": [
     "from"
@@ -1332,6 +1378,21 @@
   },
   "CapabilityStatus": {
    "dumpex/commands/profile.py": [
+    "from"
+   ]
+  },
+  "ComparisonCaptureDiagnostic": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "ComparisonFactRecord": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ]
+  },
+  "ComparisonPremiseRecord": {
+   "dumpex/commands/comparison.py": [
     "from"
    ]
   },
@@ -1400,6 +1461,101 @@
   },
   "ExtractRecord": {
    "dumpex/commands/extract.py": [
+    "from"
+   ]
+  },
+  "FACT_RELATION_DIFFERENT": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_RELATION_SAME": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_RELATION_UNKNOWN": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_ABSENT": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_BASE_UNKNOWN": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_FAILED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_INVALID": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_RECORDED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_TRUNCATED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_UNCAPTURED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_UNMATCHED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_UNRECONSTRUCTED": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "FACT_STATE_UNSET": {
+   "dumpex/commands/comparison.py": [
+    "from"
+   ],
+   "dumpex/commands/diff.py": [
     "from"
    ]
   },
@@ -1652,6 +1808,16 @@
   },
   "ObfuscationDetails": {
    "dumpex/hunt/encoding/report_record.py": [
+    "from"
+   ]
+  },
+  "PROCESS_INSTANCE_DIFFERENT": {
+   "dumpex/commands/diff.py": [
+    "from"
+   ]
+  },
+  "PROCESS_INSTANCE_SAME": {
+   "dumpex/commands/diff.py": [
     "from"
    ]
   },

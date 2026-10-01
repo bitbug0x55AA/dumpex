@@ -48,6 +48,7 @@ SCHEMA_FILENAMES = (
     "dumpex-output-v2.15.schema.json", "dumpex-output-v2.16.schema.json",
     "dumpex-output-v2.17.schema.json", "dumpex-output-v2.18.schema.json",
     "dumpex-output-v2.19.schema.json", "dumpex-output-v2.20.schema.json",
+    "dumpex-output-v2.21.schema.json",
 )
 
 

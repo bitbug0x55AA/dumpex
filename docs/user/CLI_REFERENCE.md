@@ -64,8 +64,10 @@ scripts.
 | `--diff-scope modules\|threads\|memory\|all` | Evidence type to compare; default `all` |
 
 The positional dump is the target and `--diff REFERENCE` is the baseline.
-“Added,” “new,” and “changed to” records describe the target relative to the
-baseline. The older hidden `--diff-mode` alias remains accepted.
+“Only in” entries, a different module base, and a protection that differs at
+the same base relate the two captured inventories; none of them is an observed
+load, unload, rebase, or protection change. The older hidden `--diff-mode`
+alias remains accepted.
 
 ## Display options
 
@@ -527,9 +529,29 @@ can recover bytes that were never written into the dump.
 
 ### `--diff`
 
-Compares module, thread, and/or memory evidence between the target and baseline.
-A change is an observation; its meaning depends on capture comparability and
-case context. Coverage is reported independently for each side/source.
+Compares module, thread, and/or memory inventories between the target and
+baseline. The console opens with a comparison premise: the scope statement, the
+process instance (the same process ID and creation time, different, or not
+established -- the host is never established), the capture order, and which
+identity facts are the same, differ, or are not established. The facts name
+their source: the host architecture and OS version come from SystemInfo, the
+image machine from the main image's own PE header (I386 for a WOW64 process),
+and the PEB image path separately from the module registered at the PEB image
+base. A fact that is not established says why for each dump -- its source is
+absent or unreadable, holds no value, the PEB was never reconstructed, there is
+no PEB image base to look at, no module is registered there, or the bytes
+captured there are missing, cut short, or not a valid PE header. The block ends
+with any identity disagreement inside one dump, such as a PEB path naming a
+different file than the module at its base, or an invalid header at the image
+base -- the same diagnostics `--process` reports. Equivalent forms such as
+`\??\C:\` are not a disagreement; a `\SystemRoot\` or `\Device\` path that the
+dump cannot map to a drive is reported as unresolved (info), not as a match or
+a mismatch. `--json` carries the same premise in `result.summary.premise`.
+
+A difference relates two captures; its meaning depends on that premise and on
+case context. Comparing unrelated processes or different builds is allowed and
+is not a coverage gap. Coverage is reported independently for each
+side/source.
 
 ## Structured output and exit codes
 

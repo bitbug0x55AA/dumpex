@@ -1908,6 +1908,220 @@ def test_comparison_full_envelope_with_all_three_entity_types_validates(validato
         os.remove(dump_b)
 
 
+# ── comparisonSummary / comparisonPremise (v2.21) ─────────────────────────
+
+_PREMISE_IMAGE_BASE = 0x00007FF600010000
+
+
+def _identified_comparison_mf(*, pid, build, module_path="C:\\app\\app.exe"):
+    from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
+    from tests.fixtures.fakes import FakeHeader, MiscInfo, Peb, SysInfo, build_pe_header
+    from tests.unit.test_process_cmd import _mf as _process_mf
+
+    main = Module(_PREMISE_IMAGE_BASE, 0x5000, module_path)
+    main.timestamp = 0x5F5E1000
+    header = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x100,
+                               "rawptr": 0x400, "rawsize": 0x200, "chars": 0x60000020}])
+    mf = _process_mf(misc_info=MiscInfo(process_id=pid, process_create_time=1_700_000_000),
+                     peb=Peb(_PREMISE_IMAGE_BASE, "C:\\app\\app.exe"), modules=[main],
+                     memory={_PREMISE_IMAGE_BASE: header})
+    mf.header = FakeHeader(1_700_000_100)
+    mf.sysinfo = SysInfo(build_number=build, processor_architecture=PROCESSOR_ARCHITECTURE.AMD64)
+    return mf
+
+
+def _comparison_doc(mf_baseline, mf_target) -> dict:
+    from dumpex.output.envelope import EvidenceInput
+    from dumpex.commands.comparison import collect_comparison
+
+    result = collect_comparison(mf_baseline, mf_target, mode="modules")
+    dump_a = _make_dump_file()
+    dump_b = _make_dump_file()
+    try:
+        out = V2Output.from_evidence([
+            EvidenceInput(id="baseline", role="baseline", path=dump_a),
+            EvidenceInput(id="target", role="target", path=dump_b),
+        ], command="diff", options={"verbose": False})
+        out.set_command_result(result)
+        return json.loads(out.to_json())
+    finally:
+        os.remove(dump_a)
+        os.remove(dump_b)
+
+
+def _errors(validator, doc) -> list:
+    return sorted(validator.iter_errors(doc), key=str)
+
+
+def test_comparison_premise_validates_for_identified_and_unidentified_captures(validator):
+    identified = _comparison_doc(
+        _identified_comparison_mf(pid=4660, build=19041),
+        _identified_comparison_mf(pid=4661, build=22631, module_path="C:\\x\\evil.exe"))
+    premise = identified["result"]["summary"]["premise"]
+    assert premise["process_instance"] == "different"
+    assert premise["known_differences"] == ["process_id", "os_version", "module_image_path"]
+    assert [d["code"] for d in premise["capture_diagnostics"]] == [
+        "PROCESS_MODULE_IDENTITY_MISMATCH"]
+    assert not _errors(validator, identified)
+
+    bare = _comparison_doc(FakeMF(), FakeMF())
+    assert bare["result"]["summary"]["premise"]["process_instance"] == "unknown"
+    assert not _errors(validator, bare)
+
+
+# Fact positions in comparisonPremise.facts.
+_CAPTURE, _PID, _CREATED, _HOST, _OS, _MACHINE, _PEB_PATH, _MOD_PATH, _MOD_SIZE, _MOD_TS = range(10)
+
+
+def _mutated_premise_docs():
+    """(label, mutate) pairs: each takes a valid comparison document --
+    same instance, one capture time, nothing unknown -- and breaks exactly
+    one rule comparisonSummary/comparisonPremise/comparisonFact/
+    comparisonCaptureDiagnostic state."""
+    def premise(doc):
+        return doc["result"]["summary"]["premise"]
+
+    def facts(doc):
+        return premise(doc)["facts"]
+
+    def drop_premise(doc):
+        del doc["result"]["summary"]["premise"]
+
+    def extra_summary_key(doc):
+        doc["result"]["summary"]["shown"] = 0
+
+    def history_scope(doc):
+        premise(doc)["scope"] = "history"
+
+    def missing_side_state(doc):
+        del facts(doc)[_HOST]["target_state"]
+
+    def missing_capture_diagnostics(doc):
+        del premise(doc)["capture_diagnostics"]
+
+    def recorded_state_without_a_value(doc):
+        facts(doc)[_HOST]["target"] = None
+
+    def value_with_an_unrecorded_state(doc):
+        facts(doc)[_HOST]["target_state"] = "failed"
+
+    def unmatched_state_on_a_non_module_fact(doc):
+        facts(doc)[_PEB_PATH]["target"] = None
+        facts(doc)[_PEB_PATH]["target_state"] = "unmatched"
+        facts(doc)[_PEB_PATH]["relation"] = "unknown"
+        premise(doc)["unknown_premises"] = ["peb_image_path"]
+
+    def absent_image_machine(doc):
+        facts(doc)[_MACHINE]["target"] = None
+        facts(doc)[_MACHINE]["target_state"] = "absent"
+        facts(doc)[_MACHINE]["relation"] = "unknown"
+        premise(doc)["unknown_premises"] = ["image_machine"]
+
+    def peb_path_with_an_unknown_base(doc):
+        facts(doc)[_PEB_PATH]["target"] = None
+        facts(doc)[_PEB_PATH]["target_state"] = "base_unknown"
+        facts(doc)[_PEB_PATH]["relation"] = "unknown"
+        premise(doc)["unknown_premises"] = ["peb_image_path"]
+
+    def unreconstructed_module_fact(doc):
+        facts(doc)[_MOD_SIZE]["target"] = None
+        facts(doc)[_MOD_SIZE]["target_state"] = "unreconstructed"
+        facts(doc)[_MOD_SIZE]["relation"] = "unknown"
+        premise(doc)["unknown_premises"] = ["module_image_size"]
+
+    def same_relation_with_an_unrecorded_side(doc):
+        facts(doc)[_HOST]["target"] = None
+        facts(doc)[_HOST]["target_state"] = "absent"
+
+    def unknown_relation_with_both_sides(doc):
+        facts(doc)[_HOST]["relation"] = "unknown"
+        premise(doc)["unknown_premises"] = ["host_architecture"]
+
+    def reordered_facts(doc):
+        facts(doc)[0], facts(doc)[1] = facts(doc)[1], facts(doc)[0]
+
+    def missing_fact(doc):
+        facts(doc).pop()
+
+    def extra_fact(doc):
+        facts(doc).append(dict(facts(doc)[0]))
+
+    def pid_as_text(doc):
+        facts(doc)[_PID]["baseline"] = "4660"
+
+    def zero_module_size(doc):
+        facts(doc)[_MOD_SIZE]["baseline"] = 0
+
+    def unformatted_capture_time(doc):
+        facts(doc)[_CAPTURE]["baseline"] = "2023-11-14T22:15:00Z"
+
+    def unknown_process_instance_value(doc):
+        premise(doc)["process_instance"] = "likely_same"
+
+    def same_instance_with_a_differing_pid(doc):
+        facts(doc)[_PID]["target"] = 4661
+        facts(doc)[_PID]["relation"] = "different"
+        premise(doc)["known_differences"] = ["process_id"]
+
+    def different_instance_with_matching_identity(doc):
+        premise(doc)["process_instance"] = "different"
+
+    def unknown_instance_with_matching_identity(doc):
+        premise(doc)["process_instance"] = "unknown"
+
+    def capture_order_against_equal_capture_times(doc):
+        premise(doc)["capture_order"] = "baseline_first"
+
+    def difference_missing_from_known_differences(doc):
+        facts(doc)[_OS]["target"] = "10.0.22631"
+        facts(doc)[_OS]["relation"] = "different"
+
+    def known_difference_for_a_same_fact(doc):
+        premise(doc)["known_differences"] = ["os_version"]
+
+    def unknown_premise_for_a_recorded_fact(doc):
+        premise(doc)["unknown_premises"] = ["process_id"]
+
+    def unknown_fact_in_differences(doc):
+        premise(doc)["known_differences"] = ["hostname"]
+
+    def diagnostic_for_an_unnamed_side(doc):
+        premise(doc)["capture_diagnostics"] = [
+            {"side": "both", "code": "X", "severity": "info", "message": "m"}]
+
+    def diagnostic_without_a_message(doc):
+        premise(doc)["capture_diagnostics"] = [
+            {"side": "target", "code": "X", "severity": "info"}]
+
+    return [(fn.__name__, fn) for fn in (
+        drop_premise, extra_summary_key, history_scope, missing_side_state,
+        missing_capture_diagnostics, recorded_state_without_a_value,
+        value_with_an_unrecorded_state, unmatched_state_on_a_non_module_fact,
+        absent_image_machine, peb_path_with_an_unknown_base, unreconstructed_module_fact,
+        same_relation_with_an_unrecorded_side, unknown_relation_with_both_sides,
+        reordered_facts, missing_fact, extra_fact, pid_as_text, zero_module_size,
+        unformatted_capture_time, unknown_process_instance_value,
+        same_instance_with_a_differing_pid, different_instance_with_matching_identity,
+        unknown_instance_with_matching_identity, capture_order_against_equal_capture_times,
+        difference_missing_from_known_differences, known_difference_for_a_same_fact,
+        unknown_premise_for_a_recorded_fact, unknown_fact_in_differences,
+        diagnostic_for_an_unnamed_side, diagnostic_without_a_message)]
+
+
+@pytest.mark.parametrize("label,mutate", _mutated_premise_docs(),
+                         ids=[label for label, _ in _mutated_premise_docs()])
+def test_comparison_premise_schema_rejects(validator, label, mutate):
+    doc = _comparison_doc(_identified_comparison_mf(pid=4660, build=19041),
+                          _identified_comparison_mf(pid=4660, build=19041))
+    premise = doc["result"]["summary"]["premise"]
+    assert (premise["process_instance"], premise["capture_order"],
+            premise["known_differences"], premise["unknown_premises"]) == (
+        "same", "same_second", [], [])
+    assert not _errors(validator, doc)
+    mutate(doc)
+    assert _errors(validator, doc), f"{label} validated"
+
+
 # ── result.kind == "extract" (Phase E, PR1) ───────────────────────────────
 
 def test_extract_full_envelope_with_mz_header_validates(validator, tmp_path):

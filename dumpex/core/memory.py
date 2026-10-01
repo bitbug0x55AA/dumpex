@@ -77,6 +77,7 @@ from dumpex.core.dumpfile.loader import (
     directory_truncated_count,
     has_stream_directory,
     load_minidump,
+    peb_failure,
     stream_failure,
 )
 from dumpex.core.dumpfile.stream_state import (

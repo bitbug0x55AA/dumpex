@@ -18,6 +18,7 @@ import dumpex.ui.colors as colors
 from dumpex.ui.colors import console_safe, _CONSOLE_ESCAPES
 
 from dumpex.output import records as records_module
+from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import (
     build_coverage_report, SourceObservation, SourceState,
 )
@@ -368,8 +369,12 @@ def _case_process():
 
 
 # ModuleDiffRecord's name/full_path_* are ModuleListStream strings from
-# whichever of the two dumps the module appeared in.
-_DIFF_FIELDS = ("name", "full_path_before", "full_path_after")
+# whichever of the two dumps the module appeared in. In the premise, the
+# PEB and module image paths come from either dump, and a capture
+# diagnostic's message quotes them; every other premise value is
+# dumpex-formatted.
+_DIFF_FIELDS = ("name", "full_path_before", "full_path_after", "peb_image_path",
+                "module_image_path", "message")
 
 
 def _case_diff():
@@ -393,8 +398,31 @@ def _case_diff():
     coverage = _coverage("baseline.modules", "target.modules",
                           "baseline.thread_info", "target.thread_info",
                           "baseline.memory_info", "target.memory_info")
-    return _rendered(render_diff_console, [rebased, added, removed], coverage,
-                     "baseline.dmp", "target.dmp")
+    # A hostile baseline path differs from the target's, so each path fact
+    # prints both values (Differs), and the module path is recorded on one
+    # side only for the other (Not established).
+    hostile_paths = {"peb_image_path": ("C:\\app.exe", "recorded"),
+                     "module_image_path": (None, "unmatched")}
+
+    def fact(name):
+        if name not in hostile_paths:
+            state = "uncaptured" if name == "image_machine" else "absent"
+            return records_module.ComparisonFactRecord(
+                fact=name, baseline=None, target=None,
+                baseline_state=state, target_state=state)
+        target, target_state = hostile_paths[name]
+        return records_module.ComparisonFactRecord(
+            fact=name, baseline=hostile_text_for(name), target=target,
+            baseline_state="recorded", target_state=target_state)
+
+    premise = records_module.ComparisonPremiseRecord(
+        facts=tuple(fact(name) for name in records_module.COMPARISON_FACTS),
+        capture_diagnostics=(hostile_record(records_module.ComparisonCaptureDiagnostic, dict(
+            side="baseline", code="PROCESS_MODULE_IDENTITY_MISMATCH", severity="warning",
+            message="m"), ("message",)),))
+    result = CommandResult(kind="comparison", records=[rebased, added, removed],
+                           coverage=coverage, summary={"count": 3, "premise": premise.to_dict()})
+    return _rendered(render_diff_console, result, "baseline.dmp", "target.dmp")
 
 
 # StringRecord.text is bytes lifted straight out of process memory. The
