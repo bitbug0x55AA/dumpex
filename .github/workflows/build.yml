@@ -157,6 +157,19 @@ jobs:
             throw "dist/dumpex.exe failed the decoder self-check"
           }
 
+      - name: Verify the built executable carries every dumpex module
+        # PyInstaller collects only the modules it reaches by following
+        # imports. Read the artifact's own archive and require every module
+        # of the source package in it, so an owner module no import reaches
+        # fails the release here rather than on the first command that
+        # needs it.
+        shell: pwsh
+        run: |
+          python scripts/frozen_layout_smoke.py dist/dumpex.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "dist/dumpex.exe does not carry the dumpex package layout"
+          }
+
       - name: Stage the output-contract schemas as release assets
         # Ship dumpex.schemas.CURRENT_SCHEMA and every supported frozen schema
         # as standalone assets for EXE-only consumers, matching the wheel's

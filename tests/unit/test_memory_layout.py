@@ -488,6 +488,44 @@ def test_a_forbidden_module_reached_through_an_allowed_import_is_reported():
         f"{owner}: its import chain loads ['dumpex.output.coverage']"]
 
 
+# Run in a fresh interpreter: import dumpex.core.memory with builtins.open
+# and os.open recording every call, and print the files opened, every
+# dumpex module then loaded, and the handle-layout cache.
+_ENTRY_IMPORT_SCRIPT = """
+import builtins, io, json, os, sys
+real_open, real_os_open, opened = builtins.open, os.open, []
+def recording_open(*args, **kwargs):
+    opened.append(str(args[0]) if args else "?")
+    return real_open(*args, **kwargs)
+def recording_os_open(path, *args, **kwargs):
+    opened.append(str(path))
+    return real_os_open(path, *args, **kwargs)
+builtins.open = io.open = recording_open
+os.open = recording_os_open
+try:
+    import dumpex.core.memory as memory
+finally:
+    builtins.open, io.open, os.open = real_open, real_open, real_os_open
+print(json.dumps({"opened": opened,
+                  "loaded": sorted(k for k in sys.modules if k.split(".")[0] == "dumpex"),
+                  "layout_cache": memory._HANDLE_DESCRIPTOR_LAYOUT_CACHE}))
+"""
+
+
+def test_importing_the_legacy_module_opens_no_file_and_loads_no_hunter_or_command():
+    """The entry point reads no dump and opens no file at import, loads
+    every owner and no hunter or command, and leaves the handle-layout
+    cache to the first handle-stream parse."""
+    result = subprocess.run([sys.executable, "-c", _ENTRY_IMPORT_SCRIPT],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+    assert outcome["opened"] == []
+    assert set(OWNERS) <= set(outcome["loaded"])
+    assert [m for m in outcome["loaded"] if m.startswith(("dumpex.hunt", "dumpex.commands"))] == []
+    assert outcome["layout_cache"] is None
+
+
 # ── Behaviour the delegation preserves ───────────────────────────────────
 
 

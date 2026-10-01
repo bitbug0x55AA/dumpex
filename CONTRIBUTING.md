@@ -121,3 +121,8 @@ runner; do not expose it to fork pull-request code or upload raw corpus output.
 The PyInstaller workflow should collect `dumpex.rules_pkg` package data rather
 than copying an unrelated top-level rules directory. Packaging changes should
 be verified against both an installed package and the generated executable.
+The release workflow runs `scripts/frozen_layout_smoke.py` on the built
+executable: every module of the `dumpex` package must be in its archive,
+except the ones the script's `NOT_FROZEN` table names with a reason. A module
+only `importlib` reaches is not collected, so a new owner module is imported
+statically by its facade or legacy module.
