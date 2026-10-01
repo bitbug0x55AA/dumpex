@@ -287,12 +287,14 @@ def _owner_closure(owner: str) -> list:
 # {package: __path__}, "forbidden": [module prefixes], "cases": {owner:
 # [expected owners]}}. For each owner: drop every dumpex module, install
 # the stub packages (plain modules with the real __path__ and no __init__
-# code), import the owner, and report which owners its import chain loaded
-# and any loaded module under a forbidden prefix.
+# code), import the owner with builtins.open recording every call, and
+# report which owners its import chain loaded, any loaded module under a
+# forbidden prefix, and any file it opened.
 _ISOLATED_IMPORT_SCRIPT = """
-import importlib, json, sys, types
+import builtins, importlib, io, json, sys, types
 spec = json.loads(sys.argv[1])
 failures = []
+real_open = builtins.open
 for owner, expected in spec["cases"].items():
     for key in [k for k in sys.modules if k == "dumpex" or k.startswith("dumpex.")]:
         del sys.modules[key]
@@ -300,11 +302,20 @@ for owner, expected in spec["cases"].items():
     for name, path in spec["stubs"].items():
         stubs[name] = sys.modules[name] = types.ModuleType(name)
         stubs[name].__path__ = path
+    opened = []
+    def recording_open(*args, **kwargs):
+        opened.append(str(args[0]) if args else "?")
+        return real_open(*args, **kwargs)
+    builtins.open = io.open = recording_open
     try:
         importlib.import_module(owner)
     except Exception as exc:
         failures.append(f"{owner}: {type(exc).__name__}: {exc}")
         continue
+    finally:
+        builtins.open = io.open = real_open
+    if opened:
+        failures.append(f"{owner}: importing it opened {opened}")
     if any(sys.modules.get(name) is not stub for name, stub in stubs.items()):
         failures.append(f"{owner}: a stubbed package __init__ ran")
     prefix = spec["package"] + "."
@@ -343,9 +354,9 @@ def test_each_owner_module_imports_alone_with_only_its_own_dependencies():
     the facade imports every owner. Here the facade and dumpex.output are
     empty stand-in packages, so each owner is imported through its own
     import chain alone: it must succeed, load exactly the owners it
-    declares, transitively, and -- through dumpex.core.pe_utils or
-    dumpex.output.coverage as much as directly -- load no hunter or
-    command module."""
+    declares, transitively, load no hunter or command module -- through
+    dumpex.core.pe_utils or dumpex.output.coverage as much as directly --
+    and open no file."""
     assert _import_owners_alone(OWNERS, FORBIDDEN_TRANSITIVE) == []
 
 
@@ -355,6 +366,40 @@ def test_a_forbidden_module_reached_through_an_allowed_import_is_reported():
     sees modules an owner never names itself."""
     assert _import_owners_alone([f"{PACKAGE}.report_thread"], ("dumpex.core.pe_utils",)) == [
         f"{PACKAGE}.report_thread: its import chain loads ['dumpex.core.pe_utils']"]
+
+
+# Run in a fresh interpreter with the module to import as its argument:
+# import it with builtins.open and os.open recording every call, and print
+# the files opened and every dumpex module then loaded.
+_ENTRY_IMPORT_SCRIPT = """
+import builtins, importlib, io, json, os, sys
+real_open, real_os_open, opened = builtins.open, os.open, []
+def recording_open(*args, **kwargs):
+    opened.append(str(args[0]) if args else "?")
+    return real_open(*args, **kwargs)
+def recording_os_open(path, *args, **kwargs):
+    opened.append(str(path))
+    return real_os_open(path, *args, **kwargs)
+builtins.open = io.open = recording_open
+os.open = recording_os_open
+try:
+    importlib.import_module(sys.argv[1])
+finally:
+    builtins.open, io.open, os.open = real_open, real_open, real_os_open
+print(json.dumps({"opened": opened,
+                  "loaded": sorted(k for k in sys.modules if k.split(".")[0] == "dumpex")}))
+"""
+
+
+def test_importing_the_facade_opens_no_file_and_loads_no_hunter_or_command():
+    import json
+    result = subprocess.run([sys.executable, "-c", _ENTRY_IMPORT_SCRIPT, PACKAGE],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+    assert outcome["opened"] == []
+    assert set(OWNERS) <= set(outcome["loaded"])
+    assert [m for m in outcome["loaded"] if m.startswith(FORBIDDEN_TRANSITIVE)] == []
 
 
 # ── Module-qualified lookup ──────────────────────────────────────────────

@@ -139,7 +139,8 @@ expectations updated there; a relocation never changes a contract golden.
 | String search order, per-region hit granularity, telemetry, per-region read ceiling, and string/IOC extraction | `dumpex.core.dumpquery.strings` |
 | Hit classification (image, private, mapped), which hits get a card, registered-image handling, card and hit budgets, and the all-image diagnostic | `dumpex.commands.report` (`collect_report`'s string mode) |
 | Indicator dimensions, verdict tiers and the scoring rule | `dumpex.core.verdict` |
-| Console wording and coloring of addresses, hexdumps, verdicts and open failures | `dumpex.ui.memory_presentation`, or the renderer that replaces it |
+| Console wording and coloring of addresses, hexdumps, verdicts and open failures | `dumpex.ui.memory_presentation`, or the renderer that replaces it. The entry points `open_dump` and `addr_label` keep their names and patch seams; the stream `open_dump()` prints its failure lines as part of its console behaviour, changed only in its own reviewed change |
+| Capture-bound evidence objects and shared address resolution (capture, region, allocation, captured range) | A new internal core module that reads captured bytes through `dumpex.core.dumpfile.reads` and `segments` and resolves modules and regions through `dumpex.core.dumpquery.lookup`. It is not `dumpex.core.memory`, and it adds no second reader |
 
 The string search knows nothing about modules. It reports at most one hit
 per committed region, the ASCII form's first occurrence or, only when the
@@ -155,6 +156,11 @@ its indifference to modules are pinned in
 registered-image handling in `tests/unit/test_report_cmd.py` and
 `tests/integration/test_report_hierarchy.py`. A change that alters either
 updates those expectations itself.
+
+Importing `dumpex.core.memory` reads no file, loads every owner and no
+hunter or command module, and leaves the handle-layout cache empty. The
+release gate `scripts/frozen_layout_smoke.py` reads the built executable's
+archive and fails when any `dumpex` module is missing from it.
 
 `tests/unit/test_memory_layout.py` enforces these rules.
 `tests/unit/test_memory_patch_seams.py` and the decomposition baseline

@@ -92,4 +92,27 @@ New record code goes in its owner module. A new name joins the facade only
 when it is part of the supported `dumpex.output.records` surface; code
 inside the package imports it from its owner.
 
+Importing the facade or any owner reads no file. The facade loads every
+owner and no hunter or command module.
+
+## Where changes go
+
+The package is not an append location. A record states what one command
+established, so a change lands with the owner of that command's domain, in
+its own reviewed change, with any affected baseline expectation updated
+there; a relocation never changes a contract golden.
+
+| Change | Owner |
+|---|---|
+| A field, default, validator or vocabulary of one command's records | That command's owner module; the shared layer only when a second domain needs it |
+| Requested, read and missing extents of a captured-range read that `--extract` or `--strings` reports | The read itself in `dumpex.core.dumpfile.reads` (see [the memory module layout](memory_layout.md)); its records in `extraction`, together with the schema and migration decision the new shape needs |
+| Which `--report-string` hits are kept, including registered-image matches | `dumpex.commands.report`; `report_context` and `report_card` only when a card's record shape changes |
+| Console wording and layout of any record | The renderer that consumes the record. Records hold values, not presentation; `handle_name_display()` and its status labels in `handles` are the display rule the `--handles` console and the record share, and a renderer that takes them over keeps the facade names as compatibility imports |
+| Capture-bound evidence objects and shared address resolution | An internal core module beside `dumpex.core.dumpfile` and `dumpex.core.dumpquery`, not this package. Records change only when public output does, in its own change with a schema decision |
+
+A build that follows imports statically carries every owner because the
+facade imports them all; the release gate `scripts/frozen_layout_smoke.py`
+reads the built executable's archive and fails when any `dumpex` module is
+missing from it.
+
 `tests/unit/test_records_layout.py` enforces these rules.
