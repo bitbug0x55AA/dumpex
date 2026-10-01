@@ -7,6 +7,11 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.9.2 — 2026-10-01
+
+No user-facing changes. Command behavior and output remain compatible with
+v3.9.1, including JSON output schema v2.20.
+
 ## 3.9.1 — 2026-09-23
 
 ### Fixed
