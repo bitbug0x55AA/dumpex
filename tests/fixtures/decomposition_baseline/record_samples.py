@@ -19,7 +19,8 @@ from dumpex.output.coverage import (
     MissedBytes, ScanTarget, ScanTargetKind, SourceObservation, SourceRequirement, SourceState,
 )
 from dumpex.output.records import (
-    Artifact, CapabilityDefinition, CapabilityLimitation, CsBeaconDetails, Diagnostic,
+    Artifact, CapabilityDefinition, CapabilityLimitation, ComparisonCaptureDiagnostic,
+    ComparisonFactRecord, ComparisonPremiseRecord, CsBeaconDetails, Diagnostic,
     EnrichmentSection, ExtractRecord, HandleRecord, HollowingDetails, HuntPeHeaderHit,
     HuntRegionRef, HuntThreadRef, HuntThreadRegionHit, HunterRecord, IatRecord,
     ImportEntryRecord, InjectionDetails, MemoryDiffRecord, MemoryRegionRecord,
@@ -137,6 +138,48 @@ SAMPLES = {
             type_after='MEM_PRIVATE',
             suspicious_before=False,
             suspicious_after=True),
+    'ComparisonFactRecord': lambda: ComparisonFactRecord(
+            fact='module_image_path',
+            baseline='C:\\app\\App.exe',
+            target='c:\\APP\\app.exe',
+            baseline_state='recorded',
+            target_state='recorded'),
+    'ComparisonCaptureDiagnostic': lambda: ComparisonCaptureDiagnostic(
+            side='target',
+            code='PROCESS_MODULE_IDENTITY_MISMATCH',
+            severity='warning',
+            message='PEB image path basename (app.exe) disagrees with the matched '
+                    "module's own name (evil.exe)"),
+    'ComparisonPremiseRecord': lambda: ComparisonPremiseRecord(facts=(
+            ComparisonFactRecord(fact='capture_time', baseline='2026-01-01 00:00:00 UTC',
+                                 target='2026-01-01 00:05:00 UTC',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='process_id', baseline=4660, target=4660,
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='process_create_time', baseline='2025-12-31 23:00:00 UTC',
+                                 target='2025-12-31 23:00:00 UTC',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='host_architecture', baseline='AMD64', target='AMD64',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='os_version', baseline='10.0.19041',
+                                 target='10.0.22631',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='image_machine', baseline='AMD64', target=None,
+                                 baseline_state='recorded', target_state='uncaptured'),
+            ComparisonFactRecord(fact='peb_image_path', baseline='C:\\app\\app.exe',
+                                 target='C:\\app\\app.exe',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='module_image_path', baseline='C:\\app\\app.exe',
+                                 target='C:\\x\\evil.exe',
+                                 baseline_state='recorded', target_state='recorded'),
+            ComparisonFactRecord(fact='module_image_size', baseline=0x5000, target=None,
+                                 baseline_state='recorded', target_state='unset'),
+            ComparisonFactRecord(fact='module_image_timestamp', baseline=None, target=None,
+                                 baseline_state='failed', target_state='unmatched')),
+            capture_diagnostics=(ComparisonCaptureDiagnostic(
+                side='target', code='PROCESS_MODULE_IDENTITY_MISMATCH', severity='warning',
+                message='PEB image path basename (app.exe) disagrees with the matched '
+                        "module's own name (evil.exe)"),)),
     'Diagnostic': lambda: Diagnostic(
             severity='warning',
             message='w1',

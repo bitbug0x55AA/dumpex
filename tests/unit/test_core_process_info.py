@@ -8,16 +8,21 @@ silently promoted (a normalizer either returns the value untouched, or
 None -- never a coerced/truncated substitute), and coverage-worthy
 rejection is derived from the normalized result, not raw truthiness.
 """
+import pytest
 from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 
 from tests.fixtures.fakes import (
-    Module, FakeMF, SysInfo, Thread, Ctx, FakeStream, wire_environment_walk,
+    Module, FakeMF, SysInfo, Thread, Ctx, FakeStream, Peb, build_pe_header,
+    wire_environment_walk,
 )
 
 from dumpex.core.process_info import (
     normalize_pid, classify_process_create_time, normalize_windows_path,
     normalize_command_line, normalize_image_base, resolve_module_by_base,
     walk_environment_block, MAX_ENV_BYTES, MAX_ENV_ENTRIES,
+    MainImagePeClaim, MainImagePeFacts, build_process_identity_snapshot,
+    classify_main_image_state,
+    main_image_machine, registered_main_module_facts,
 )
 import dumpex.core.process_info as process_info
 
@@ -179,6 +184,87 @@ def test_resolve_module_by_base_rejects_non_int_base():
     modules = [Module(0x140000000, 0x1000, "a.dll")]
     assert resolve_module_by_base("0x140000000", modules) is None
     assert resolve_module_by_base(None, modules) is None
+
+
+# ── registered_main_module_facts / main_image_machine ────────────────────
+
+def _main_image_mf(*, peb_base=0x140000000, size=0x5000, timestamp=0x5F5E1000):
+    mf = FakeMF()
+    main = Module(0x140000000, size, "C:\\app\\app.exe")
+    main.timestamp = timestamp
+    mf.modules = FakeStream([Module(0x7FF000000000, 0x1000, "ntdll.dll"), main], "modules")
+    mf.peb = Peb(peb_base, "C:\\app\\app.exe")
+    return mf
+
+
+def test_registered_main_module_facts_read_the_entry_the_snapshot_resolved():
+    mf = _main_image_mf()
+    assert registered_main_module_facts(mf, build_process_identity_snapshot(mf)) == (
+        0x5000, 0x5F5E1000)
+
+
+def test_registered_main_module_facts_need_a_resolved_claim():
+    mf = _main_image_mf(peb_base=0x150000000)   # nothing registered there
+    snapshot = build_process_identity_snapshot(mf)
+    assert snapshot.module_claim.match_state == "unregistered"
+    assert registered_main_module_facts(mf, snapshot) == (None, None)
+
+
+def test_registered_main_module_facts_treat_zero_as_unset():
+    mf = _main_image_mf(size=0, timestamp=0)
+    assert registered_main_module_facts(mf, build_process_identity_snapshot(mf)) == (
+        None, None)
+
+
+@pytest.mark.parametrize("machine,name", [(0x8664, "AMD64"), (0x014C, "I386"),
+                                          (0xAA64, "ARM64")])
+def test_main_image_machine_decodes_the_retained_header(machine, name):
+    header = build_pe_header([], machine=machine)
+    claim = MainImagePeClaim(checked=True, valid=True, reason=None,
+                             captured_bytes=len(header), pe_facts=_PE_FACTS,
+                             header_bytes=header)
+    assert main_image_machine(claim) == name
+
+
+def test_main_image_machine_of_an_unchecked_claim_is_unknown():
+    assert main_image_machine(MainImagePeClaim(checked=False, valid=None, reason=None)) is None
+
+
+def test_main_image_machine_of_a_header_cut_before_machine_is_unknown():
+    header = build_pe_header([])[:0x82]   # ends inside the PE signature, before Machine
+    claim = MainImagePeClaim(checked=True, valid=False, reason="short",
+                             captured_bytes=len(header), pe_facts=_PE_FACTS,
+                             header_bytes=header)
+    assert main_image_machine(claim) is None
+
+
+_PE_FACTS = MainImagePeFacts(data_directories=(), declared_directory_count=None,
+                             is_pe32_plus=None, insufficient_data=False)
+
+
+# ── classify_main_image_state ─────────────────────────────────────────────
+
+def _checked(valid, insufficient_data=False):
+    facts = MainImagePeFacts(data_directories=(), declared_directory_count=None,
+                             is_pe32_plus=None, insufficient_data=insufficient_data)
+    return MainImagePeClaim(checked=True, valid=valid, reason=None, captured_bytes=1,
+                            pe_facts=facts, header_bytes=b"M")
+
+
+@pytest.mark.parametrize("image_base,claim,state", [
+    (None, MainImagePeClaim(checked=False, valid=None, reason=None), None),
+    (0x140000000, MainImagePeClaim(checked=False, valid=None, reason=None), "read_failed"),
+    (0x140000000, _checked(True), "ok"),
+    (0x140000000, _checked(False, insufficient_data=True), "short_read"),
+    (0x140000000, _checked(False), "pe_invalid"),
+])
+def test_classify_main_image_state(image_base, claim, state):
+    assert classify_main_image_state(image_base, claim) == state
+
+
+def test_process_classifies_the_main_image_with_the_shared_classifier():
+    from dumpex.commands import process
+    assert process._classify_main_image_state is classify_main_image_state
 
 
 # ── walk_environment_block: fakes ─────────────────────────────────────────

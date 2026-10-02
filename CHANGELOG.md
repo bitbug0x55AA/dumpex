@@ -7,6 +7,44 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.10.0 — Unreleased
+
+### Fixed
+
+- `--diff` no longer words inventory differences as history. Entries present
+  in one dump only, a module at a different base, and a region whose
+  protection differs at the same base are reported as relations between two
+  captured inventories ("Only in", "Different base address", "Protection
+  differs at the same base") rather than as new, removed, rebased, or changed
+  items: two captures say nothing about what happened between them.
+
+### Added
+
+- `--diff` opens with a `COMPARISON PREMISE` block stating what the two dumps
+  share: whether they have the same process ID and creation time (the host is
+  not established), which was captured first, and which identity facts are the
+  same, differ, or are not established. Each fact names its source: host
+  architecture and OS version (SystemInfo), the main image's own machine type
+  (so a WOW64 build differs from a native one on the same host), the PEB image
+  path, and the path, size, and timestamp of the module registered at the PEB
+  image base. A fact that is not established says why for each dump -- for
+  example that the PEB could not be reconstructed, or that the bytes at the
+  image base are not a valid PE header -- and the block lists identity
+  disagreements inside one dump, such as a PEB path that names a different
+  file than the module at its base, using the same diagnostics `--process`
+  reports. `--json` carries the same premise in
+  `result.summary.premise`.
+
+### Changed
+
+- Published output schema v2.21: the `--diff` summary gains a required
+  `premise` object. See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
+  Record shapes and `change_type` values are unchanged, and earlier documents
+  keep validating against their own schema.
+- Comparing unrelated processes, different builds, or dumps missing identity
+  facts remains a valid request. The premise discloses those differences and
+  gaps without changing records, coverage status, or exit codes.
+
 ## 3.9.2 — 2026-10-01
 
 No user-facing changes. Command behavior and output remain compatible with

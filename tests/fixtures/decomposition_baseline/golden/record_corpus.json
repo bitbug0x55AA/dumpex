@@ -393,6 +393,489 @@
     ]
    }
   },
+  "ComparisonCaptureDiagnostic": {
+   "cross_field_probes": {
+    "code": {
+     "vocab:IAT_BOUNDS_CHECK_UNAVAILABLE": "accepted",
+     "vocab:IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS": "accepted",
+     "vocab:PROCESS_MODULE_BASE_CONFLICT": "accepted",
+     "vocab:PROCESS_MODULE_BASE_UNMATCHED": "accepted",
+     "vocab:PROCESS_MODULE_NAME_AMBIGUOUS": "accepted",
+     "vocab:PROCESS_PATH_SOURCE_FALLBACK": "accepted"
+    },
+    "severity": {
+     "vocab:info": "accepted"
+    }
+   },
+   "probes": {
+    "code": {
+     "none": "rejected ValueError: ComparisonCaptureDiagnostic.code must be a non-empty string, got None",
+     "unacceptable": "rejected ValueError: ComparisonCaptureDiagnostic.code must be a non-empty string, got <unacceptable>"
+    },
+    "message": {
+     "none": "rejected ValueError: ComparisonCaptureDiagnostic.message must be a non-empty string, got None",
+     "unacceptable": "rejected ValueError: ComparisonCaptureDiagnostic.message must be a non-empty string, got <unacceptable>"
+    },
+    "severity": {
+     "none": "rejected ValueError: ComparisonCaptureDiagnostic.severity must be one of ('info', 'warning'), got None",
+     "unacceptable": "rejected ValueError: ComparisonCaptureDiagnostic.severity must be one of ('info', 'warning'), got <unacceptable>"
+    },
+    "side": {
+     "none": "rejected ValueError: ComparisonCaptureDiagnostic.side must be one of ('baseline', 'target'), got None",
+     "unacceptable": "rejected ValueError: ComparisonCaptureDiagnostic.side must be one of ('baseline', 'target'), got <unacceptable>"
+    }
+   },
+   "to_dict": {
+    "__dict__": [
+     [
+      "side",
+      "target"
+     ],
+     [
+      "code",
+      "PROCESS_MODULE_IDENTITY_MISMATCH"
+     ],
+     [
+      "severity",
+      "warning"
+     ],
+     [
+      "message",
+      "PEB image path basename (app.exe) disagrees with the matched module's own name (evil.exe)"
+     ]
+    ]
+   }
+  },
+  "ComparisonFactRecord": {
+   "cross_field_probes": {
+    "baseline_state": {
+     "vocab:absent": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' is 'absent', so its value must be None, got 'C:\\\\app\\\\App.exe'",
+     "vocab:invalid": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got 'invalid'",
+     "vocab:unverified": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got 'unverified'"
+    },
+    "fact": {
+     "vocab:capture_time": "rejected ValueError: ComparisonFactRecord.baseline for fact 'capture_time' must be a \"YYYY-MM-DD HH:MM:SS UTC\" string, got 'C:\\\\app\\\\App.exe'",
+     "vocab:host_architecture": "accepted",
+     "vocab:image_machine": "accepted",
+     "vocab:module_image_size": "rejected ValueError: ComparisonFactRecord.baseline for fact 'module_image_size' must be None or an int in 1..0xFFFFFFFF, got 'C:\\\\app\\\\App.exe'",
+     "vocab:module_image_timestamp": "rejected ValueError: ComparisonFactRecord.baseline for fact 'module_image_timestamp' must be None or an int in 1..0xFFFFFFFF, got 'C:\\\\app\\\\App.exe'",
+     "vocab:os_version": "accepted",
+     "vocab:peb_image_path": "accepted",
+     "vocab:process_create_time": "rejected ValueError: ComparisonFactRecord.baseline for fact 'process_create_time' must be a \"YYYY-MM-DD HH:MM:SS UTC\" string, got 'C:\\\\app\\\\App.exe'",
+     "vocab:process_id": "rejected ValueError: ComparisonFactRecord.baseline for fact 'process_id' must be None or an int in 1..0xFFFFFFFF, got 'C:\\\\app\\\\App.exe'"
+    },
+    "target_state": {
+     "vocab:absent": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' is 'absent', so its value must be None, got 'c:\\\\APP\\\\app.exe'",
+     "vocab:invalid": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got 'invalid'",
+     "vocab:unverified": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got 'unverified'"
+    }
+   },
+   "probes": {
+    "baseline": {
+     "none": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' is 'recorded', so its value must be set, got None",
+     "unacceptable": "rejected ValueError: ComparisonFactRecord.baseline for fact 'module_image_path' must be None or a non-empty string, got <unacceptable>"
+    },
+    "baseline_state": {
+     "none": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got None",
+     "unacceptable": "rejected ValueError: ComparisonFactRecord.baseline_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got <unacceptable>"
+    },
+    "fact": {
+     "none": "rejected ValueError: ComparisonFactRecord.fact must be one of ('capture_time', 'process_id', 'process_create_time', 'host_architecture', 'os_version', 'image_machine', 'peb_image_path', 'module_image_path', 'module_image_size', 'module_image_timestamp'), got None",
+     "unacceptable": "rejected ValueError: ComparisonFactRecord.fact must be one of ('capture_time', 'process_id', 'process_create_time', 'host_architecture', 'os_version', 'image_machine', 'peb_image_path', 'module_image_path', 'module_image_size', 'module_image_timestamp'), got <unacceptable>"
+    },
+    "target": {
+     "none": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' is 'recorded', so its value must be set, got None",
+     "unacceptable": "rejected ValueError: ComparisonFactRecord.target for fact 'module_image_path' must be None or a non-empty string, got <unacceptable>"
+    },
+    "target_state": {
+     "none": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got None",
+     "unacceptable": "rejected ValueError: ComparisonFactRecord.target_state for fact 'module_image_path' must be one of ['absent', 'base_unknown', 'failed', 'recorded', 'unmatched', 'unset'], got <unacceptable>"
+    }
+   },
+   "to_dict": {
+    "__dict__": [
+     [
+      "fact",
+      "module_image_path"
+     ],
+     [
+      "baseline",
+      "C:\\app\\App.exe"
+     ],
+     [
+      "target",
+      "c:\\APP\\app.exe"
+     ],
+     [
+      "baseline_state",
+      "recorded"
+     ],
+     [
+      "target_state",
+      "recorded"
+     ],
+     [
+      "relation",
+      "same"
+     ]
+    ]
+   }
+  },
+  "ComparisonPremiseRecord": {
+   "cross_field_probes": {},
+   "probes": {
+    "capture_diagnostics": {
+     "none": "rejected ValueError: ComparisonPremiseRecord.capture_diagnostics must be a tuple of ComparisonCaptureDiagnostic",
+     "unacceptable": "rejected ValueError: ComparisonPremiseRecord.capture_diagnostics must be a tuple of ComparisonCaptureDiagnostic"
+    },
+    "facts": {
+     "none": "rejected ValueError: ComparisonPremiseRecord.facts must be a tuple of ComparisonFactRecord",
+     "unacceptable": "rejected ValueError: ComparisonPremiseRecord.facts must be a tuple of ComparisonFactRecord"
+    }
+   },
+   "to_dict": {
+    "__dict__": [
+     [
+      "scope",
+      "inventory"
+     ],
+     [
+      "process_instance",
+      "same"
+     ],
+     [
+      "capture_order",
+      "baseline_first"
+     ],
+     [
+      "known_differences",
+      [
+       "capture_time",
+       "os_version",
+       "module_image_path"
+      ]
+     ],
+     [
+      "unknown_premises",
+      [
+       "image_machine",
+       "module_image_size",
+       "module_image_timestamp"
+      ]
+     ],
+     [
+      "facts",
+      [
+       {
+        "__dict__": [
+         [
+          "fact",
+          "capture_time"
+         ],
+         [
+          "baseline",
+          "2026-01-01 00:00:00 UTC"
+         ],
+         [
+          "target",
+          "2026-01-01 00:05:00 UTC"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "different"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "process_id"
+         ],
+         [
+          "baseline",
+          4660
+         ],
+         [
+          "target",
+          4660
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "same"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "process_create_time"
+         ],
+         [
+          "baseline",
+          "2025-12-31 23:00:00 UTC"
+         ],
+         [
+          "target",
+          "2025-12-31 23:00:00 UTC"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "same"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "host_architecture"
+         ],
+         [
+          "baseline",
+          "AMD64"
+         ],
+         [
+          "target",
+          "AMD64"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "same"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "os_version"
+         ],
+         [
+          "baseline",
+          "10.0.19041"
+         ],
+         [
+          "target",
+          "10.0.22631"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "different"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "image_machine"
+         ],
+         [
+          "baseline",
+          "AMD64"
+         ],
+         [
+          "target",
+          null
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "uncaptured"
+         ],
+         [
+          "relation",
+          "unknown"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "peb_image_path"
+         ],
+         [
+          "baseline",
+          "C:\\app\\app.exe"
+         ],
+         [
+          "target",
+          "C:\\app\\app.exe"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "same"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "module_image_path"
+         ],
+         [
+          "baseline",
+          "C:\\app\\app.exe"
+         ],
+         [
+          "target",
+          "C:\\x\\evil.exe"
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "recorded"
+         ],
+         [
+          "relation",
+          "different"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "module_image_size"
+         ],
+         [
+          "baseline",
+          20480
+         ],
+         [
+          "target",
+          null
+         ],
+         [
+          "baseline_state",
+          "recorded"
+         ],
+         [
+          "target_state",
+          "unset"
+         ],
+         [
+          "relation",
+          "unknown"
+         ]
+        ]
+       },
+       {
+        "__dict__": [
+         [
+          "fact",
+          "module_image_timestamp"
+         ],
+         [
+          "baseline",
+          null
+         ],
+         [
+          "target",
+          null
+         ],
+         [
+          "baseline_state",
+          "failed"
+         ],
+         [
+          "target_state",
+          "unmatched"
+         ],
+         [
+          "relation",
+          "unknown"
+         ]
+        ]
+       }
+      ]
+     ],
+     [
+      "capture_diagnostics",
+      [
+       {
+        "__dict__": [
+         [
+          "side",
+          "target"
+         ],
+         [
+          "code",
+          "PROCESS_MODULE_IDENTITY_MISMATCH"
+         ],
+         [
+          "severity",
+          "warning"
+         ],
+         [
+          "message",
+          "PEB image path basename (app.exe) disagrees with the matched module's own name (evil.exe)"
+         ]
+        ]
+       }
+      ]
+     ]
+    ]
+   }
+  },
   "CoverageLimitation": {
    "cross_field_probes": {
     "code": {

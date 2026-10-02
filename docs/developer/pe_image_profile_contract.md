@@ -2592,7 +2592,7 @@ production code and out of scope (§0.2).
 ### 11.6 Vocabulary bridge — the shipped main-image states
 
 `--process` already ships a frozen, exit-code-bearing main-image
-vocabulary from `_classify_main_image_state()`. The two vocabularies
+vocabulary from `dumpex.core.process_info.classify_main_image_state()`. The two vocabularies
 coexist on one record (§12), so the mapping is fixed here rather than
 left to each consumer. `short` and `io_short` are
 `ReadSlice.is_short` / `ReadSlice.is_io_short` (§5.1):

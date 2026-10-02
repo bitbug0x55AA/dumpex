@@ -12,6 +12,8 @@ from dumpex.output.records import (
     ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
+    COMPARISON_FACTS, ComparisonFactRecord, ComparisonCaptureDiagnostic,
+    ComparisonPremiseRecord,
     ReportIocString, ReportThreadInfo, ReportRegionInfo,
     ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
     ProcessPeRecord,
@@ -874,6 +876,227 @@ def test_memory_diff_record_rejects_empty_string_protect():
                           protect_before=None, protect_after="",
                           type_before=None, type_after="MEM_PRIVATE",
                           suspicious_before=None, suspicious_after=False)
+
+
+# ── ComparisonFactRecord / ComparisonPremiseRecord ──────────────────────
+
+_PREMISE_VALUES = {
+    "capture_time":           ("2026-01-01 00:00:00 UTC", "2026-01-01 00:05:00 UTC"),
+    "process_id":             (4660, 4660),
+    "process_create_time":    ("2025-12-31 23:00:00 UTC", "2025-12-31 23:00:00 UTC"),
+    "host_architecture":      ("AMD64", "AMD64"),
+    "os_version":             ("10.0.19041", "10.0.19041"),
+    "image_machine":          ("AMD64", "AMD64"),
+    "peb_image_path":         ("C:\\app\\app.exe", "C:\\app\\app.exe"),
+    "module_image_path":      ("C:\\app\\app.exe", "C:\\app\\app.exe"),
+    "module_image_size":      (0x5000, 0x5000),
+    "module_image_timestamp": (0x5F5E1000, 0x5F5E1000),
+}
+
+
+def _fact(fact, baseline, target, baseline_state=None, target_state=None):
+    """A ComparisonFactRecord whose states default to what its values say:
+    recorded when set, absent when None."""
+    return ComparisonFactRecord(
+        fact=fact, baseline=baseline, target=target,
+        baseline_state=baseline_state or ("recorded" if baseline is not None else "absent"),
+        target_state=target_state or ("recorded" if target is not None else "absent"))
+
+
+def _premise(diagnostics=(), **overrides):
+    """A premise over _PREMISE_VALUES, with any fact replaced by a
+    (baseline, target) pair."""
+    values = {**_PREMISE_VALUES, **overrides}
+    return ComparisonPremiseRecord(
+        facts=tuple(_fact(fact, *values[fact]) for fact in COMPARISON_FACTS),
+        capture_diagnostics=tuple(diagnostics))
+
+
+@pytest.mark.parametrize("baseline,target,relation", [
+    (None, None, "unknown"),
+    ("AMD64", None, "unknown"),
+    (None, "AMD64", "unknown"),
+    ("AMD64", "AMD64", "same"),
+    ("AMD64", "ARM64", "different"),
+    # Only paths compare without case.
+    ("AMD64", "amd64", "different"),
+])
+def test_comparison_fact_relation_is_derived_from_its_values(baseline, target, relation):
+    fact = _fact("host_architecture", baseline, target)
+    assert fact.relation == relation
+    assert fact.to_dict() == {
+        "fact": "host_architecture", "baseline": baseline, "target": target,
+        "baseline_state": fact.baseline_state, "target_state": fact.target_state,
+        "relation": relation}
+
+
+@pytest.mark.parametrize("fact", ["peb_image_path", "module_image_path"])
+def test_comparison_fact_paths_compare_without_case(fact):
+    assert _fact(fact, "C:\\A.exe", "c:\\a.EXE").relation == "same"
+
+
+def test_comparison_fact_relation_cannot_be_supplied():
+    with pytest.raises(TypeError):
+        ComparisonFactRecord(fact="host_architecture", baseline="AMD64", target="AMD64",
+                             baseline_state="recorded", target_state="recorded",
+                             relation="different")
+
+
+@pytest.mark.parametrize("fact,value", [
+    ("process_id", True),                       # bool is not an integer fact
+    ("process_id", 0),                          # 0 is the producer's "not set"
+    ("module_image_size", 0x1_0000_0000),       # wider than the UINT32 field
+    ("module_image_timestamp", "0x5f5e1000"),    # integer facts are integers
+    ("host_architecture", ""),                   # empty is absent, never a value
+    ("os_version", 10),                          # text facts are text
+    ("capture_time", "2026-01-01T00:00:00Z"),    # one fixed time format
+    ("process_create_time", "2026-01-01 00:00:00"),
+])
+def test_comparison_fact_rejects_a_value_its_fact_cannot_hold(fact, value):
+    with pytest.raises(ValueError, match=fact):
+        _fact(fact, value, None)
+
+
+@pytest.mark.parametrize("fact,state", [
+    ("process_id", "unmatched"),              # only module facts can be unmatched
+    ("process_id", "base_unknown"),           # only facts located at the PEB image base
+    ("os_version", "unreconstructed"),        # only the PEB path can be unreconstructed
+    ("module_image_path", "unreconstructed"),
+    ("peb_image_path", "uncaptured"),         # only image_machine reads the header bytes
+    ("module_image_path", "truncated"),
+    ("peb_image_path", "invalid"),
+    ("image_machine", "unmatched"),
+    ("image_machine", "absent"),              # no bytes at the base are "uncaptured"
+    ("image_machine", "unset"),
+    ("os_version", "missing"),                # not a state at all
+])
+def test_comparison_fact_rejects_a_state_its_fact_cannot_take(fact, state):
+    with pytest.raises(ValueError, match="baseline_state"):
+        _fact(fact, None, None, baseline_state=state, target_state=state)
+
+
+@pytest.mark.parametrize("fact,state", [
+    ("capture_time", "failed"),
+    ("process_id", "unset"),
+    ("peb_image_path", "unreconstructed"),
+    ("module_image_size", "base_unknown"),
+    ("module_image_size", "unmatched"),
+    ("image_machine", "base_unknown"),
+    ("image_machine", "failed"),
+    ("image_machine", "uncaptured"),
+    ("image_machine", "truncated"),
+    ("image_machine", "invalid"),
+])
+def test_comparison_fact_accepts_each_state_its_fact_can_take(fact, state):
+    fact_record = _fact(fact, None, None, baseline_state=state, target_state=state)
+    assert (fact_record.baseline_state, fact_record.relation) == (state, "unknown")
+
+
+def test_comparison_fact_value_is_set_exactly_when_recorded():
+    with pytest.raises(ValueError, match="must be set"):
+        _fact("host_architecture", None, None, baseline_state="recorded")
+    with pytest.raises(ValueError, match="must be None"):
+        _fact("host_architecture", "AMD64", None, baseline_state="failed")
+
+
+def test_comparison_fact_rejects_an_unknown_fact():
+    with pytest.raises(ValueError, match="fact must be one of"):
+        _fact("hostname", "h", "h")
+
+
+def test_comparison_premise_derives_every_qualification_from_its_facts():
+    premise = _premise()
+    assert premise.scope == "inventory"
+    assert premise.process_instance == "same"
+    assert premise.capture_order == "baseline_first"
+    assert premise.known_differences == ("capture_time",)
+    assert premise.unknown_premises == ()
+    assert premise.to_dict() == {
+        "scope": "inventory", "process_instance": "same", "capture_order": "baseline_first",
+        "known_differences": ["capture_time"], "unknown_premises": [],
+        "facts": [f.to_dict() for f in premise.facts], "capture_diagnostics": []}
+
+
+@pytest.mark.parametrize("process_id,create_time,instance", [
+    ((4660, 4660), ("2025-12-31 23:00:00 UTC",) * 2, "same"),
+    ((4660, 4661), ("2025-12-31 23:00:00 UTC",) * 2, "different"),
+    ((4660, 4660), ("2025-12-31 23:00:00 UTC", "2025-12-31 23:00:01 UTC"), "different"),
+    ((None, None), ("2025-12-31 23:00:00 UTC", "2025-12-31 23:00:01 UTC"), "different"),
+    ((4660, 4660), (None, "2025-12-31 23:00:00 UTC"), "unknown"),
+    ((None, 4660), ("2025-12-31 23:00:00 UTC",) * 2, "unknown"),
+])
+def test_comparison_premise_process_instance_rests_on_pid_and_creation_time(
+        process_id, create_time, instance):
+    premise = _premise(process_id=process_id, process_create_time=create_time)
+    assert premise.process_instance == instance
+
+
+def test_comparison_premise_never_infers_an_instance_from_other_facts():
+    premise = _premise(module_image_path=("C:\\a.exe", "C:\\b.exe"),
+                       image_machine=("AMD64", "I386"))
+    assert premise.process_instance == "same"
+    assert premise.known_differences == ("capture_time", "image_machine", "module_image_path")
+
+
+@pytest.mark.parametrize("capture_time,order", [
+    (("2026-01-01 00:00:00 UTC", "2026-01-01 00:05:00 UTC"), "baseline_first"),
+    (("2026-01-01 00:05:00 UTC", "2026-01-01 00:00:00 UTC"), "target_first"),
+    (("2026-01-01 00:00:00 UTC", "2026-01-01 00:00:00 UTC"), "same_second"),
+    ((None, "2026-01-01 00:00:00 UTC"), "unknown"),
+])
+def test_comparison_premise_capture_order(capture_time, order):
+    assert _premise(capture_time=capture_time).capture_order == order
+
+
+def test_comparison_premise_lists_unknown_premises_in_fact_order():
+    premise = _premise(module_image_timestamp=(None, None), process_id=(4660, None))
+    assert premise.unknown_premises == ("process_id", "module_image_timestamp")
+    assert premise.process_instance == "unknown"
+
+
+def test_comparison_premise_requires_every_fact_in_order():
+    facts = _premise().facts
+    with pytest.raises(ValueError, match="in that order"):
+        ComparisonPremiseRecord(facts=facts[1:], capture_diagnostics=())
+    with pytest.raises(ValueError, match="in that order"):
+        ComparisonPremiseRecord(facts=(facts[1], facts[0], *facts[2:]), capture_diagnostics=())
+    with pytest.raises(ValueError, match="tuple of ComparisonFactRecord"):
+        ComparisonPremiseRecord(facts=list(facts), capture_diagnostics=())
+
+
+def test_comparison_premise_requires_its_capture_diagnostics():
+    with pytest.raises(TypeError):
+        ComparisonPremiseRecord(facts=_premise().facts)
+
+
+def _capture_diagnostic(side="target", code="PROCESS_MODULE_IDENTITY_MISMATCH", severity="warning",
+                message="PEB image path basename (a.exe) disagrees with the matched module's "
+                        "own name (b.exe)"):
+    return ComparisonCaptureDiagnostic(side=side, code=code, severity=severity, message=message)
+
+
+def test_comparison_premise_carries_capture_diagnostics_baseline_first():
+    premise = _premise(diagnostics=(_capture_diagnostic(side="baseline"), _capture_diagnostic()))
+    assert [d["side"] for d in premise.to_dict()["capture_diagnostics"]] == [
+        "baseline", "target"]
+    with pytest.raises(ValueError, match="baseline before target"):
+        _premise(diagnostics=(_capture_diagnostic(), _capture_diagnostic(side="baseline")))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("side", "both"), ("severity", "error"), ("code", ""), ("message", ""),
+])
+def test_comparison_capture_diagnostic_rejects(field, value):
+    with pytest.raises(ValueError, match=field):
+        _capture_diagnostic(**{field: value})
+
+
+@pytest.mark.parametrize("derived", ["scope", "process_instance", "capture_order",
+                                     "known_differences", "unknown_premises"])
+def test_comparison_premise_derived_fields_cannot_be_supplied(derived):
+    with pytest.raises(TypeError):
+        ComparisonPremiseRecord(facts=_premise().facts, capture_diagnostics=(),
+                                **{derived: "x"})
 
 
 # ── ReportIocString context_hex/context_hit_offset bounds (RevFix2-P2) ────

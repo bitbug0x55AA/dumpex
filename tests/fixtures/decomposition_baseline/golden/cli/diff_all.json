@@ -50,7 +50,7 @@
     "pyyaml_version": "<VERSION>",
     "yara_version": "<VERSION>"
    },
-   "schema_version": "2.20",
+   "schema_version": "2.21",
    "tool": {
     "name": "dumpex",
     "version": "<VERSION>"
@@ -134,7 +134,99 @@
    "execution_status": "completed",
    "kind": "comparison",
    "summary": {
-    "count": 2
+    "count": 2,
+    "premise": {
+     "capture_diagnostics": [],
+     "capture_order": "same_second",
+     "facts": [
+      {
+       "baseline": "2020-09-13 12:26:40 UTC",
+       "baseline_state": "recorded",
+       "fact": "capture_time",
+       "relation": "same",
+       "target": "2020-09-13 12:26:40 UTC",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": 4242,
+       "baseline_state": "recorded",
+       "fact": "process_id",
+       "relation": "same",
+       "target": 4242,
+       "target_state": "recorded"
+      },
+      {
+       "baseline": null,
+       "baseline_state": "unset",
+       "fact": "process_create_time",
+       "relation": "unknown",
+       "target": null,
+       "target_state": "unset"
+      },
+      {
+       "baseline": "AMD64",
+       "baseline_state": "recorded",
+       "fact": "host_architecture",
+       "relation": "same",
+       "target": "AMD64",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": "10.0.19045",
+       "baseline_state": "recorded",
+       "fact": "os_version",
+       "relation": "same",
+       "target": "10.0.19045",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": "AMD64",
+       "baseline_state": "recorded",
+       "fact": "image_machine",
+       "relation": "same",
+       "target": "AMD64",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": "C:\\Program Files\\Sample\\app.exe",
+       "baseline_state": "recorded",
+       "fact": "peb_image_path",
+       "relation": "same",
+       "target": "C:\\Program Files\\Sample\\app.exe",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": "C:\\Program Files\\Sample\\app.exe",
+       "baseline_state": "recorded",
+       "fact": "module_image_path",
+       "relation": "same",
+       "target": "C:\\Program Files\\Sample\\app.exe",
+       "target_state": "recorded"
+      },
+      {
+       "baseline": 12288,
+       "baseline_state": "recorded",
+       "fact": "module_image_size",
+       "relation": "same",
+       "target": 12288,
+       "target_state": "recorded"
+      },
+      {
+       "baseline": 1600000000,
+       "baseline_state": "recorded",
+       "fact": "module_image_timestamp",
+       "relation": "same",
+       "target": 1600000000,
+       "target_state": "recorded"
+      }
+     ],
+     "known_differences": [],
+     "process_instance": "unknown",
+     "scope": "inventory",
+     "unknown_premises": [
+      "process_create_time"
+     ]
+    }
    }
   }
  },
@@ -146,34 +238,44 @@
   "dumpex diff: target sample.dmp vs baseline reference.dmp",
   "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
   "",
+  "\u2550\u2550\u2550 COMPARISON PREMISE \u2550\u2550\u2550",
+  "  Scope: inventory relations between two captures \u2014 not observed load, unload, rebase or protection events",
+  "  Process instance: not established",
+  "  Capture order: both captured in the same second",
+  "  Same: capture time, process ID, host architecture, OS version, image machine, PEB image path, module image path, module image size, module image timestamp",
+  "  Differs: none",
+  "  Not established:",
+  "      not set in both captures: process create time",
+  "  Within one capture: no identity disagreement",
+  "",
   "\u2550\u2550\u2550 MODULE DIFF \u2550\u2550\u2550",
   "  reference.dmp: 2 modules",
   "  sample.dmp: 2 modules",
   "",
-  "  [+] No new modules.",
+  "  [+] No modules only in sample.dmp.",
   "",
-  "  [-] No removed modules.",
+  "  [-] No modules only in reference.dmp.",
   "",
-  "  [~] Rebased (1):",
-  "      ntdll.dll: 0x7ffe00100000 \u2192 0x7ffe00000000",
+  "  [~] Different base address (1):",
+  "      ntdll.dll: baseline 0x7ffe00100000, target 0x7ffe00000000",
   "",
   "\u2550\u2550\u2550 THREAD DIFF \u2550\u2550\u2550",
   "  reference.dmp: 3 threads",
   "  sample.dmp: 3 threads",
   "",
-  "  [+] No new threads.",
+  "  [+] No TIDs only in sample.dmp.",
   "",
-  "  [-] No removed threads.",
+  "  [-] No TIDs only in reference.dmp.",
   "",
   "\u2550\u2550\u2550 MEMORY REGION DIFF \u2550\u2550\u2550",
   "  reference.dmp: 9 regions",
   "  sample.dmp: 9 regions",
-  "  Delta: +0 / -0 regions",
+  "  Base addresses in one capture only: 0 in sample.dmp, 0 in reference.dmp",
   "",
-  "  [!] No RWX regions added.",
+  "  [!] No RWX regions only in sample.dmp.",
   "",
-  "  [~] Protection changed (1):",
-  "      0x0000000030000000  PAGE_EXECUTE_READ \u2192 PAGE_EXECUTE_READWRITE \u2190 now RWX!",
+  "  [~] Protection differs at the same base (1):",
+  "      0x0000000030000000  baseline PAGE_EXECUTE_READ, target PAGE_EXECUTE_READWRITE \u25c4 RWX in target!",
   "",
   "  [\u00b7] JSON written \u2192 <TMP>/out.json  (<WRITTEN>)",
   ""

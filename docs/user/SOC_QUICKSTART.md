@@ -27,7 +27,7 @@ requirement.
 | Focused investigation | `--report` | What thread, region, module, strings, and suspicious properties surround a known TID, address, or string? |
 | Evidence recovery | `--extract ADDR` | Can I preserve captured bytes from a target region for other tools? |
 | Content review | `--strings ADDR` | Which ASCII/Unicode strings are present around a target address? |
-| Change analysis | `--diff REFERENCE` | What changed in this dump relative to a baseline dump? |
+| Inventory comparison | `--diff REFERENCE` | Which modules, threads, and regions differ between this dump and a baseline dump? |
 
 ## 1. Establish the evidence boundary
 
@@ -253,8 +253,15 @@ dumpex suspect.dmp --diff clean-reference.dmp --diff-scope all \
 ```
 
 The positional dump is the target; the dump passed to `--diff` is the baseline.
-“Added,” “new,” and “changed to” describe the target relative to that baseline.
-A difference is an observation requiring context, not automatically malicious.
+Entries “only in” one dump, a different module base, and a protection that
+differs at the same base relate the two captured inventories: none is an
+observed load, unload, rebase, or protection change, and nothing that happened
+between the captures was observed. Read the `COMPARISON PREMISE` block first --
+it says whether both dumps share a process ID and creation time, which was
+captured first, which identity facts differ or are not established and why, and
+whether either dump disagrees with itself about its main image (a PEB path
+naming a different file than the module at its base). A difference is an
+observation requiring that context, not automatically malicious.
 
 ## Hunter-specific boundaries
 

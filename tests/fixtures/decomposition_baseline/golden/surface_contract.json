@@ -1264,6 +1264,18 @@
      "returns": "ParsedThreadInfoList"
     }
    },
+   "peb_failure": {
+    "kind": "function",
+    "signature": {
+     "parameters": [
+      {
+       "annotation": "MinidumpFile",
+       "name": "mf"
+      }
+     ],
+     "returns": "str | None"
+    }
+   },
    "prot_str": {
     "kind": "function",
     "signature": {
@@ -1515,6 +1527,7 @@
    "parse_handle_stream",
    "parse_hex_or_int",
    "parse_thread_info_stream",
+   "peb_failure",
    "prot_str",
    "read_region",
    "read_region_clamped",
@@ -5072,6 +5085,52 @@
      ]
     }
    },
+   "CAPTURE_ORDER_BASELINE_FIRST": {
+    "kind": "value",
+    "type": "str",
+    "value": "baseline_first"
+   },
+   "CAPTURE_ORDER_SAME_SECOND": {
+    "kind": "value",
+    "type": "str",
+    "value": "same_second"
+   },
+   "CAPTURE_ORDER_TARGET_FIRST": {
+    "kind": "value",
+    "type": "str",
+    "value": "target_first"
+   },
+   "CAPTURE_ORDER_UNKNOWN": {
+    "kind": "value",
+    "type": "str",
+    "value": "unknown"
+   },
+   "COMPARISON_FACTS": {
+    "kind": "value",
+    "type": "tuple",
+    "value": [
+     "capture_time",
+     "process_id",
+     "process_create_time",
+     "host_architecture",
+     "os_version",
+     "image_machine",
+     "peb_image_path",
+     "module_image_path",
+     "module_image_size",
+     "module_image_timestamp"
+    ]
+   },
+   "COMPARISON_SIDE_BASELINE": {
+    "kind": "value",
+    "type": "str",
+    "value": "baseline"
+   },
+   "COMPARISON_SIDE_TARGET": {
+    "kind": "value",
+    "type": "str",
+    "value": "target"
+   },
    "CapabilityDefinition": {
     "bases": [
      "object"
@@ -5239,6 +5298,197 @@
       "unavailable"
      ]
     ]
+   },
+   "ComparisonCaptureDiagnostic": {
+    "bases": [
+     "object"
+    ],
+    "class_members": {
+     "__post_init__": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ]
+      }
+     },
+     "to_dict": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ],
+       "returns": "dict"
+      }
+     }
+    },
+    "dataclass": {
+     "eq": true,
+     "fields": [
+      {
+       "name": "side",
+       "type": "str"
+      },
+      {
+       "name": "code",
+       "type": "str"
+      },
+      {
+       "name": "severity",
+       "type": "str"
+      },
+      {
+       "name": "message",
+       "type": "str"
+      }
+     ],
+     "frozen": true,
+     "init": true,
+     "order": false,
+     "repr": true,
+     "unsafe_hash": false
+    },
+    "kind": "dataclass"
+   },
+   "ComparisonFactRecord": {
+    "bases": [
+     "object"
+    ],
+    "class_members": {
+     "__post_init__": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ]
+      }
+     },
+     "to_dict": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ],
+       "returns": "dict"
+      }
+     }
+    },
+    "dataclass": {
+     "eq": true,
+     "fields": [
+      {
+       "name": "fact",
+       "type": "str"
+      },
+      {
+       "name": "baseline",
+       "type": "str | int | None"
+      },
+      {
+       "name": "target",
+       "type": "str | int | None"
+      },
+      {
+       "name": "baseline_state",
+       "type": "str"
+      },
+      {
+       "name": "target_state",
+       "type": "str"
+      },
+      {
+       "init": false,
+       "name": "relation",
+       "type": "str"
+      }
+     ],
+     "frozen": true,
+     "init": true,
+     "order": false,
+     "repr": true,
+     "unsafe_hash": false
+    },
+    "kind": "dataclass"
+   },
+   "ComparisonPremiseRecord": {
+    "bases": [
+     "object"
+    ],
+    "class_members": {
+     "__post_init__": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ]
+      }
+     },
+     "to_dict": {
+      "kind": "method",
+      "signature": {
+       "parameters": [
+        {
+         "name": "self"
+        }
+       ],
+       "returns": "dict"
+      }
+     }
+    },
+    "dataclass": {
+     "eq": true,
+     "fields": [
+      {
+       "name": "facts",
+       "type": "tuple"
+      },
+      {
+       "name": "capture_diagnostics",
+       "type": "tuple"
+      },
+      {
+       "init": false,
+       "name": "scope",
+       "type": "str"
+      },
+      {
+       "init": false,
+       "name": "process_instance",
+       "type": "str"
+      },
+      {
+       "init": false,
+       "name": "capture_order",
+       "type": "str"
+      },
+      {
+       "init": false,
+       "name": "known_differences",
+       "type": "tuple"
+      },
+      {
+       "init": false,
+       "name": "unknown_premises",
+       "type": "tuple"
+      }
+     ],
+     "frozen": true,
+     "init": true,
+     "order": false,
+     "repr": true,
+     "unsafe_hash": false
+    },
+    "kind": "dataclass"
    },
    "CsBeaconDetails": {
     "bases": [
@@ -5538,6 +5788,71 @@
      "unsafe_hash": false
     },
     "kind": "dataclass"
+   },
+   "FACT_RELATION_DIFFERENT": {
+    "kind": "value",
+    "type": "str",
+    "value": "different"
+   },
+   "FACT_RELATION_SAME": {
+    "kind": "value",
+    "type": "str",
+    "value": "same"
+   },
+   "FACT_RELATION_UNKNOWN": {
+    "kind": "value",
+    "type": "str",
+    "value": "unknown"
+   },
+   "FACT_STATE_ABSENT": {
+    "kind": "value",
+    "type": "str",
+    "value": "absent"
+   },
+   "FACT_STATE_BASE_UNKNOWN": {
+    "kind": "value",
+    "type": "str",
+    "value": "base_unknown"
+   },
+   "FACT_STATE_FAILED": {
+    "kind": "value",
+    "type": "str",
+    "value": "failed"
+   },
+   "FACT_STATE_INVALID": {
+    "kind": "value",
+    "type": "str",
+    "value": "invalid"
+   },
+   "FACT_STATE_RECORDED": {
+    "kind": "value",
+    "type": "str",
+    "value": "recorded"
+   },
+   "FACT_STATE_TRUNCATED": {
+    "kind": "value",
+    "type": "str",
+    "value": "truncated"
+   },
+   "FACT_STATE_UNCAPTURED": {
+    "kind": "value",
+    "type": "str",
+    "value": "uncaptured"
+   },
+   "FACT_STATE_UNMATCHED": {
+    "kind": "value",
+    "type": "str",
+    "value": "unmatched"
+   },
+   "FACT_STATE_UNRECONSTRUCTED": {
+    "kind": "value",
+    "type": "str",
+    "value": "unreconstructed"
+   },
+   "FACT_STATE_UNSET": {
+    "kind": "value",
+    "type": "str",
+    "value": "unset"
    },
    "HANDLE_CAPTURED_NAME_SUFFIX": {
     "kind": "value",
@@ -6833,6 +7148,16 @@
      "unavailable",
      "not_applicable"
     ]
+   },
+   "PROCESS_INSTANCE_DIFFERENT": {
+    "kind": "value",
+    "type": "str",
+    "value": "different"
+   },
+   "PROCESS_INSTANCE_SAME": {
+    "kind": "value",
+    "type": "str",
+    "value": "same"
    },
    "PROCESS_PE_CAPTURE_STATES": {
     "kind": "value",
@@ -11227,10 +11552,20 @@
    "CAPABILITY_IDS",
    "CAPABILITY_REGISTRY",
    "CAPABILITY_SOURCE_DISPLAY_NAMES",
+   "CAPTURE_ORDER_BASELINE_FIRST",
+   "CAPTURE_ORDER_SAME_SECOND",
+   "CAPTURE_ORDER_TARGET_FIRST",
+   "CAPTURE_ORDER_UNKNOWN",
+   "COMPARISON_FACTS",
+   "COMPARISON_SIDE_BASELINE",
+   "COMPARISON_SIDE_TARGET",
    "CapabilityDefinition",
    "CapabilityLimitation",
    "CapabilityLimitationCode",
    "CapabilityStatus",
+   "ComparisonCaptureDiagnostic",
+   "ComparisonFactRecord",
+   "ComparisonPremiseRecord",
    "CsBeaconDetails",
    "DUMP_FLAGS_ABSENT",
    "DUMP_FLAGS_RESOLVED",
@@ -11245,6 +11580,19 @@
    "EXCEPTION_SELECTION_REASONS",
    "EnrichmentSection",
    "ExtractRecord",
+   "FACT_RELATION_DIFFERENT",
+   "FACT_RELATION_SAME",
+   "FACT_RELATION_UNKNOWN",
+   "FACT_STATE_ABSENT",
+   "FACT_STATE_BASE_UNKNOWN",
+   "FACT_STATE_FAILED",
+   "FACT_STATE_INVALID",
+   "FACT_STATE_RECORDED",
+   "FACT_STATE_TRUNCATED",
+   "FACT_STATE_UNCAPTURED",
+   "FACT_STATE_UNMATCHED",
+   "FACT_STATE_UNRECONSTRUCTED",
+   "FACT_STATE_UNSET",
    "HANDLE_CAPTURED_NAME_SUFFIX",
    "HANDLE_NAME_STATUSES",
    "HANDLE_NAME_STATUS_LABELS",
@@ -11288,6 +11636,8 @@
    "ObfuscationDetails",
    "PE_MODULE_MATCH_STATES",
    "PE_OBSERVATION_STATES",
+   "PROCESS_INSTANCE_DIFFERENT",
+   "PROCESS_INSTANCE_SAME",
    "PROCESS_PE_CAPTURE_STATES",
    "PROCESS_PE_COMPONENTS",
    "PROCESS_PE_COMPONENT_STATES",

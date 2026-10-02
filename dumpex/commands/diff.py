@@ -1,24 +1,32 @@
 """--diff command.
 
 collect_diff()/render_diff_console()/cmd_diff() -- the same collect/
-render/cmd trio every other recon command uses. The actual set-difference
-logic (added/removed/rebased, added/removed, added/removed/
-protection_changed) lives in dumpex.commands.comparison, ported there
-from this file's own original diff_modules/diff_threads/diff_memory;
-render_diff_console reconstructs the identical console text from the
-resulting ComparisonRecords for every state the original console could
-reach, with two deliberate exceptions documented at their call sites
-(multiple anonymous modules colliding, and a thread's backing-module
-context being "unavailable"/unknown-address) where the original console
-had no correct behavior to reproduce -- comparison.py's own docstrings
-explain why those states were fixed, not preserved.
+render/cmd trio every other recon command uses. The set-difference logic
+(added/removed/rebased, added/removed, added/removed/protection_changed)
+and the comparison premise live in dumpex.commands.comparison;
+render_diff_console renders them from the resulting CommandResult alone.
+
+The console states inventory relations, never history: an entry is "only
+in" one capture, a module has a "different base address", a region's
+"protection differs" -- none of them is an observed load, unload, rebase
+or protection change. The premise block renders result.summary.premise,
+the same value --json emits.
 """
 import ntpath
 
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.command_result import CommandResult
-from dumpex.output.records import MODULE_CONTEXT_RESOLVED
+from dumpex.output.records import (
+    MODULE_CONTEXT_RESOLVED,
+    FACT_RELATION_SAME, FACT_RELATION_DIFFERENT, FACT_RELATION_UNKNOWN,
+    FACT_STATE_RECORDED, FACT_STATE_ABSENT, FACT_STATE_FAILED, FACT_STATE_UNSET,
+    FACT_STATE_UNRECONSTRUCTED, FACT_STATE_BASE_UNKNOWN, FACT_STATE_UNMATCHED,
+    FACT_STATE_UNCAPTURED, FACT_STATE_TRUNCATED, FACT_STATE_INVALID,
+    PROCESS_INSTANCE_SAME, PROCESS_INSTANCE_DIFFERENT,
+    CAPTURE_ORDER_BASELINE_FIRST, CAPTURE_ORDER_TARGET_FIRST, CAPTURE_ORDER_SAME_SECOND,
+    CAPTURE_ORDER_UNKNOWN,
+)
 from dumpex.output.coverage import render_limitation, SourceState
 from dumpex.commands.comparison import collect_comparison
 
@@ -126,27 +134,28 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
     # basename), this uses the true raw stream count instead.
     added = [r for r in module_records if r.change_type == "added"]
     if added:
-        print(GREEN(f"  [+] Added in {label_target} ({len(added)}):"))
+        print(GREEN(f"  [+] Only in {label_target} ({len(added)}):"))
         for r in added:
             print(GREEN(f"      {r.base_address_after}  {console_safe(r.full_path_after)}"))
     else:
-        print(DIM("  [+] No new modules."))
+        print(DIM(f"  [+] No modules only in {label_target}."))
 
     removed = [r for r in module_records if r.change_type == "removed"]
     if removed:
-        print(RED(f"\n  [-] Removed from {label_baseline} ({len(removed)}):"))
+        print(RED(f"\n  [-] Only in {label_baseline} ({len(removed)}):"))
         for r in removed:
             print(RED(f"      {r.base_address_before}  {console_safe(r.full_path_before)}"))
     else:
-        print(DIM("\n  [-] No removed modules."))
+        print(DIM(f"\n  [-] No modules only in {label_baseline}."))
 
     rebased = [r for r in module_records if r.change_type == "rebased"]
     if rebased:
-        print(YELLOW(f"\n  [~] Rebased ({len(rebased)}):"))
+        print(YELLOW(f"\n  [~] Different base address ({len(rebased)}):"))
         for r in rebased:
             before = _int_or(r.base_address_before)
             after = _int_or(r.base_address_after)
-            print(YELLOW(f"      {console_safe(r.name)}: 0x{before:x} → 0x{after:x}"))
+            print(YELLOW(f"      {console_safe(r.name)}: baseline 0x{before:x}, "
+                         f"target 0x{after:x}"))
 
 
 def _render_thread_diff(records, coverage, label_baseline, label_target) -> None:
@@ -172,7 +181,7 @@ def _render_thread_diff(records, coverage, label_baseline, label_target) -> None
 
     added = [r for r in thread_records if r.change_type == "added"]
     if added:
-        print(GREEN(f"  [+] New threads in {label_target} ({len(added)}):"))
+        print(GREEN(f"  [+] TIDs only in {label_target} ({len(added)}):"))
         for r in added:
             sa = _int_or(r.start_address_after)
             if r.backing_module_context == MODULE_CONTEXT_RESOLVED:
@@ -188,16 +197,16 @@ def _render_thread_diff(records, coverage, label_baseline, label_target) -> None
                 backed = RED("NOT IN ANY MODULE ⚠")
             print(GREEN(f"      TID=0x{r.tid:x}  StartAddr=0x{sa:x}  Backed by: {backed}"))
     else:
-        print(DIM("  [+] No new threads."))
+        print(DIM(f"  [+] No TIDs only in {label_target}."))
 
     removed = [r for r in thread_records if r.change_type == "removed"]
     if removed:
-        print(RED(f"\n  [-] Threads gone from {label_target} ({len(removed)}):"))
+        print(RED(f"\n  [-] TIDs only in {label_baseline} ({len(removed)}):"))
         for r in removed:
             sa = _int_or(r.start_address_before)
             print(RED(f"      TID=0x{r.tid:x}  StartAddr=0x{sa:x}"))
     else:
-        print(DIM("\n  [-] No removed threads."))
+        print(DIM(f"\n  [-] No TIDs only in {label_baseline}."))
 
 
 def _render_memory_diff(records, coverage, label_baseline, label_target, verbose=False) -> None:
@@ -243,77 +252,194 @@ def _render_memory_diff(records, coverage, label_baseline, label_target, verbose
     print(f"  {DIM(label_target)}: {_count_or_na(target_obs)} regions")
 
     if _entity_not_evaluated(coverage, "baseline.memory_info", "target.memory_info"):
-        # Skips the Delta/tier lines entirely -- added/removed/changed are
-        # unconditionally [] here, so "Delta: +0 / -0" and "No RWX regions
-        # added"/"No protection changes" would misleadingly read as a
-        # completed comparison that found nothing, not a comparison that
-        # never ran.
+        # added/removed/changed are unconditionally [] here, so a count
+        # line or "No RWX regions only in ..." would read as a completed
+        # comparison that found nothing, not one that never ran.
         print(DIM("\n  Comparison not evaluated."))
         return
-    print(f"  {DIM('Delta')}: +{len(added)} / -{len(removed)} regions\n")
+    print(f"  {DIM('Base addresses in one capture only')}: "
+          f"{len(added)} in {label_target}, {len(removed)} in {label_baseline}\n")
 
     if added_rwx:
-        print(RED(f"  [!] RWX regions in {label_target} ({len(added_rwx)}) — HIGH SUSPICION:"))
+        print(RED(f"  [!] RWX regions only in {label_target} ({len(added_rwx)}) — HIGH SUSPICION:"))
         for r in added_rwx:
             print(RED(f"      {region_label_after(r)}"))
     else:
-        print(DIM("  [!] No RWX regions added."))
+        print(DIM(f"  [!] No RWX regions only in {label_target}."))
 
     if added_exec:
-        print(YELLOW(f"\n  [+] New executable regions in {label_target} ({len(added_exec)}):"))
+        print(YELLOW(f"\n  [+] Executable regions only in {label_target} ({len(added_exec)}):"))
         for r in added_exec:
             print(YELLOW(f"      {region_label_after(r)}"))
 
     if added_notable and verbose:
-        print(f"\n  [+] Other notable new regions ({len(added_notable)}):")
+        print(f"\n  [+] Other notable regions only in {label_target} ({len(added_notable)}):")
         for r in added_notable:
             print(f"      {region_label_after(r)}")
 
     if added_noise:
         if verbose:
-            print(f"\n  [+] Routine new regions ({len(added_noise)}) — likely from new DLLs:")
+            print(f"\n  [+] Routine regions only in {label_target} ({len(added_noise)}):")
             for r in added_noise:
                 print(DIM(f"      {r.base_address}  size=0x{r.size_after:<8x}  {r.protect_after}"))
         else:
-            print(DIM(f"\n  [·] {len(added_noise)} routine regions hidden "
-                      f"(PAGE_READONLY/NOACCESS from new DLLs)."))
+            print(DIM(f"\n  [·] {len(added_noise)} routine regions only in {label_target} hidden "
+                      f"(read-only, no-access and other non-executable protections)."))
             print(DIM("      Use --verbose to show all."))
 
     if removed_exec:
-        print(RED(f"\n  [-] Executable regions gone from {label_target} ({len(removed_exec)}):"))
+        print(RED(f"\n  [-] Executable regions only in {label_baseline} ({len(removed_exec)}):"))
         for r in removed_exec:
             print(RED(f"      {region_label_before(r)}"))
 
     if removed_other and verbose:
-        print(f"\n  [-] Other removed regions ({len(removed_other)}):")
+        print(f"\n  [-] Other regions only in {label_baseline} ({len(removed_other)}):")
         for r in removed_other:
             print(DIM(f"      {r.base_address}  size=0x{r.size_before:<8x}  {r.protect_before}"))
     elif removed_other:
-        print(DIM(f"\n  [·] {len(removed_other)} removed non-exec regions hidden. "
-                  f"Use --verbose to show all."))
+        print(DIM(f"\n  [·] {len(removed_other)} non-executable regions only in {label_baseline} "
+                  f"hidden. Use --verbose to show all."))
 
     if changed:
-        print(YELLOW(f"\n  [~] Protection changed ({len(changed)}):"))
+        print(YELLOW(f"\n  [~] Protection differs at the same base ({len(changed)}):"))
         for r in changed:
-            flag = RED(" ← now RWX!") if r.suspicious_after else ""
-            print(YELLOW(f"      {r.base_address}  {r.protect_before} → {r.protect_after}{flag}"))
+            flag = RED(" ◄ RWX in target!") if r.suspicious_after else ""
+            print(YELLOW(f"      {r.base_address}  baseline {r.protect_before}, "
+                         f"target {r.protect_after}{flag}"))
     else:
-        print(DIM("\n  [~] No protection changes."))
+        print(DIM("\n  [~] No protection differences at shared bases."))
 
 
-def render_diff_console(records, coverage, label_baseline, label_target, verbose: bool = False) -> None:
-    """Reproduces the original diff_modules/diff_threads/diff_memory
-    console output, driven by ComparisonRecords/CoverageReport instead of
-    raw MinidumpFile objects. Each section is gated on whether that
-    entity was actually requested (present in coverage.sources), not on
-    a separately-threaded mode string -- collect_module_diff/
-    collect_thread_diff/collect_memory_diff always register their own
-    sources when called, whether or not the diff itself could be
-    computed."""
+_FACT_LABELS = {
+    "capture_time":           "capture time",
+    "process_id":             "process ID",
+    "process_create_time":    "process create time",
+    "host_architecture":      "host architecture",
+    "os_version":             "OS version",
+    "image_machine":          "image machine",
+    "peb_image_path":         "PEB image path",
+    "module_image_path":      "module image path",
+    "module_image_size":      "module image size",
+    "module_image_timestamp": "module image timestamp",
+}
+
+# Why a capture holds no value for a fact, as the console words it.
+_STATE_TEXT = {
+    FACT_STATE_ABSENT:          "source absent",
+    FACT_STATE_FAILED:          "source unreadable",
+    FACT_STATE_UNSET:           "not set",
+    FACT_STATE_UNRECONSTRUCTED: "PEB not reconstructed (SystemInfo or thread list unavailable)",
+    FACT_STATE_BASE_UNKNOWN:    "PEB image base unknown",
+    FACT_STATE_UNMATCHED:       "no module registered at the PEB image base",
+    FACT_STATE_UNCAPTURED:      "nothing captured at the PEB image base",
+    FACT_STATE_TRUNCATED:       "header capture ends before Machine",
+    FACT_STATE_INVALID:         "not a valid PE header",
+}
+
+_CAPTURE_ORDER_TEXT = {
+    CAPTURE_ORDER_BASELINE_FIRST: "baseline captured first",
+    CAPTURE_ORDER_TARGET_FIRST:   "target captured first",
+    CAPTURE_ORDER_SAME_SECOND:    "both captured in the same second",
+    CAPTURE_ORDER_UNKNOWN:        "not established",
+}
+
+
+def _fact_side_text(fact: str, value, state: str) -> str:
+    if state != FACT_STATE_RECORDED:
+        return _STATE_TEXT[state]
+    if fact in ("module_image_size", "module_image_timestamp"):
+        return f"0x{value:x}"
+    return console_safe(str(value))
+
+
+def _fact_pair_text(f: dict) -> str:
+    return (f"{_FACT_LABELS[f['fact']]}: "
+            f"{_fact_side_text(f['fact'], f['baseline'], f['baseline_state'])} (baseline) / "
+            f"{_fact_side_text(f['fact'], f['target'], f['target_state'])} (target)")
+
+
+def _render_premise(premise: dict) -> None:
+    """result.summary.premise as console text. Every fact appears exactly
+    once -- under Same, Differs or Not established -- and an unestablished
+    one says why for each capture, so the block discloses each premise
+    the comparison rests on, known or not."""
+    facts = premise["facts"]
+    by_fact = {f["fact"]: f for f in facts}
+
+    print(f"\n{BOLD('═══ COMPARISON PREMISE ═══')}")
+    print(f"  {DIM('Scope')}: inventory relations between two captures — "
+          f"not observed load, unload, rebase or protection events")
+
+    instance = premise["process_instance"]
+    if instance == PROCESS_INSTANCE_SAME:
+        pid = by_fact["process_id"]["baseline"]
+        created = console_safe(by_fact["process_create_time"]["baseline"])
+        instance_text = (f"same PID and creation time (PID {pid}, created {created}); "
+                         f"host identity not established")
+    elif instance == PROCESS_INSTANCE_DIFFERENT:
+        instance_text = YELLOW("different")
+    else:
+        instance_text = YELLOW("not established")
+    print(f"  {DIM('Process instance')}: {instance_text}")
+    print(f"  {DIM('Capture order')}: {_CAPTURE_ORDER_TEXT[premise['capture_order']]}")
+
+    same = [_FACT_LABELS[f["fact"]] for f in facts if f["relation"] == FACT_RELATION_SAME]
+    print(f"  {DIM('Same')}: {', '.join(same) if same else 'none'}")
+
+    differs = [f for f in facts if f["relation"] == FACT_RELATION_DIFFERENT]
+    if differs:
+        print(f"  {DIM('Differs')}:")
+        for f in differs:
+            print(YELLOW(f"      {_fact_pair_text(f)}"))
+    else:
+        print(f"  {DIM('Differs')}: none")
+
+    unknown = [f for f in facts if f["relation"] == FACT_RELATION_UNKNOWN]
+    if unknown:
+        print(f"  {DIM('Not established')}:")
+        # Facts neither capture records for the same reason share a line.
+        shared = {}
+        for f in unknown:
+            if f["baseline_state"] == f["target_state"]:
+                shared.setdefault(f["baseline_state"], []).append(_FACT_LABELS[f["fact"]])
+        for state, labels in shared.items():
+            print(YELLOW(f"      {_STATE_TEXT[state]} in both captures: {', '.join(labels)}"))
+        for f in unknown:
+            if f["baseline_state"] != f["target_state"]:
+                print(YELLOW(f"      {_fact_pair_text(f)}"))
+    else:
+        print(f"  {DIM('Not established')}: none")
+
+    diagnostics = premise["capture_diagnostics"]
+    if diagnostics:
+        print(f"  {DIM('Within one capture')}:")
+        for d in diagnostics:
+            print(YELLOW(f"      {d['side']}: {console_safe(d['message'])} [{d['code']}]"))
+    else:
+        print(f"  {DIM('Within one capture')}: no identity disagreement")
+
+
+def render_diff_console(result: CommandResult, label_baseline, label_target,
+                         verbose: bool = False) -> None:
+    """Console text for one comparison, driven by `result` alone: its
+    records, coverage and summary.premise -- the very dict --json emits,
+    so the console and the document cannot state different premises. A
+    result without a premise is refused rather than rendered without one.
+    Each entity section is gated on whether that entity was requested
+    (present in coverage.sources), not on a separately-threaded mode
+    string -- collect_module_diff/collect_thread_diff/collect_memory_diff
+    always register their own sources when called, whether or not the
+    diff itself could be computed."""
+    premise = result.summary.get("premise")
+    if premise is None:
+        raise ValueError("render_diff_console() requires a comparison result carrying "
+                         "summary['premise']")
+    records, coverage = result.records, result.coverage
     print(f"\n{BOLD('dumpex diff')}: target {CYAN(label_target)} vs "
           f"baseline {CYAN(label_baseline)}")
     print("─" * 60)
 
+    _render_premise(premise)
     if "baseline.modules" in coverage.sources:
         _render_module_diff(records, coverage, label_baseline, label_target)
     if "baseline.thread_info" in coverage.sources:
@@ -329,12 +455,12 @@ def cmd_diff(mf_target, mf_baseline, mode: str = "all", verbose: bool = False) -
     dump (baseline).
 
     Keeping that direction explicit matters for forensic use: in
-    ``dumpex suspect.dmp --diff clean.dmp``, additions and suspicious
-    changes must describe ``suspect.dmp``, not the clean reference.
+    ``dumpex suspect.dmp --diff clean.dmp``, entries only in the target
+    and suspicious protections must describe ``suspect.dmp``, not the
+    clean reference.
     """
     result = collect_diff(mf_target, mf_baseline, mode)
     label_baseline = ntpath.basename(mf_baseline.filename)
     label_target = ntpath.basename(mf_target.filename)
-    render_diff_console(result.records, result.coverage, label_baseline, label_target,
-                         verbose=verbose)
+    render_diff_console(result, label_baseline, label_target, verbose=verbose)
     return result

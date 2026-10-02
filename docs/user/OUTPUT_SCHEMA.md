@@ -22,14 +22,14 @@ never replace an input dump.
 
 ## Current contract
 
-All twelve commands emit the same v2.20 envelope. The authoritative schema is
-[`dumpex-output-v2.20.schema.json`](../../dumpex/schemas/dumpex-output-v2.20.schema.json).
+All twelve commands emit the same v2.21 envelope. The authoritative schema is
+[`dumpex-output-v2.21.schema.json`](../../dumpex/schemas/dumpex-output-v2.21.schema.json).
 The schema uses JSON Schema Draft 2020-12 and closes record objects with
 `additionalProperties: false` where their field sets are fixed.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.20 (current) | [`dumpex-output-v2.20.schema.json`](../../dumpex/schemas/dumpex-output-v2.20.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.21 (current) | [`dumpex-output-v2.21.schema.json`](../../dumpex/schemas/dumpex-output-v2.21.schema.json) |
 
 Use the document's own `meta.schema_version` to select a validator. Do not
 validate archived output against whichever schema happens to be current today.
@@ -362,7 +362,7 @@ durations use JSON integers.
 | `--process` | `process` | Consolidated process identity, IAT, and verification evidence |
 | `--handles` | `handles` | Captured handle descriptors and raw granted-access masks |
 | `--profile` | `profile` | Stream inventory, capture facts, and capability map |
-| `--diff` | `comparison` | Baseline-to-target module/thread/memory changes |
+| `--diff` | `comparison` | Module/thread/memory inventory relations between two captures |
 | `--extract` | `extract` | Extracted-range metadata and artifact reference |
 | `--strings` | `strings` | Strings found in a requested captured range |
 | `--report` | `report` | Triage cards anchored to a TID, address, or string hit |
@@ -374,8 +374,87 @@ below document the semantic boundaries most likely to affect consumers.
 ### Comparison records
 
 `--diff` is the only two-input command. The positional dump is the target and
-the `--diff` argument is the baseline. Its records describe module, thread, and
-memory changes in the target relative to the baseline.
+the `--diff` argument is the baseline. Its records relate the two captured
+inventories of modules, threads, and memory regions. A record is never an
+observed event: `added` is present only in the target, `removed` only in the
+baseline, `rebased` is the same module name at a different base, and
+`protection_changed` is the same region base with a different protection.
+`_before` fields describe the baseline and `_after` fields the target, whichever
+was captured first. Two captures say nothing about what happened between them:
+a module unloaded and reloaded at the same base, or a protection changed and
+restored, leaves no record.
+
+`result.summary.premise` states what the two captures are known to share.
+`scope` is always `inventory`. `facts` lists ten identity facts in a fixed
+order, each read from one stated source:
+
+| Fact | Source |
+|---|---|
+| `capture_time` | Minidump header `TimeDateStamp` |
+| `process_id`, `process_create_time` | `MiscInfoStream` |
+| `host_architecture`, `os_version` | `SystemInfoStream` -- the host, not the process |
+| `image_machine` | COFF `Machine` of the PE header at the PEB image base -- the process's own code width (`I386` for a WOW64 process on an `AMD64` host) |
+| `peb_image_path` | PEB `ImagePathName` |
+| `module_image_path`, `module_image_size`, `module_image_timestamp` | The `ModuleListStream` entry registered at the PEB image base |
+
+Each fact carries the `baseline` and `target` values, a per-side
+`baseline_state`/`target_state`, and a `relation` of `same`, `different`, or
+`unknown`. A value is set exactly when its state is `recorded`; otherwise the
+state says why:
+
+| State | Facts | Meaning |
+|---|---|---|
+| `absent` | all but `image_machine` | The fact's source is not in the dump |
+| `failed` | all | The source is in the dump but could not be read. For `peb_image_path`, reconstructing the PEB raised; for `image_machine`, bytes captured at the PEB image base could not be read or a memory list stream failed to parse |
+| `unset` | all but `image_machine` | The source holds no usable value |
+| `unreconstructed` | `peb_image_path` | SystemInfoStream or ThreadListStream, which the PEB is reconstructed from, is absent or unreadable, so the PEB was never attempted |
+| `base_unknown` | `image_machine`, module facts | There is no PEB image base to locate the fact at; `peb_image_path` says why |
+| `unmatched` | module facts | No module is registered at the PEB image base |
+| `uncaptured` | `image_machine` | No bytes were captured at the PEB image base |
+| `truncated` | `image_machine` | The capture there stops before the `Machine` field |
+| `invalid` | `image_machine` | The bytes captured there are not a valid PE header |
+
+`uncaptured`/`failed`, `truncated` and `invalid` follow `--process`'s own
+main-image classification (`read_failed`, `short_read`, `pe_invalid`).
+`unknown` means at least one side is not recorded; it is not a difference.
+`known_differences` and `unknown_premises` name the facts whose relation is
+`different` and `unknown`.
+
+`capture_diagnostics` lists identity disagreements inside one capture, with the
+`side` they belong to. They are the diagnostics `--process` reports for the
+same dump -- for example `PROCESS_MODULE_IDENTITY_MISMATCH` when the PEB path
+names a different file than the module registered at the PEB image base, and
+`PROCESS_MAIN_IMAGE_PE_INVALID` when the bytes at the PEB image base are not a
+valid PE header -- plus two of the comparison's own. `PEB_MODULE_PATH_MISMATCH`
+(warning) means the two paths cannot name the same file once equivalent forms
+are reconciled: `\??\`, `\\?\` and `\\.\` prefixes are ignored, and two
+different `\Device\<volume>\` roots never name the same file.
+`PEB_MODULE_PATH_UNRESOLVED` (info) means the forms leave that undecidable. The
+dump records neither which drive a `\Device` volume is nor which directory
+`\SystemRoot` is -- the Windows directory is not guaranteed to be
+`<drive>:\Windows`, and Windows can be installed at a volume's root -- so a
+path under one of those roots is consistent with, but never established as,
+another path holding the same components either at its volume's root or below
+some directory; and an 8.3 short name spells a component differently. A shared suffix alone never
+counts as agreement.
+
+A PEB that names one image while another module sits at its base is disclosed
+by a capture diagnostic on that capture. It is a `module_image_path`
+difference only when the two captures record different modules at their PEB
+image bases; two captures holding the same disagreement report the module path
+as `same`, with a diagnostic on each.
+
+`process_instance` rests on process ID and process creation time only: `same`
+when both are recorded and equal, `different` when either is recorded on both
+sides and differs, `unknown` otherwise. Host identity is not established, and
+other differing facts are disclosed rather than used to decide the instance.
+`capture_order` orders the two capture times (`baseline_first`,
+`target_first`, `same_second`, or `unknown`). The schema enforces each of these
+derivations against `facts`. Collecting the premise reads the main image's
+header once per dump, the same bounded read `--process` performs. Comparing
+unrelated processes, builds, or images remains valid: the premise never
+changes the records, `coverage.status`, coverage limitations, or the exit code.
+The console prints the same premise before the entity sections.
 
 Coverage sources are side-qualified where necessary, such as
 `baseline.modules` and `target.modules`. A failed source on one side is reported

@@ -181,10 +181,10 @@ def resolve_module_by_base(base_address: "int | None", modules: list):
     Its signature and "return the module itself" behavior are frozen
     verbatim by §3.3.3 -- this is a low-level, internal-composition
     primitive, not the shared boundary itself: build_process_identity_
-    snapshot() below is the only place production code should call it,
-    and it converts the result into a ModuleReference (scalars only)
-    before returning anything to ITS OWN caller. A raw module reference
-    never escapes this module.
+    snapshot() and registered_main_module_facts() below are the only
+    places production code should call it, and each converts the result
+    into scalars before returning anything to ITS OWN caller. A raw module
+    reference never escapes this module.
 
     Deliberately NOT dumpex.core.memory.addr_to_module(), whose
     containment test (baseaddress <= addr < endaddress) would match the
@@ -750,6 +750,105 @@ def build_process_identity_snapshot(mf) -> ProcessIdentitySnapshot:
         main_image_pe=main_image_pe,
         selected_path_source=selected_path_source, selected_process_path=selected_process_path,
         selected_process_name=selected_process_name, diagnostics=tuple(diagnostics))
+
+
+# ── further main-image facts derived from a snapshot ────────────────────
+
+def _uint32_or_none(raw) -> "int | None":
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    return raw if 1 <= raw <= _UINT32_MAX else None
+
+
+def registered_main_module_facts(
+        mf, snapshot: ProcessIdentitySnapshot) -> "tuple[int | None, int | None]":
+    """(SizeOfImage, TimeDateStamp) of the MINIDUMP_MODULE entry
+    `snapshot.module_claim` resolved at the PEB image base, each None when
+    the entry holds 0 (the producer's "not set") or a value outside UINT32.
+    (None, None) unless that claim is "resolved". Reads ModuleListStream
+    only; the snapshot's own resolution decides which entry is meant, so
+    no caller re-derives it."""
+    claim = snapshot.module_claim
+    if claim.match_state != "resolved":
+        return None, None
+    modules_stream = getattr(mf, "modules", None)
+    module = resolve_module_by_base(
+        claim.base_address, list(getattr(modules_stream, "modules", None) or []))
+    if module is None:
+        return None, None
+    return (_uint32_or_none(getattr(module, "size", None)),
+            _uint32_or_none(getattr(module, "timestamp", None)))
+
+
+def classify_main_image_state(image_base: "int | None", main_image_pe) -> "str | None":
+    """-> one of None/"read_failed"/"short_read"/"pe_invalid"/"ok",
+    derived entirely from an already-built MainImagePeClaim (§3.4.4) --
+    no second read or parse of the main image happens here. The one
+    classification --process and the --diff premise share.
+
+      None           -- no normalized image base at all, nothing to check
+      "read_failed"  -- an image base exists but MainImagePeClaim.checked
+                        is False (nothing was captured there, or the read
+                        itself failed)
+      "short_read"   -- parse_pe_header()'s own `insufficient_data` flag
+                        (dumpex.core.pe_utils, copied onto
+                        MainImagePeFacts) says the rejection was a
+                        genuine capture-length gap -- some structurally
+                        required offset ran past what was captured.
+                        Deciding this ALSO on whether the full
+                        MAIN_IMAGE_PE_READ_MAX budget was reached would be
+                        wrong: MAIN_IMAGE_PE_READ_MAX is dumpex's OWN read
+                        budget, not a fact about the image, and a header
+                        that is genuinely fully present in the dump but
+                        merely structurally LARGER than that budget (e.g.
+                        a section table that needs more than 4096 bytes
+                        to finish) would then be misreported as PE_INVALID
+                        -- a real structural-defect claim -- and silently
+                        drop the entire IAT walk for an image with nothing
+                        wrong with it. `insufficient_data` alone is the
+                        complete, correct signal.
+                        Never decided by pattern-matching parse_pe_header()'s
+                        free-text `reason`: that string is not a closed
+                        vocabulary, and several data-starved rejections
+                        (e.g. a DOS header shorter than 0x40 bytes) would
+                        otherwise need to be told apart from a
+                        DETERMINISTIC rejection reached from bytes that
+                        were all present (a genuinely wrong signature at
+                        a fully-captured offset) by matching free text --
+                        only the structural `insufficient_data` bit does
+                        this reliably.
+      "pe_invalid"   -- parse_pe_header() rejected the header for a
+                        deterministic structural reason (bad signature/
+                        Machine/NumberOfSections/Magic) that more data
+                        would not have changed -- a genuine structural
+                        defect, not a capture gap
+      "ok"           -- parse_pe_header() validated the header
+    """
+    if image_base is None:
+        return None
+    if not main_image_pe.checked:
+        return "read_failed"
+    if main_image_pe.valid:
+        return "ok"
+    if main_image_pe.pe_facts.insufficient_data:
+        return "short_read"
+    return "pe_invalid"
+
+
+def main_image_machine(claim: MainImagePeClaim) -> "str | None":
+    """The COFF Machine of the header `claim` retained, decoded from
+    `claim.header_bytes` without reading the dump again: its name (e.g.
+    "I386", "AMD64"), or "0x%04x" for a value with no known name. None
+    when the claim was never checked or the captured header stops before
+    the Machine field. The main image's Machine is the process's own code
+    width -- a WOW64 process has an I386 main image on an AMD64 host."""
+    if not claim.checked:
+        return None
+    parsed = parse_pe_header(claim.header_bytes)
+    machine = parsed["machine"]
+    if machine is None:
+        return None
+    return parsed["machine_name"] or f"0x{machine:04x}"
 
 
 # ── §4.2 independent, bounded environment-block walk ────────────────────

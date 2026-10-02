@@ -17,7 +17,7 @@ from dumpex.output.records.common import (
 _STRING_RECORD_ENCODINGS = ("ASCII", "UTF16")
 
 
-# The same vocabulary dumpex.commands.process._classify_main_image_state
+# The same vocabulary dumpex.core.process_info.classify_main_image_state
 # uses for the analogous main-image question -- "read_failed" has no
 # counterpart here because ReportRegionInfo already represents that case
 # as mz_header_detected=None, one level up.
